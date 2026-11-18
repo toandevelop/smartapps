@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: smartapps_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: smartapps_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - smartapps_pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d smartapps_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend-dotnet
+      dockerfile: Dockerfile
+    container_name: smartapps_backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=smartapps_db;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}"
+      Auth__Secret: "${AUTH_SECRET:-SmartApps_Enterprise_Production_Secret_Change_Me}"
+      ASPNETCORE_ENVIRONMENT: Production
+    ports:
+      - "5200:5200"
+    volumes:
+      - smartapps_uploads:/app/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5200/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend-next
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_ORIGIN: "http://backend:5200"
+    container_name: smartapps_frontend
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_ORIGIN: "http://backend:5200"
+    ports:
+      - "4100:4100"
+
+volumes:
+  smartapps_pgdata:
+  smartapps_uploads:

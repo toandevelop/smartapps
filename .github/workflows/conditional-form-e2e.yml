@@ -1,0 +1,68 @@
+name: Forms and Excel regression
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conditional-forms-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conditional-forms:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: e2e_postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CI: 'true'
+      NEXT_TELEMETRY_DISABLED: '1'
+      SMARTAPPS_TEST_POSTGRES: Host=127.0.0.1;Port=5432;Database=postgres;Username=postgres;Password=e2e_postgres;Pooling=false
+      SMARTAPPS_E2E_POSTGRES: postgresql://postgres:e2e_postgres@127.0.0.1:5432/postgres
+    defaults:
+      run:
+        working-directory: frontend-next
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend-next/package-lock.json
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '9.0.x'
+      - name: Install frontend and test dependencies
+        run: npm ci
+      - name: Install Chromium and Linux dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Backend unit and PostgreSQL HTTP tests
+        run: dotnet test ../backend-dotnet.Tests/SmartApps.Api.Tests.csproj --configuration Release --logger "trx;LogFileName=backend.trx" --results-directory ../artifacts/backend
+      - name: Frontend unit tests
+        run: npm test
+      - name: Forms and Excel E2E on production frontend
+        run: npm run test:e2e
+      - name: Upload regression reports and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: forms-excel-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn

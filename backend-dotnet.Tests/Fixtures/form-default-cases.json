@@ -1,0 +1,12 @@
+[
+  { "name": "numeric true", "type": "BOOLEAN", "raw": "1", "expected": true },
+  { "name": "uppercase true", "type": "BOOLEAN", "raw": " TRUE ", "expected": true },
+  { "name": "yes true", "type": "BOOLEAN", "raw": "yes", "expected": true },
+  { "name": "Vietnamese true", "type": "BOOLEAN", "raw": "có", "expected": true },
+  { "name": "numeric false", "type": "BOOLEAN", "raw": "0", "expected": false },
+  { "name": "Vietnamese false", "type": "BOOLEAN", "raw": "không", "expected": false },
+  { "name": "grouped decimal", "type": "CURRENCY", "raw": " 1,000.5 ", "expected": 1000.5 },
+  { "name": "trimmed text", "type": "STRING", "raw": " show ", "expected": "show" },
+  { "name": "trimmed date", "type": "DATE", "raw": " 2026-11-17 ", "expected": "2026-11-17" },
+  { "name": "blank default", "type": "NUMBER", "raw": " ", "omitted": true }
+]

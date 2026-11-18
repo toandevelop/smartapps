@@ -1,0 +1,15 @@
+**/node_modules/
+**/.next/
+**/.next-e2e/
+**/bin/
+**/obj/
+**/target/
+**/*.tsbuildinfo
+artifacts/
+backend-dotnet/backups/
+backend-dotnet/uploads/
+**/.env
+**/.env.local
+**/.env.*.local
+**/playwright-report/
+**/test-results/

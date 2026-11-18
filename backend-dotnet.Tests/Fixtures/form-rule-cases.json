@@ -1,0 +1,17 @@
+[
+  { "name": "number threshold", "type": "NUMBER", "operator": "GREATER_OR_EQUAL", "expectedValue": "100", "actual": "100.00", "expected": true },
+  { "name": "number equality", "type": "CURRENCY", "operator": "NOT_EQUALS", "expectedValue": "1", "actual": 1.0, "expected": false },
+  { "name": "large exact decimal", "type": "NUMBER", "operator": "GREATER_THAN", "expectedValue": "9007199254740992", "actual": "9007199254740993", "expected": true },
+  { "name": "negative decimal", "type": "NUMBER", "operator": "LESS_THAN", "expectedValue": "-1.2", "actual": "-1.25", "expected": true },
+  { "name": "invalid number", "type": "NUMBER", "operator": "NOT_EQUALS", "expectedValue": "10", "actual": "not-a-number", "expected": false },
+  { "name": "boolean false", "type": "BOOLEAN", "operator": "EQUALS", "expectedValue": "false", "actual": false, "expected": true },
+  { "name": "false is not empty", "type": "BOOLEAN", "operator": "IS_EMPTY", "actual": false, "expected": false },
+  { "name": "zero is not empty", "type": "NUMBER", "operator": "NOT_EMPTY", "actual": 0, "expected": true },
+  { "name": "null is empty", "type": "STRING", "operator": "IS_EMPTY", "actual": null, "expected": true },
+  { "name": "space is empty", "type": "STRING", "operator": "IS_EMPTY", "actual": "   ", "expected": true },
+  { "name": "Vietnamese equality", "type": "SELECT", "operator": "EQUALS", "expectedValue": "CÔNG TY", "actual": "công ty", "expected": true },
+  { "name": "contains", "type": "STRING", "operator": "CONTAINS", "expectedValue": "tnhh", "actual": "Công ty TNHH ABC", "expected": true },
+  { "name": "date comparison", "type": "DATE", "operator": "GREATER_THAN", "expectedValue": "2026-11-16", "actual": "2026-11-17", "expected": true },
+  { "name": "invalid date", "type": "DATE", "operator": "EQUALS", "expectedValue": "2026-03-03", "actual": "2026-02-31", "expected": false },
+  { "name": "null equality empty", "type": "STRING", "operator": "EQUALS", "expectedValue": "", "actual": null, "expected": true }
+]

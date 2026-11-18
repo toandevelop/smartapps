@@ -1,0 +1,10 @@
+{
+  "name": "SmartApps Enterprise",
+  "short_name": "SmartApps",
+  "description": "Nền tảng Đa ứng dụng Dữ liệu Động Doanh nghiệp",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#1a73e8",
+  "orientation": "any"
+}
