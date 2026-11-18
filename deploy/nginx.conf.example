@@ -1,0 +1,59 @@
+# ==============================================================================
+# SmartApps Platform - Mẫu cấu hình Nginx Reverse Proxy (Production)
+# Hỗ trợ Next.js (Port 4100), .NET 9 Core API (Port 5200) và SSE Real-time
+# ==============================================================================
+
+server {
+    listen 80;
+    server_name smartapps.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name smartapps.example.com;
+
+    # Đường dẫn chứng chỉ TLS (Let's Encrypt hoặc nội bộ)
+    ssl_certificate     /etc/ssl/certs/smartapps.crt;
+    ssl_certificate_key /etc/ssl/private/smartapps.key;
+
+    client_max_body_size 50M;
+
+    # SSE Real-time Notifications: BẮT BUỘC tắt buffering để sự kiện đẩy tức thì
+    location /api/notifications/stream {
+        proxy_pass http://127.0.0.1:5200;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding on;
+        proxy_read_timeout 3600s;
+    }
+
+    # Backend API (.NET 9)
+    location /api/ {
+        proxy_pass http://127.0.0.1:5200;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Frontend Portal (Next.js 16)
+    location / {
+        proxy_pass http://127.0.0.1:4100;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

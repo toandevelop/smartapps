@@ -54,6 +54,10 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Backend unit and PostgreSQL HTTP tests
         run: dotnet test ../backend-dotnet.Tests/SmartApps.Api.Tests.csproj --configuration Release --logger "trx;LogFileName=backend.trx" --results-directory ../artifacts/backend
+      - name: Frontend TypeScript check
+        run: npx tsc --noEmit
+      - name: Frontend ESLint check
+        run: npm run lint
       - name: Frontend unit tests
         run: npm test
       - name: Forms and Excel E2E on production frontend

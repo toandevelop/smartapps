@@ -27,7 +27,7 @@ services:
         condition: service_healthy
     environment:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=smartapps_db;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}"
-      Auth__Secret: "${AUTH_SECRET:-SmartApps_Enterprise_Production_Secret_Change_Me}"
+      Auth__Secret: "${AUTH_SECRET:?AUTH_SECRET must be set to a strong random secret}"
       ASPNETCORE_ENVIRONMENT: Production
     ports:
       - "5200:5200"

@@ -9,6 +9,7 @@ Tài liệu trong thư mục này giúp nhiều thành viên (Backend, Frontend,
 | [Hướng dẫn Onboarding](onboarding.md) | Cài đặt môi trường từ đầu, chạy local, xác minh và xử lý lỗi thường gặp | Thành viên mới tham gia dự án |
 | [Quy trình Git & Code Review](git-and-review-workflow.md) | Chiến lược nhánh, chuẩn commit, tách PR nhỏ, checklist review và CI | Tất cả thành viên phát triển |
 | [Chuẩn mã nguồn & Kiểm thử](coding-standards.md) | Quy ước code cho .NET 9, Next.js 16, PostgreSQL, Rust/Tauri và kiểm thử | Backend, Frontend, QA, Desktop |
+| [Vận hành Production & Backup](operations-and-backup.md) | Checklist Go-Live, Reverse Proxy/SSE (`nginx.conf.example`) và sao lưu/khôi phục | DevOps, Vận hành, Tech Lead |
 | [CONTRIBUTING.md](../../CONTRIBUTING.md) | Tóm tắt quy trình đóng góp và gửi Pull Request | Cộng tác viên & thành viên nhóm |
 | [Bộ tài liệu Kiến trúc & Kỹ thuật](../architecture/README.md) | Thiết kế kỹ thuật, danh mục API, luồng nghiệp vụ và kết quả xác minh | Toàn đội ngũ |
 
