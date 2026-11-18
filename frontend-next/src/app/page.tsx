@@ -2,17 +2,25 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import {
   PageHeader,
   StatCard,
   ClusterIcon,
   NotificationSnackbar,
 } from './components/ui';
-import { AppModal, AppFormState, ExcelToAppModal, TemplateInstallModal } from './studio/StudioModals';
+import type { AppFormState } from './studio/StudioModals';
+
+const AppModal = dynamic(() => import('./studio/StudioModals').then((m) => m.AppModal), { ssr: false });
+const ExcelToAppModal = dynamic(() => import('./studio/StudioModals').then((m) => m.ExcelToAppModal), { ssr: false });
+const TemplateInstallModal = dynamic(
+  () => import('./studio/StudioModals').then((m) => m.TemplateInstallModal),
+  { ssr: false }
+);
 import { usePlatform } from '@/lib/app-context';
 import { useAuth } from '@/lib/auth-context';
 import { useSettings } from '@/lib/settings-context';
-import { isTauriDesktop, openAppDesktopWindow } from '@/lib/tauri-bridge';
+import { openAppDesktopWindow } from '@/lib/tauri-bridge';
 import { AppWidget, PendingApprovalItem } from '@/lib/types';
 
 import AppsRoundedIcon from '@mui/icons-material/AppsRounded';
@@ -27,7 +35,7 @@ import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import DesktopWindowsRoundedIcon from '@mui/icons-material/DesktopWindowsRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
-import { useEscapeKey } from '@/lib/ui-hooks';
+import { useEscapeKey, useIsTauriDesktop } from '@/lib/ui-hooks';
 
 export default function HomePortalPage() {
   const { apps, loadingApps, refreshApps } = usePlatform();
@@ -40,7 +48,7 @@ export default function HomePortalPage() {
   const [showAppModal, setShowAppModal] = useState(false);
   const [showExcelModal, setShowExcelModal] = useState(false);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
-  const [inDesktop, setInDesktop] = useState(false);
+  const inDesktop = useIsTauriDesktop();
   const [saving, setSaving] = useState(false);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApprovalItem[]>([]);
   const [portalKpis, setPortalKpis] = useState<AppWidget[]>([]);
@@ -73,11 +81,16 @@ export default function HomePortalPage() {
   }, []);
 
   useEffect(() => {
-    setInDesktop(isTauriDesktop());
-    loadExecutiveData();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadExecutiveData();
+    });
     const onRt = () => loadExecutiveData();
     window.addEventListener('smartapps_realtime', onRt);
-    return () => window.removeEventListener('smartapps_realtime', onRt);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('smartapps_realtime', onRt);
+    };
   }, [loadExecutiveData]);
 
   const submitPortalDecision = async (item: PendingApprovalItem, approve: boolean, reason?: string) => {
@@ -335,8 +348,72 @@ export default function HomePortalPage() {
           </div>
 
           {loadingApps ? (
-            <div className="card" style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
-              Đang kết nối C# .NET 9 Core API & PostgreSQL...
+            <div className="app-launcher-grid" aria-busy="true" aria-label="Đang tải danh sách ứng dụng">
+              {Array.from({ length: 6 }).map((_, idx) => (
+                <div key={`app-sk-${idx}`} className="card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div className="skeleton-box" style={{ width: 44, height: 44, borderRadius: 12, flexShrink: 0 }} />
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div className="skeleton-box" style={{ height: 16, width: '65%' }} />
+                      <div className="skeleton-box" style={{ height: 12, width: '40%' }} />
+                    </div>
+                  </div>
+                  <div className="skeleton-box" style={{ height: 12, width: '90%' }} />
+                  <div className="skeleton-box" style={{ height: 12, width: '70%' }} />
+                </div>
+              ))}
+            </div>
+          ) : visibleApps.length === 0 ? (
+            <div className="google-card" style={{ padding: 28, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div>
+                <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>
+                  Chào mừng đến với SmartApps Platform
+                </h3>
+                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                  {canStudio
+                    ? 'Bắt đầu xây dựng không gian làm việc doanh nghiệp chỉ với 3 bước đơn giản:'
+                    : 'Bạn chưa được cấp quyền truy cập ứng dụng nào. Vui lòng liên hệ Quản trị viên để được phân quyền.'}
+                </p>
+              </div>
+              {canStudio && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                  <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <span className="badge badge-info" style={{ alignSelf: 'flex-start' }}>Bước 1</span>
+                    <strong style={{ fontSize: 13.5 }}>Tạo App hoặc Nhập từ Excel</strong>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', flex: 1 }}>
+                      Khởi tạo ứng dụng mới từ Kho mẫu hoặc tải file Excel có sẵn để tự sinh bảng động.
+                    </p>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <button type="button" className="btn btn-primary btn-xs" onClick={() => setShowAppModal(true)}>
+                        <AddRoundedIcon sx={{ fontSize: 14 }} /> Tạo App
+                      </button>
+                      <button type="button" className="btn btn-outline btn-xs" onClick={() => setShowExcelModal(true)}>
+                        <CloudUploadRoundedIcon sx={{ fontSize: 14 }} /> Từ Excel
+                      </button>
+                    </div>
+                  </div>
+                  <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <span className="badge badge-info" style={{ alignSelf: 'flex-start' }}>Bước 2</span>
+                    <strong style={{ fontSize: 13.5 }}>Thiết kế cột &amp; Phân quyền</strong>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', flex: 1 }}>
+                      Cấu hình công thức, quy tắc hiển thị form và phân quyền RBAC theo phòng ban.
+                    </p>
+                    <Link href="/studio" className="btn btn-outline btn-xs" style={{ alignSelf: 'flex-start' }}>
+                      <DesignServicesRoundedIcon sx={{ fontSize: 14 }} /> Mở App Studio
+                    </Link>
+                  </div>
+                  <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <span className="badge badge-info" style={{ alignSelf: 'flex-start' }}>Bước 3</span>
+                    <strong style={{ fontSize: 13.5 }}>Vận hành &amp; Cộng tác</strong>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', flex: 1 }}>
+                      Dùng bảng động, Kanban, Dashboard và chia sẻ Public Form thu thập dữ liệu.
+                    </p>
+                    <button type="button" className="btn btn-outline btn-xs" style={{ alignSelf: 'flex-start' }} onClick={() => setShowTemplateModal(true)}>
+                      <AutoAwesomeRoundedIcon sx={{ fontSize: 14 }} /> Xem Kho mẫu
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="app-launcher-grid">

@@ -12,13 +12,18 @@ export default function AnalyticsPanel({ tableId }: { tableId: string }) {
 
   useEffect(() => {
     if (!tableId) return;
-    setLoading(true);
+    let cancelled = false;
     fetch(`/api/records/analytics?tableId=${encodeURIComponent(tableId)}`)
       .then((r) => r.json())
       .then((res) => {
-        if (res.success && res.data) setStats(res.data);
+        if (!cancelled && res.success && res.data) setStats(res.data);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [tableId]);
 
   if (loading) {

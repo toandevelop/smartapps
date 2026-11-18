@@ -19,21 +19,20 @@ test('Excel export includes every filtered row beyond page and 1000-row limits i
   expect((await qa.api.delete(`/api/records/${deleted.id}`)).ok()).toBe(true);
 
   await qa.openRuntime(page);
-  await page.getByPlaceholder('Tìm kiếm dữ liệu...', { exact: true }).fill('TARGET');
+  await page.getByPlaceholder('Tìm nhanh trên bảng...', { exact: true }).fill('TARGET');
   await selectWithOption(page, 'Tất cả trạng thái').selectOption('ACTIVE');
   await page.getByRole('button', { name: 'Lọc & Xem', exact: true }).click();
   await selectWithOption(page, '-- Chọn cột cần lọc --').selectOption('mode');
   await page.getByPlaceholder('Nhập giá trị cần lọc...', { exact: true }).fill('KEEP');
   await page.getByRole('button', { name: 'Áp dụng', exact: true }).click();
-  await selectWithOption(page, 'Sắp xếp: Mới nhất').selectOption('amount');
-  await page.getByRole('button', { name: 'Giảm dần ↓', exact: true }).click();
-  await selectWithOption(page, '20 dòng').selectOption('10');
+  await page.getByRole('columnheader', { name: /Cột Số tiền/ }).click();
+  await selectWithOption(page, '10 dòng / trang').selectOption('10');
   const loaded = page.waitForResponse(response => {
     const url = new URL(response.url());
     return url.pathname === '/api/records' && url.searchParams.get('tableId') === qa.table.id
       && url.searchParams.get('page') === '2' && url.searchParams.get('sortDir') === 'ASC';
   });
-  await page.getByRole('button', { name: 'Sau', exact: true }).click();
+  await page.getByRole('button', { name: 'Trang kế tiếp', exact: true }).click();
   const result = (await (await loaded).json()).data;
   expect(result).toMatchObject({ page: 2, limit: 10, total: count });
   expect(result.items.map((item: { recordKey: string }) => item.recordKey)).toEqual(codes.slice(10, 20));
@@ -64,7 +63,7 @@ test('Excel export with no matching records still downloads a readable header-on
     const url = new URL(response.url());
     return url.pathname === '/api/records' && url.searchParams.get('search') === 'NO-MATCH-FOR-EXPORT';
   });
-  await page.getByPlaceholder('Tìm kiếm dữ liệu...', { exact: true }).fill('NO-MATCH-FOR-EXPORT');
+  await page.getByPlaceholder('Tìm nhanh trên bảng...', { exact: true }).fill('NO-MATCH-FOR-EXPORT');
   expect((await (await filtered).json()).data.total).toBe(0);
   const { book } = await exportWorkbook(page, info);
   expect(matrix(book)).toEqual([['code', 'mode', 'amount', 'details', 'reason', 'approved']]);

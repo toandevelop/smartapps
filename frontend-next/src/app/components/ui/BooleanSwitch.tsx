@@ -19,6 +19,7 @@ export function resolveDefaultBoolVal(defaultValue?: string | null): boolean {
 }
 
 interface BooleanSwitchProps {
+  id?: string;
   checked: boolean;
   onChange: (nextVal: boolean) => void;
   disabled?: boolean;
@@ -28,6 +29,7 @@ interface BooleanSwitchProps {
 }
 
 export default function BooleanSwitch({
+  id,
   checked,
   onChange,
   disabled = false,
@@ -41,6 +43,7 @@ export default function BooleanSwitch({
 
   return (
     <button
+      id={id}
       type="button"
       role="switch"
       aria-checked={checked}
@@ -54,13 +57,13 @@ export default function BooleanSwitch({
         padding: isSm ? '3px 8px 3px 4px' : '6px 12px',
         width: isSm ? 'auto' : '100%',
         borderRadius: isSm ? 999 : 8,
-        border: checked ? '1px solid #86efac' : '1px solid #cbd5e1',
-        backgroundColor: checked ? '#f0fdf4' : '#ffffff',
+        border: checked ? '1px solid var(--success-border)' : '1px solid var(--border-subtle)',
+        backgroundColor: checked ? 'var(--success-bg)' : 'var(--bg-surface)',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.65 : 1,
       }}
     >
-      <span style={{ fontSize: isSm ? 11.5 : 13, fontWeight: 600, color: checked ? '#166534' : '#475569' }}>
+      <span style={{ fontSize: isSm ? 11.5 : 13, fontWeight: 600, color: checked ? 'var(--success-text)' : 'var(--text-secondary)' }}>
         {checked ? resolvedTrue : resolvedFalse}
       </span>
       <span

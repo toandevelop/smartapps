@@ -15,7 +15,6 @@ import FunctionsRoundedIcon from '@mui/icons-material/FunctionsRounded';
 import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
 import LinkRoundedIcon from '@mui/icons-material/LinkRounded';
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded';
-import ViewColumnRoundedIcon from '@mui/icons-material/ViewColumnRounded';
 
 export interface DynamicDataTableProps {
   title?: React.ReactNode;
@@ -39,6 +38,7 @@ export interface DynamicDataTableProps {
   selectedIds?: string[];
   onSelectionChange?: (ids: string[]) => void;
   onBatchDelete?: (ids: string[]) => void;
+  batchActions?: React.ReactNode;
   onEditRecord?: (record: AppRecord) => void;
   onDeleteRecord?: (recordId: string) => void;
   onInspectRelations?: (record: AppRecord) => void;
@@ -50,8 +50,14 @@ export interface DynamicDataTableProps {
   onApproveRecord?: (record: AppRecord, approve: boolean) => void;
   onRecallApproval?: (record: AppRecord) => void;
   onCancelApproval?: (record: AppRecord) => void;
-  onDirectSave?: (rowId: string, field: string, newVal: any) => Promise<boolean>;
+  onDirectSave?: (rowId: string, field: string, newVal: unknown) => Promise<boolean>;
   inlineEditEnabled?: boolean;
+  enableFiltering?: boolean;
+  serverSort?: {
+    sortKey: string;
+    direction: 'asc' | 'desc';
+    onSortChange: (key: string, dir: 'asc' | 'desc') => void;
+  };
   storageKey?: string;
   pagination?: {
     page: number;
@@ -82,6 +88,7 @@ export default function DynamicDataTable({
   selectedIds = [],
   onSelectionChange,
   onBatchDelete,
+  batchActions,
   onEditRecord,
   onDeleteRecord,
   onInspectRelations,
@@ -95,6 +102,8 @@ export default function DynamicDataTable({
   onCancelApproval,
   onDirectSave,
   inlineEditEnabled = true,
+  enableFiltering = false,
+  serverSort,
   storageKey = 'smartapps_dynamic',
   pagination,
   emptyText,
@@ -102,34 +111,11 @@ export default function DynamicDataTable({
   toolbarExtra,
 }: DynamicDataTableProps) {
   const [refVersion, setRefVersion] = useState(0);
-  const [showAllColumns, setShowAllColumns] = useState(false);
-  const COMPACT_COL_LIMIT = 8;
 
-  useEffect(() => {
-    setShowAllColumns(false);
-  }, [storageKey]);
-
-  const schemaTableColumns = useMemo(
+  const visibleDynamicColumns = useMemo(
     () => columns.filter((c) => c.showInTable !== false),
-    [columns]
+    [columns],
   );
-
-  const visibleDynamicColumns = useMemo(() => {
-    if (showAllColumns || schemaTableColumns.length <= COMPACT_COL_LIMIT) {
-      return schemaTableColumns;
-    }
-    const techCodes = new Set(['id', 'created_at', 'updated_at', 'created_by', 'updated_by']);
-    const prioritized = [...schemaTableColumns].sort((a, b) => {
-      const aTech = techCodes.has(a.columnCode.toLowerCase()) ? 1 : 0;
-      const bTech = techCodes.has(b.columnCode.toLowerCase()) ? 1 : 0;
-      if (aTech !== bTech) return aTech - bTech;
-      const aPri = a.isRequired ? 0 : 1;
-      const bPri = b.isRequired ? 0 : 1;
-      return aPri - bPri;
-    });
-    const topKeys = new Set(prioritized.slice(0, COMPACT_COL_LIMIT).map((c) => c.columnCode));
-    return schemaTableColumns.filter((c) => topKeys.has(c.columnCode)).slice(0, COMPACT_COL_LIMIT);
-  }, [schemaTableColumns, showAllColumns]);
 
   useEffect(() => {
     const codes = columns.map((c) => c.refCategoryCode).filter((x): x is string => Boolean(x));
@@ -141,6 +127,7 @@ export default function DynamicDataTable({
   }, [columns]);
 
   const tableColumns = useMemo<ColumnDef<AppRecord>[]>(() => {
+    if (refVersion < 0) return [];
     const result: ColumnDef<AppRecord>[] = [
       {
         key: 'stt',
@@ -268,7 +255,11 @@ export default function DynamicDataTable({
               <code>{String(rawVal)}</code>
             );
           } else if (dt === 'IMAGE' && rawVal) {
-            const urlStr = typeof rawVal === 'string' ? rawVal : rawVal?.url || '';
+            const urlStr = typeof rawVal === 'string'
+              ? rawVal
+              : typeof rawVal === 'object' && rawVal !== null && 'url' in rawVal
+              ? String((rawVal as { url?: unknown }).url ?? '')
+              : '';
             displayNode = (
               <a href={urlStr} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
                 <img
@@ -286,7 +277,11 @@ export default function DynamicDataTable({
               </a>
             );
           } else if (dt === 'FILE' && rawVal) {
-            const urlStr = typeof rawVal === 'string' ? rawVal : rawVal?.url || '';
+            const urlStr = typeof rawVal === 'string'
+              ? rawVal
+              : typeof rawVal === 'object' && rawVal !== null && 'url' in rawVal
+              ? String((rawVal as { url?: unknown }).url ?? '')
+              : '';
             const match = urlStr.match(/[?&]name=([^&]+)/);
             const label = match ? decodeURIComponent(match[1]) : 'Tải tệp';
             displayNode = (
@@ -330,7 +325,7 @@ export default function DynamicDataTable({
             const pct = Math.max(0, Math.min(100, Number(rawVal) || 0));
             displayNode = (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 100 }}>
-                <div style={{ flex: 1, height: 6, borderRadius: 999, backgroundColor: '#e2e8f0', overflow: 'hidden' }}>
+                <div style={{ flex: 1, height: 6, borderRadius: 999, backgroundColor: 'var(--border-subtle)', overflow: 'hidden' }}>
                   <div
                     style={{
                       width: `${pct}%`,
@@ -392,6 +387,7 @@ export default function DynamicDataTable({
       header: 'Kiểm tra',
       label: 'Trạng thái',
       width: 125,
+      sortable: false,
       render: (row) => {
         const errs = row.validationErrors || [];
         return (
@@ -412,6 +408,7 @@ export default function DynamicDataTable({
         key: 'approvalStatus',
         header: 'Phê duyệt',
         width: 195,
+        sortable: false,
         render: (row) => {
           const st = (row.approvalStatus || 'DRAFT').toUpperCase();
           const badgeClass =
@@ -572,47 +569,7 @@ export default function DynamicDataTable({
     }
 
     return result;
-  }, [visibleDynamicColumns, refVersion, pagination, inlineEditEnabled, approvalEnabled, canApprove, currentUserRoles, onSubmitApproval, onApproveRecord, onRecallApproval, onCancelApproval, onDirectSave, onEditRecord, onDeleteRecord, onInspectRelations, onPrintRecord]);
-
-  const combinedToolbarExtra = (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      {schemaTableColumns.length > COMPACT_COL_LIMIT && (
-        <button
-          type="button"
-          onClick={() => setShowAllColumns((prev) => !prev)}
-          style={{
-            height: 32,
-            padding: '0 12px',
-            borderRadius: 16,
-            border: showAllColumns ? '1px solid #1a73e8' : '1px solid var(--border-subtle)',
-            backgroundColor: showAllColumns ? 'var(--info-bg)' : 'var(--bg-surface)',
-            color: showAllColumns ? '#1a73e8' : 'var(--text-secondary)',
-            fontSize: 12,
-            fontWeight: 600,
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            whiteSpace: 'nowrap',
-            transition: 'all 0.15s ease',
-          }}
-          title={
-            showAllColumns
-              ? `Thu gọn bảng về ${COMPACT_COL_LIMIT} cột cốt lõi để hạn chế cuộn ngang`
-              : `Bảng này có ${schemaTableColumns.length} trường. Mặc định hiển thị ${COMPACT_COL_LIMIT} cột chính để dễ quan sát.`
-          }
-        >
-          <ViewColumnRoundedIcon sx={{ fontSize: 15, color: showAllColumns ? '#1a73e8' : 'var(--text-muted)' }} />
-          <span>
-            {showAllColumns
-              ? `Đang hiện đủ ${schemaTableColumns.length} cột (Thu gọn về ${COMPACT_COL_LIMIT} cột)`
-              : `Chế độ Tinh gọn: ${visibleDynamicColumns.length}/${schemaTableColumns.length} cột chính • Hiện đủ`}
-          </span>
-        </button>
-      )}
-      {toolbarExtra}
-    </div>
-  );
+  }, [refVersion, visibleDynamicColumns, pagination, inlineEditEnabled, approvalEnabled, canApprove, currentUserRoles, onSubmitApproval, onApproveRecord, onRecallApproval, onCancelApproval, onDirectSave, onEditRecord, onDeleteRecord, onInspectRelations, onPrintRecord]);
 
   return (
     <DataTable<AppRecord>
@@ -628,14 +585,18 @@ export default function DynamicDataTable({
       data={records}
       loading={loading}
       enableSelection={enableSelection}
+      enableFiltering={enableFiltering}
+      serverSort={serverSort}
+      onRowClick={onInspectRelations}
       selectedIds={selectedIds}
       onSelectionChange={onSelectionChange}
       onBatchDelete={onBatchDelete}
+      batchActions={batchActions}
       storageKey={storageKey}
       pagination={pagination}
       emptyText={emptyText}
       emptyAction={emptyAction}
-      toolbarExtra={schemaTableColumns.length > COMPACT_COL_LIMIT || toolbarExtra ? combinedToolbarExtra : undefined}
+      toolbarExtra={toolbarExtra}
     />
   );
 }

@@ -4,14 +4,16 @@ import React, { useState, useEffect, useMemo } from 'react';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded';
 import SecurityRoundedIcon from '@mui/icons-material/SecurityRounded';
-import { SysApp, SysRole, SysUser } from '@/lib/types';
+import { SysApp, SysOrgUnit, SysRole, SysUser } from '@/lib/types';
 import { useEscapeKey } from '@/lib/ui-hooks';
+import { flattenOrgUnits } from '@/lib/org-units';
 
 export default function UserFormModal({
   open,
   editing,
   allApps,
   allRoles: propRoles,
+  allOrgUnits: propOrgUnits,
   onClose,
   onSaved,
 }: {
@@ -19,62 +21,109 @@ export default function UserFormModal({
   editing: SysUser | null;
   allApps: SysApp[];
   allRoles?: SysRole[];
+  allOrgUnits?: SysOrgUnit[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  useEscapeKey(open, onClose);
+  if (!open) return null;
+  return (
+    <UserFormModalBody
+      key={editing?.id || '__new__'}
+      editing={editing}
+      allApps={allApps}
+      propRoles={propRoles}
+      propOrgUnits={propOrgUnits}
+      onClose={onClose}
+      onSaved={onSaved}
+    />
+  );
+}
+
+function UserFormModalBody({
+  editing,
+  allApps,
+  propRoles,
+  propOrgUnits,
+  onClose,
+  onSaved,
+}: {
+  editing: SysUser | null;
+  allApps: SysApp[];
+  propRoles?: SysRole[];
+  propOrgUnits?: SysOrgUnit[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [fetchedRoles, setFetchedRoles] = useState<SysRole[]>([]);
-  const allRoles = (propRoles && propRoles.length > 0) ? propRoles : fetchedRoles;
-  const [username, setUsername] = useState('');
-  const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
-  const [employeeCode, setEmployeeCode] = useState('');
-  const [department, setDepartment] = useState('Toàn công ty');
-  const [roleCodes, setRoleCodes] = useState<string[]>(['STAFF']);
-  const [password, setPassword] = useState('');
-  const [isActive, setIsActive] = useState(true);
+  const [fetchedOrgUnits, setFetchedOrgUnits] = useState<SysOrgUnit[]>([]);
+  const allRoles = useMemo(() => (propRoles && propRoles.length > 0 ? propRoles : fetchedRoles), [propRoles, fetchedRoles]);
+  const allOrgUnits = useMemo(
+    () => (propOrgUnits && propOrgUnits.length > 0 ? propOrgUnits : fetchedOrgUnits),
+    [propOrgUnits, fetchedOrgUnits]
+  );
+  const orderedOrgUnits = useMemo(() => flattenOrgUnits(allOrgUnits), [allOrgUnits]);
+  const [username, setUsername] = useState(editing?.username || '');
+  const [fullName, setFullName] = useState(editing?.fullName || '');
+  const [email, setEmail] = useState(editing?.email || '');
+  const [employeeCode, setEmployeeCode] = useState(editing?.employeeCode || '');
+  const [department, setDepartment] = useState(editing?.department || 'Toàn công ty');
+  const [orgUnitIdOverride, setOrgUnitIdOverride] = useState<string | null>(editing?.orgUnitId ?? null);
+  const [roleCodesOverride, setRoleCodesOverride] = useState<string[] | null>(() => {
+    if (!editing) return null;
+    return editing.roleCodes?.length
+      ? editing.roleCodes
+      : editing.roleCode
+      ? [editing.roleCode]
+      : ['STAFF'];
+  });
+  const [password, setPassword] = useState(editing ? '' : '123456');
+  const [isActive, setIsActive] = useState(editing ? editing.isActive !== false : true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  useEscapeKey(open, onClose);
 
   useEffect(() => {
-    if (!open || (propRoles && propRoles.length > 0)) return;
+    if (propRoles && propRoles.length > 0) return;
+    let cancelled = false;
     fetch('/api/roles', { credentials: 'include' })
       .then((r) => r.json())
       .then((j) => {
-        if (j.success && Array.isArray(j.data)) setFetchedRoles(j.data);
+        if (!cancelled && j.success && Array.isArray(j.data)) setFetchedRoles(j.data);
       })
       .catch(() => null);
-  }, [open, propRoles]);
+    return () => {
+      cancelled = true;
+    };
+  }, [propRoles]);
 
   useEffect(() => {
-    if (!open) return;
-    setError('');
-    if (editing) {
-      setUsername(editing.username || '');
-      setFullName(editing.fullName || '');
-      setEmail(editing.email || '');
-      setEmployeeCode(editing.employeeCode || '');
-      setDepartment(editing.department || 'Toàn công ty');
-      const rcs = editing.roleCodes?.length
-        ? editing.roleCodes
-        : editing.roleCode
-        ? [editing.roleCode]
-        : ['STAFF'];
-      setRoleCodes(rcs);
-      setPassword('');
-      setIsActive(editing.isActive !== false);
-    } else {
-      setUsername('');
-      setFullName('');
-      setEmail('');
-      setEmployeeCode('');
-      setDepartment('Toàn công ty');
-      const defaultRole = allRoles.find((r) => r.code === 'STAFF')?.code || allRoles[0]?.code || 'STAFF';
-      setRoleCodes([defaultRole]);
-      setPassword('123456');
-      setIsActive(true);
-    }
-  }, [open, editing, allRoles]);
+    if (propOrgUnits && propOrgUnits.length > 0) return;
+    let cancelled = false;
+    fetch('/api/org-units', { credentials: 'include' })
+      .then((r) => r.json())
+      .then((j) => {
+        if (!cancelled && j.success && Array.isArray(j.data)) setFetchedOrgUnits(j.data);
+      })
+      .catch(() => null);
+    return () => {
+      cancelled = true;
+    };
+  }, [propOrgUnits]);
+
+  const defaultRole = allRoles.find((r) => r.code === 'STAFF')?.code || allRoles[0]?.code || 'STAFF';
+  const roleCodes = useMemo(() => roleCodesOverride ?? [defaultRole], [roleCodesOverride, defaultRole]);
+  const setRoleCodes = (updater: React.SetStateAction<string[]>) => {
+    setRoleCodesOverride((prev) => {
+      const cur = prev ?? [defaultRole];
+      return typeof updater === 'function' ? updater(cur) : updater;
+    });
+  };
+  const matchedOrgUnitId = useMemo(() => {
+    if (!editing || editing.orgUnitId || allOrgUnits.length === 0) return '';
+    return allOrgUnits.find((u) => u.name.toLowerCase() === (editing.department || '').trim().toLowerCase())?.id || '';
+  }, [editing, allOrgUnits]);
+  const orgUnitId = orgUnitIdOverride ?? matchedOrgUnitId;
+  const setOrgUnitId = (nextId: string) => setOrgUnitIdOverride(nextId);
 
   const effectivePreview = useMemo(() => {
     const selected = allRoles.filter((r) =>
@@ -110,8 +159,6 @@ export default function UserFormModal({
     };
   }, [allRoles, roleCodes, allApps]);
 
-  if (!open) return null;
-
   const toggleRole = (code: string) => {
     setRoleCodes((prev) => {
       if (prev.includes(code)) {
@@ -139,6 +186,7 @@ export default function UserFormModal({
           email: email.trim() || null,
           employeeCode: employeeCode.trim().toUpperCase() || null,
           department: department.trim() || 'Toàn công ty',
+          orgUnitId: orgUnitId || null,
           roleCode: roleCodes[0] || 'STAFF',
           roleCodes,
           password: password || null,
@@ -197,8 +245,33 @@ export default function UserFormModal({
               <input className="form-input" value={fullName} onChange={(e) => setFullName(e.target.value)} required />
             </div>
             <div className="form-group">
-              <label className="form-label">Phòng ban</label>
-              <input className="form-input" value={department} onChange={(e) => setDepartment(e.target.value)} />
+              <label className="form-label">Đơn vị / Phòng ban (Cơ cấu Tổ chức)</label>
+              <select
+                className="form-select"
+                value={orgUnitId}
+                onChange={(e) => {
+                  const nextId = e.target.value;
+                  setOrgUnitId(nextId);
+                  const found = allOrgUnits.find((u) => u.id === nextId);
+                  if (found) setDepartment(found.name);
+                }}
+              >
+                <option value="">-- Nhập thủ công / Toàn công ty --</option>
+                {orderedOrgUnits.map(({ unit, depth }) => (
+                  <option key={unit.id} value={unit.id}>
+                    {`${'— '.repeat(depth)}${unit.name} (${unit.code})`}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Tên Phòng ban hiển thị</label>
+              <input
+                className="form-input"
+                value={department}
+                onChange={(e) => setDepartment(e.target.value)}
+                placeholder="VD: Phòng Kế toán"
+              />
             </div>
             <div className="form-group">
               <label className="form-label">Email</label>
@@ -229,7 +302,7 @@ export default function UserFormModal({
 
           <div className="form-group">
             <label className="form-label">Gán Vai trò Hệ thống (có thể chọn nhiều Role / Custom Roles)</label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 8, padding: 10, background: '#f8fafc', borderRadius: 10, border: '1px solid var(--border-light)' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 8, padding: 10, background: 'var(--bg-secondary)', borderRadius: 10, border: '1px solid var(--border-light)' }}>
               {allRoles.map((role) => {
                 const checked = roleCodes.some((c) => c.toUpperCase() === role.code.toUpperCase());
                 return (
@@ -241,7 +314,7 @@ export default function UserFormModal({
                       gap: 8,
                       padding: '8px 10px',
                       borderRadius: 8,
-                      backgroundColor: checked ? '#ffffff' : 'transparent',
+                      backgroundColor: checked ? 'var(--bg-surface)' : 'transparent',
                       border: `1.5px solid ${checked ? role.color || '#1a73e8' : 'var(--border-light)'}`,
                       cursor: 'pointer',
                     }}

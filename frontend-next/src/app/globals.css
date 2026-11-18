@@ -1,8 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Roboto:wght@300;400;500;700&display=swap');
-
 :root {
-  --font-sans: 'Roboto', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-sans: var(--font-roboto), var(--font-jakarta), var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
   --bg-primary: #f8f9fa;
   --bg-secondary: #f1f3f4;
@@ -638,9 +636,27 @@ dialog.excel-import-dialog::backdrop {
 @media screen and (max-width: 768px) {
   .app-container { flex-direction: column; height: auto; min-height: 100vh; max-height: none; overflow: visible; }
   .app-main { height: auto; max-height: none; overflow: visible; }
-  .app-sidebar { width: 100% !important; height: auto !important; border-right: none; border-bottom: 1px solid var(--border-subtle); }
-  .app-sidebar .sidebar-nav { flex-direction: row; overflow-x: auto; padding: 6px; }
-  .app-sidebar .sidebar-footer { display: none; }
+  .app-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 270px !important;
+    height: 100vh !important;
+    z-index: 900;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+  }
+  .app-sidebar.mobile-open {
+    transform: translateX(0);
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar-mobile-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 890;
+  }
   .top-bar { padding: 12px 16px; }
   .page-content { padding: 14px 14px 28px; }
   .modal-dialog { padding: 18px 16px; max-height: 92vh; }
@@ -882,9 +898,8 @@ body.theme-dark .login-viewport {
 
 .login-shell {
   width: 100%;
-  max-width: 1040px;
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  max-width: 456px;
+  display: block;
   background-color: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: 24px;
@@ -893,21 +908,23 @@ body.theme-dark .login-viewport {
 }
 
 .login-panel-form {
-  padding: 36px 36px 28px;
+  padding: 36px 34px 32px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
   gap: 20px;
   background-color: var(--bg-surface);
 }
 
-.login-panel-side {
-  padding: 32px 28px;
-  background-color: var(--bg-primary);
-  border-left: 1px solid var(--border-light);
+.login-topbar {
+  width: 100%;
+  max-width: 456px;
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 0 2px;
+  flex-wrap: wrap;
 }
 
 .login-input-wrap {
@@ -917,22 +934,23 @@ body.theme-dark .login-viewport {
 }
 
 .login-input-wrap .form-input {
-  height: 42px;
-  border-radius: 10px;
-  font-size: 13.5px;
+  min-height: 46px;
+  border-radius: 12px;
+  font-size: max(1rem, 1em);
+  line-height: 1.4;
 }
 
 .login-input-wrap .form-input.has-leading {
-  padding-left: 40px;
+  padding-left: 42px;
 }
 
 .login-input-wrap .form-input.has-trailing {
-  padding-right: 40px;
+  padding-right: 44px;
 }
 
 .login-input-icon {
   position: absolute;
-  left: 13px;
+  left: 14px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--text-muted);
@@ -943,12 +961,12 @@ body.theme-dark .login-viewport {
 
 .login-input-action {
   position: absolute;
-  right: 8px;
+  right: 7px;
   top: 50%;
   transform: translateY(-50%);
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -964,18 +982,25 @@ body.theme-dark .login-viewport {
   color: var(--text-primary);
 }
 
+.login-input-action:focus-visible,
+.login-sso-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
 .login-sso-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   width: 100%;
+  min-height: 44px;
   padding: 10px 14px;
   border-radius: 12px;
   border: 1px solid var(--border-subtle);
   background-color: var(--bg-surface);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
@@ -993,82 +1018,45 @@ body.theme-dark .login-viewport {
   cursor: not-allowed;
 }
 
-.login-demo-list {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  max-height: 410px;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-.login-demo-card {
-  width: 100%;
-  text-align: left;
-  padding: 11px 13px;
-  border-radius: 14px;
-  border: 1px solid var(--border-subtle);
-  background-color: var(--bg-surface);
-  color: var(--text-primary);
-  font-family: inherit;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.12s ease;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.login-demo-card:hover {
-  border-color: var(--accent-primary);
-  box-shadow: var(--shadow-sm);
-}
-
-.login-demo-main {
-  flex: 1;
-  min-width: 0;
-  background: transparent;
-  border: none;
+dialog.native-modal {
+  margin: auto;
   padding: 0;
-  text-align: left;
-  color: inherit;
-  font-family: inherit;
-  cursor: pointer;
+  border: none;
+  border-radius: 20px;
+  background: transparent;
+  max-width: min(460px, calc(100vw - 24px));
+  width: 100%;
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
 }
 
-.login-demo-main:disabled {
-  cursor: wait;
-  opacity: 0.7;
+dialog.native-modal:modal {
+  overscroll-behavior: contain;
 }
 
-.login-skeleton {
-  height: 64px;
-  border-radius: 14px;
-  background: linear-gradient(90deg, var(--bg-secondary) 25%, var(--border-light) 50%, var(--bg-secondary) 75%);
-  background-size: 200% 100%;
-  animation: pulse 1.4s ease-in-out infinite;
+dialog.native-modal::backdrop {
+  background: rgba(15, 23, 42, 0.48);
+  backdrop-filter: blur(4px);
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 
-@media screen and (max-width: 900px) {
-  .login-shell {
-    grid-template-columns: minmax(0, 1fr);
-    max-width: 560px;
-  }
-  .login-panel-side {
-    border-left: none;
-    border-top: 1px solid var(--border-light);
-  }
+.native-modal-card {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: 24px;
 }
 
 @media screen and (max-width: 520px) {
   .login-viewport {
-    padding: 12px 10px;
+    padding: 16px 12px;
   }
   .login-shell {
-    border-radius: 18px;
+    border-radius: 20px;
   }
-  .login-panel-form,
-  .login-panel-side {
-    padding: 22px 18px;
+  .login-panel-form {
+    padding: 26px 20px 24px;
   }
 }
 
@@ -1077,4 +1065,34 @@ body.theme-dark .login-viewport {
   .app-container, .app-main { display: block !important; height: auto !important; overflow: visible !important; }
   .modal-overlay { position: static !important; background: #fff !important; padding: 0 !important; }
   .modal-dialog { box-shadow: none !important; border: none !important; max-width: 100% !important; max-height: none !important; }
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-box {
+  border-radius: 8px;
+  background: linear-gradient(90deg, #eef1f5 25%, #f7f9fc 50%, #eef1f5 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+body.theme-dark .skeleton-box {
+  background: linear-gradient(90deg, #272b33 25%, #323741 50%, #272b33 75%);
+  background-size: 200% 100%;
+}
+
+/* Public Intake Form Grid (responsive 2 cols -> 1 col on mobile) */
+.public-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+@media screen and (max-width: 768px) {
+  .public-form-grid {
+    grid-template-columns: 1fr;
+  }
 }

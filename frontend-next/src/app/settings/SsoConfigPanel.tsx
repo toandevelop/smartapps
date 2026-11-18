@@ -9,6 +9,7 @@ import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import { BooleanSwitch } from '@/app/components/ui';
+import { useClientOrigin } from '@/lib/ui-hooks';
 import { SsoProviderAdmin, SysRole } from '@/lib/types';
 
 export default function SsoConfigPanel({
@@ -24,7 +25,7 @@ export default function SsoConfigPanel({
   const [discoveringId, setDiscoveringId] = useState<string | null>(null);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [domainsText, setDomainsText] = useState<Record<string, string>>({});
-  const [origin, setOrigin] = useState('http://localhost:4100');
+  const origin = useClientOrigin('http://localhost:4100');
 
   const loadProviders = useCallback(async () => {
     setLoading(true);
@@ -44,8 +45,13 @@ export default function SsoConfigPanel({
   }, []);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') setOrigin(window.location.origin);
-    loadProviders();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadProviders();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadProviders]);
 
   const updateLocal = (id: string, patch: Partial<SsoProviderAdmin>) => {

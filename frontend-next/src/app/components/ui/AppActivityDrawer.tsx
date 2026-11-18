@@ -29,7 +29,12 @@ export interface AppActivityDrawerProps {
   onOpenRecord?: (recordId: string, tableId: string) => void;
 }
 
-export default function AppActivityDrawer({
+export default function AppActivityDrawer(props: AppActivityDrawerProps) {
+  if (!props.open) return null;
+  return <AppActivityDrawerBody key={props.appId} {...props} />;
+}
+
+function AppActivityDrawerBody({
   open,
   appId,
   appName,
@@ -46,15 +51,6 @@ export default function AppActivityDrawer({
   const [actionFilter, setActionFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedJsonIds, setExpandedJsonIds] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    if (open) {
-      setTableFilter('');
-      setActionFilter('');
-      setSearchQuery('');
-      setExpandedJsonIds({});
-    }
-  }, [open, appId]);
 
   const tableMap = useMemo(() => {
     const map = new Map<string, ActivityTableOption>();

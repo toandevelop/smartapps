@@ -78,14 +78,20 @@ export default function NotificationChannelsPanel({
   }, []);
 
   useEffect(() => {
-    loadAll();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadAll();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadAll]);
 
   const updateChannelLocal = (id: string, patch: Partial<NotificationChannel>) => {
     setChannels((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   };
 
-  const updateChannelConfig = (id: string, key: string, value: any) => {
+  const updateChannelConfig = (id: string, key: string, value: unknown) => {
     setChannels((prev) =>
       prev.map((c) => (c.id === id ? { ...c, config: { ...c.config, [key]: value } } : c))
     );
@@ -160,7 +166,7 @@ export default function NotificationChannelsPanel({
   };
 
   const handleAddChannel = async (channelType: string, scope: 'SYSTEM' | 'USER') => {
-    const defaults: Record<string, { name: string; config: Record<string, any> }> = {
+    const defaults: Record<string, { name: string; config: Record<string, unknown> }> = {
       GMAIL_SMTP: {
         name: scope === 'SYSTEM' ? 'Gmail SMTP Nhóm mới' : 'Gmail SMTP Cá nhân',
         config: { smtpHost: 'smtp.gmail.com', smtpPort: 587, useSsl: true, username: '', password: '', fromName: 'SmartApps', toEmails: user?.email || '', useRecipientEmail: false },
@@ -209,21 +215,29 @@ export default function NotificationChannelsPanel({
     return <WebhookRoundedIcon sx={{ fontSize: 19, color: c }} />;
   };
 
+  const cfgStr = (ch: NotificationChannel, key: string, fallback = ''): string => {
+    const val = ch.config?.[key];
+    return val === undefined || val === null || val === '' ? fallback : String(val);
+  };
+
   const getChannelSummary = (ch: NotificationChannel): string => {
     if (ch.channelType === 'GMAIL_SMTP') {
-      const host = ch.config.smtpHost || 'smtp.gmail.com';
-      const sender = ch.config.username || 'Chưa nhập email gửi';
-      return `${sender} • ${host}:${ch.config.smtpPort ?? 587}`;
+      const host = cfgStr(ch, 'smtpHost', 'smtp.gmail.com');
+      const sender = cfgStr(ch, 'username', 'Chưa nhập email gửi');
+      return `${sender} • ${host}:${cfgStr(ch, 'smtpPort', '587')}`;
     }
     if (ch.channelType === 'TELEGRAM') {
-      return ch.config.chatId ? `Chat ID: ${ch.config.chatId}` : 'Chưa nhập Bot Token / Chat ID';
+      const chatId = cfgStr(ch, 'chatId');
+      return chatId ? `Chat ID: ${chatId}` : 'Chưa nhập Bot Token / Chat ID';
     }
     if (ch.channelType === 'ZALO') {
-      const mode = String(ch.config.zaloMode || 'WEBHOOK').toUpperCase();
-      if (mode === 'OA_API') return ch.config.targetId ? `Zalo OA • Target: ${ch.config.targetId}` : 'Zalo OA API v3 (Chưa cấu hình)';
-      return ch.config.webhookUrl ? `Group Webhook • ${ch.config.webhookUrl}` : 'Nhóm Zalo Webhook (Chưa cấu hình URL)';
+      const mode = cfgStr(ch, 'zaloMode', 'WEBHOOK').toUpperCase();
+      const targetId = cfgStr(ch, 'targetId');
+      const webhookUrl = cfgStr(ch, 'webhookUrl');
+      if (mode === 'OA_API') return targetId ? `Zalo OA • Target: ${targetId}` : 'Zalo OA API v3 (Chưa cấu hình)';
+      return webhookUrl ? `Group Webhook • ${webhookUrl}` : 'Nhóm Zalo Webhook (Chưa cấu hình URL)';
     }
-    return ch.config.webhookUrl ? ch.config.webhookUrl : 'Chưa nhập Webhook URL';
+    return cfgStr(ch, 'webhookUrl') || 'Chưa nhập Webhook URL';
   };
 
   return (
@@ -493,7 +507,7 @@ export default function NotificationChannelsPanel({
                                 id={`smtp-host-${ch.id}`}
                                 name="smtpHost"
                                 className="form-input"
-                                value={ch.config.smtpHost || 'smtp.gmail.com'}
+                                value={cfgStr(ch, 'smtpHost', 'smtp.gmail.com')}
                                 onChange={(e) => updateChannelConfig(ch.id, 'smtpHost', e.target.value)}
                               />
                             </div>
@@ -504,7 +518,7 @@ export default function NotificationChannelsPanel({
                                 name="smtpPort"
                                 type="number"
                                 className="form-input"
-                                value={ch.config.smtpPort ?? 587}
+                                value={Number(ch.config.smtpPort ?? 587)}
                                 onChange={(e) => updateChannelConfig(ch.id, 'smtpPort', Number(e.target.value) || 587)}
                               />
                             </div>
@@ -516,7 +530,7 @@ export default function NotificationChannelsPanel({
                                 autoComplete="email"
                                 className="form-input"
                                 placeholder="no-reply@company.vn"
-                                value={ch.config.username || ''}
+                                value={cfgStr(ch, 'username')}
                                 onChange={(e) => updateChannelConfig(ch.id, 'username', e.target.value)}
                               />
                             </div>
@@ -531,7 +545,7 @@ export default function NotificationChannelsPanel({
                                 autoComplete="new-password"
                                 className="form-input"
                                 placeholder={ch.hasSecret ? '•••••••• (Giữ nguyên nếu để trống)' : 'Mật khẩu ứng dụng 16 ký tự'}
-                                value={ch.config.password || ''}
+                                value={cfgStr(ch, 'password')}
                                 onChange={(e) => updateChannelConfig(ch.id, 'password', e.target.value)}
                               />
                             </div>
@@ -541,7 +555,7 @@ export default function NotificationChannelsPanel({
                                 id={`smtp-from-${ch.id}`}
                                 name="fromName"
                                 className="form-input"
-                                value={ch.config.fromName || 'SmartApps Enterprise'}
+                                value={cfgStr(ch, 'fromName', 'SmartApps Enterprise')}
                                 onChange={(e) => updateChannelConfig(ch.id, 'fromName', e.target.value)}
                               />
                             </div>
@@ -552,7 +566,7 @@ export default function NotificationChannelsPanel({
                                 name="toEmails"
                                 className="form-input"
                                 placeholder="hr@company.vn, ops@company.vn"
-                                value={ch.config.toEmails || ''}
+                                value={cfgStr(ch, 'toEmails')}
                                 onChange={(e) => updateChannelConfig(ch.id, 'toEmails', e.target.value)}
                               />
                             </div>
@@ -590,7 +604,7 @@ export default function NotificationChannelsPanel({
                                 autoComplete="off"
                                 className="form-input"
                                 placeholder={ch.hasSecret ? '•••••••• (Giữ nguyên nếu để trống)' : '123456789:ABCdef...'}
-                                value={ch.config.botToken || ''}
+                                value={cfgStr(ch, 'botToken')}
                                 onChange={(e) => updateChannelConfig(ch.id, 'botToken', e.target.value)}
                               />
                             </div>
@@ -601,7 +615,7 @@ export default function NotificationChannelsPanel({
                                 name="chatId"
                                 className="form-input"
                                 placeholder="-1001234567890 hoặc @ten_nhom"
-                                value={ch.config.chatId || ''}
+                                value={cfgStr(ch, 'chatId')}
                                 onChange={(e) => updateChannelConfig(ch.id, 'chatId', e.target.value)}
                               />
                             </div>
@@ -636,7 +650,7 @@ export default function NotificationChannelsPanel({
                                   id={`zalo-ep-${ch.id}`}
                                   name="endpointUrl"
                                   className="form-input"
-                                  value={ch.config.endpointUrl || 'https://openapi.zalo.me/v3.0/oa/message/cs'}
+                                  value={cfgStr(ch, 'endpointUrl', 'https://openapi.zalo.me/v3.0/oa/message/cs')}
                                   onChange={(e) => updateChannelConfig(ch.id, 'endpointUrl', e.target.value)}
                                 />
                               </div>
@@ -651,7 +665,7 @@ export default function NotificationChannelsPanel({
                                   autoComplete="off"
                                   className="form-input"
                                   placeholder={ch.hasSecret ? '••••••••' : 'Zalo OA Access Token'}
-                                  value={ch.config.accessToken || ''}
+                                  value={cfgStr(ch, 'accessToken')}
                                   onChange={(e) => updateChannelConfig(ch.id, 'accessToken', e.target.value)}
                                 />
                               </div>
@@ -662,7 +676,7 @@ export default function NotificationChannelsPanel({
                                   name="targetId"
                                   className="form-input"
                                   placeholder="ID người nhận / nhóm"
-                                  value={ch.config.targetId || ''}
+                                  value={cfgStr(ch, 'targetId')}
                                   onChange={(e) => updateChannelConfig(ch.id, 'targetId', e.target.value)}
                                 />
                               </div>
@@ -676,7 +690,7 @@ export default function NotificationChannelsPanel({
                                   name="webhookUrl"
                                   className="form-input"
                                   placeholder="https://bot.company.vn/zalo/group-notify"
-                                  value={ch.config.webhookUrl || ''}
+                                  value={cfgStr(ch, 'webhookUrl')}
                                   onChange={(e) => updateChannelConfig(ch.id, 'webhookUrl', e.target.value)}
                                 />
                               </div>
@@ -687,7 +701,7 @@ export default function NotificationChannelsPanel({
                                   name="targetId"
                                   className="form-input"
                                   placeholder="ID nhóm Zalo đích"
-                                  value={ch.config.targetId || ''}
+                                  value={cfgStr(ch, 'targetId')}
                                   onChange={(e) => updateChannelConfig(ch.id, 'targetId', e.target.value)}
                                 />
                               </div>
@@ -705,7 +719,7 @@ export default function NotificationChannelsPanel({
                               name="webhookUrl"
                               className="form-input"
                               placeholder="https://..."
-                              value={ch.config.webhookUrl || ''}
+                              value={cfgStr(ch, 'webhookUrl')}
                               onChange={(e) => updateChannelConfig(ch.id, 'webhookUrl', e.target.value)}
                             />
                           </div>
@@ -719,7 +733,7 @@ export default function NotificationChannelsPanel({
                                 autoComplete="off"
                                 className="form-input"
                                 placeholder={ch.hasSecret ? '••••••••' : 'Secret token'}
-                                value={ch.config.secretValue || ''}
+                                value={cfgStr(ch, 'secretValue')}
                                 onChange={(e) => updateChannelConfig(ch.id, 'secretValue', e.target.value)}
                               />
                             </div>

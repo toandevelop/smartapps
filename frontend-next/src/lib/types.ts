@@ -10,7 +10,7 @@ export interface SysApp {
   version: string;
   orderIndex: number;
   isActive: boolean;
-  settings?: Record<string, any>;
+  settings?: Record<string, unknown>;
   publishedVersion?: number;
   publishStatus?: string;
   moduleCount: number;
@@ -46,6 +46,8 @@ export interface SysTable {
   approvalField?: string | null;
   approverRoles?: string[];
   publicFormEnabled?: boolean;
+  publicFormExpiresAt?: string | null;
+  publicFormMaxSubmissions?: number | null;
   formRules?: FormRule[];
   orderIndex: number;
   isActive: boolean;
@@ -143,7 +145,7 @@ export interface AppRecord {
   moduleId: string;
   tableId: string;
   recordKey?: string | null;
-  data: Record<string, any>;
+  data: Record<string, unknown>;
   status: string;
   version?: number;
   approvalStatus?: string;
@@ -156,6 +158,7 @@ export interface AppRecord {
   totalWorkflowSteps?: number;
   currentStepApproverRoles?: string[];
   workflowHistory?: WorkflowHistoryEntry[];
+  stepApprovals?: WorkflowStepApprovalVote[];
   deletedAt?: string | null;
   deletedBy?: string | null;
   validationErrors?: ValidationErrorItem[];
@@ -350,6 +353,7 @@ export interface SysUser {
   email?: string | null;
   employeeCode?: string | null;
   department: string;
+  orgUnitId?: string | null;
   roleCode: string;
   roleCodes?: string[];
   roleNames?: string[];
@@ -446,7 +450,7 @@ export interface NotificationChannel {
   name: string;
   isEnabled: boolean;
   eventCategories: string[];
-  config: Record<string, any>;
+  config: Record<string, unknown>;
   hasSecret: boolean;
   updatedAt?: string;
 }
@@ -566,8 +570,8 @@ export interface AppAuditLog {
   recordId: string;
   action: string;
   actor: string;
-  oldData?: Record<string, any> | null;
-  newData?: Record<string, any> | null;
+  oldData?: Record<string, unknown> | null;
+  newData?: Record<string, unknown> | null;
   summary?: string | null;
   createdAt: string;
 }
@@ -594,12 +598,24 @@ export interface TableAnalytics {
   }>;
 }
 
+export interface QueryCondition {
+  field: string;
+  op: 'contains' | 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'between' | 'in' | 'is_empty' | 'not_empty' | 'date_preset';
+  value?: string;
+  value2?: string;
+}
+
+export interface StructuredQueryFilter {
+  logic: 'AND' | 'OR';
+  conditions: QueryCondition[];
+}
+
 export interface SysSavedView {
   id: string;
   appId: string;
   tableId: string;
   name: string;
-  filters: Record<string, string>;
+  filters: Record<string, string> | StructuredQueryFilter;
   sortField?: string | null;
   sortDir: string;
   isShared: boolean;
@@ -720,6 +736,54 @@ export interface WorkflowStep {
   approverUsers: string[];
   slaHours: number;
   requireCommentOnReject: boolean;
+  approvalMode?: 'ANY' | 'ALL' | 'QUORUM' | string;
+  quorumCount?: number;
+  allowReturnToPrevious?: boolean;
+}
+
+export interface WorkflowStepApprovalVote {
+  stepOrder: number;
+  actor: string;
+  actorRole?: string | null;
+  delegatedFrom?: string | null;
+  at: string;
+}
+
+export interface SysWorkflowDelegation {
+  id: string;
+  delegatorUsername: string;
+  delegateUsername: string;
+  appId?: string | null;
+  startsAt: string;
+  expiresAt: string;
+  reason?: string | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface BusinessHoliday {
+  id: string;
+  holidayDate: string;
+  name: string;
+  isRecurring: boolean;
+}
+
+export interface GlobalSearchHit {
+  kind: 'APP' | 'RECORD' | 'CHAT' | 'ATTACHMENT' | string;
+  id: string;
+  title: string;
+  subtitle: string;
+  url: string;
+  badge?: string | null;
+  timestamp?: string | null;
+}
+
+export interface GlobalSearchResult {
+  query: string;
+  apps: GlobalSearchHit[];
+  records: GlobalSearchHit[];
+  chats: GlobalSearchHit[];
+  attachments: GlobalSearchHit[];
 }
 
 export interface AppWorkflow {
@@ -746,6 +810,9 @@ export interface AiSystemSettings {
   isEnabled: boolean;
   defaultProviderId?: string | null;
   fallbackToRuleEngine: boolean;
+  maskPiiBeforeCloudLlm?: boolean;
+  monthlyTokenBudget?: number;
+  preferLocalForSensitive?: boolean;
   temperature: number;
   maxTokens: number;
   timeoutSeconds: number;
@@ -809,6 +876,10 @@ export interface AiStatus {
   activeProviderType?: string | null;
   activeModel?: string | null;
   fallbackToRuleEngine: boolean;
+  maskPiiBeforeCloudLlm?: boolean;
+  monthlyTokenBudget?: number;
+  monthlyTokensUsed?: number;
+  preferLocalForSensitive?: boolean;
   enabledFeatures: string[];
 }
 
@@ -819,4 +890,45 @@ export interface AiTestResult {
   latencyMs: number;
   message: string;
   replyPreview?: string | null;
+}
+
+export interface SysOrgUnit {
+  id: string;
+  code: string;
+  name: string;
+  parentId?: string | null;
+  managerUsername?: string | null;
+  orderIndex: number;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AttachmentInfo {
+  id: string;
+  appId?: string | null;
+  tableId?: string | null;
+  recordId?: string | null;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  uploadedBy: string;
+  createdAt: string;
+}
+
+export interface StorageQuota {
+  id: string;
+  scopeType: 'GLOBAL' | 'APP' | 'USER' | string;
+  scopeId: string;
+  quotaMb: number;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface StorageStats {
+  totalUsedBytes: number;
+  totalFiles: number;
+  quotas: StorageQuota[];
+  usedByApp: Record<string, number>;
+  usedByUser: Record<string, number>;
 }

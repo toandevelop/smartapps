@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded';
 import SecurityRoundedIcon from '@mui/icons-material/SecurityRounded';
@@ -9,65 +9,49 @@ import { useEscapeKey } from '@/lib/ui-hooks';
 
 const ROLE_COLORS = ['#1a73e8', '#1e8e3e', '#00897b', '#7b1fa2', '#ea8600', '#d93025', '#5f6368'];
 
-export default function RoleFormModal({
-  open,
-  editing,
-  catalog,
-  allApps,
-  onClose,
-  onSaved,
-}: {
+interface RoleFormModalProps {
   open: boolean;
   editing: SysRole | null;
   catalog: PermissionCatalog;
   allApps: SysApp[];
   onClose: () => void;
   onSaved: () => void;
-}) {
-  const [code, setCode] = useState('');
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [color, setColor] = useState('#1a73e8');
-  const [isActive, setIsActive] = useState(true);
-  const [allAppsAccess, setAllAppsAccess] = useState(false);
-  const [defaultAppPermissions, setDefaultAppPermissions] = useState<string[]>(['record.view', 'record.create']);
-  const [systemPermissions, setSystemPermissions] = useState<string[]>([]);
-  const [appMatrix, setAppMatrix] = useState<Record<string, { permissions: string[]; rowScope: string }>>({});
+}
+
+export default function RoleFormModal(props: RoleFormModalProps) {
+  useEscapeKey(props.open, props.onClose);
+  if (!props.open) return null;
+  return <RoleFormModalBody key={props.editing?.id || '__new__'} {...props} />;
+}
+
+function RoleFormModalBody({
+  editing,
+  catalog,
+  allApps,
+  onClose,
+  onSaved,
+}: RoleFormModalProps) {
+  const [code, setCode] = useState(() => editing?.code || '');
+  const [name, setName] = useState(() => editing?.name || '');
+  const [description, setDescription] = useState(() => editing?.description || '');
+  const [color, setColor] = useState(() => editing?.color || '#1a73e8');
+  const [isActive, setIsActive] = useState(() => editing ? editing.isActive !== false : true);
+  const [allAppsAccess, setAllAppsAccess] = useState(() => Boolean(editing?.allAppsAccess));
+  const [defaultAppPermissions, setDefaultAppPermissions] = useState<string[]>(() =>
+    editing ? (editing.defaultAppPermissions || []) : ['record.view', 'record.create']
+  );
+  const [systemPermissions, setSystemPermissions] = useState<string[]>(() =>
+    editing ? (editing.systemPermissions || []) : []
+  );
+  const [appMatrix, setAppMatrix] = useState<Record<string, { permissions: string[]; rowScope: string }>>(() => {
+    const map: Record<string, { permissions: string[]; rowScope: string }> = {};
+    (editing?.appPermissions || []).forEach((ap) => {
+      map[ap.appId] = { permissions: ap.permissions || [], rowScope: ap.rowScope || 'INHERIT' };
+    });
+    return map;
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  useEscapeKey(open, onClose);
-
-  useEffect(() => {
-    if (!open) return;
-    setError('');
-    if (editing) {
-      setCode(editing.code);
-      setName(editing.name);
-      setDescription(editing.description || '');
-      setColor(editing.color || '#1a73e8');
-      setIsActive(editing.isActive !== false);
-      setAllAppsAccess(Boolean(editing.allAppsAccess));
-      setDefaultAppPermissions(editing.defaultAppPermissions || []);
-      setSystemPermissions(editing.systemPermissions || []);
-      const map: Record<string, { permissions: string[]; rowScope: string }> = {};
-      (editing.appPermissions || []).forEach((ap) => {
-        map[ap.appId] = { permissions: ap.permissions || [], rowScope: ap.rowScope || 'INHERIT' };
-      });
-      setAppMatrix(map);
-    } else {
-      setCode('');
-      setName('');
-      setDescription('');
-      setColor('#1a73e8');
-      setIsActive(true);
-      setAllAppsAccess(false);
-      setDefaultAppPermissions(['record.view', 'record.create']);
-      setSystemPermissions([]);
-      setAppMatrix({});
-    }
-  }, [open, editing]);
-
-  if (!open) return null;
 
   const isAdminRole = editing?.code?.toUpperCase() === 'ADMIN';
 
@@ -240,7 +224,7 @@ export default function RoleFormModal({
           {/* System Permissions */}
           <div className="form-group">
             <label className="form-label">Quyền Quản trị Hệ thống</label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8, padding: 12, background: '#f8fafc', borderRadius: 10, border: '1px solid var(--border-light)' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8, padding: 12, background: 'var(--bg-secondary)', borderRadius: 10, border: '1px solid var(--border-light)' }}>
               {catalog.systemPermissions.map((sp) => {
                 const checked = isAdminRole || systemPermissions.includes(sp.code);
                 return (
@@ -252,8 +236,8 @@ export default function RoleFormModal({
                       gap: 8,
                       padding: '8px 10px',
                       borderRadius: 8,
-                      backgroundColor: checked ? '#ffffff' : 'transparent',
-                      border: `1px solid ${checked ? '#1a73e8' : 'var(--border-light)'}`,
+                      backgroundColor: checked ? 'var(--bg-surface)' : 'transparent',
+                      border: `1px solid ${checked ? 'var(--accent-primary)' : 'var(--border-light)'}`,
                       cursor: isAdminRole ? 'not-allowed' : 'pointer',
                     }}
                   >
@@ -291,12 +275,12 @@ export default function RoleFormModal({
             </div>
 
             {isAdminRole ? (
-              <div style={{ padding: 12, borderRadius: 10, backgroundColor: '#fce8e6', color: '#c5221f', fontSize: 12.5 }}>
+              <div style={{ padding: 12, borderRadius: 10, backgroundColor: 'var(--danger-bg)', color: 'var(--danger-text)', fontSize: 12.5 }}>
                 Vai trò <strong>ADMIN</strong> mặc định có toàn quyền trên mọi Ứng dụng và không thể bị giới hạn.
               </div>
             ) : allAppsAccess ? (
-              <div style={{ padding: 12, borderRadius: 10, backgroundColor: '#e8f0fe', border: '1px solid #d2e3fc' }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600, color: '#174ea6', marginBottom: 8 }}>
+              <div style={{ padding: 12, borderRadius: 10, backgroundColor: 'var(--info-bg)', border: '1px solid var(--info-border)' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--info-text)', marginBottom: 8 }}>
                   Chọn bộ quyền mặc định áp dụng cho tất cả các Ứng dụng:
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -311,8 +295,8 @@ export default function RoleFormModal({
                           gap: 6,
                           padding: '5px 10px',
                           borderRadius: 999,
-                          backgroundColor: checked ? '#ffffff' : 'rgba(255,255,255,0.5)',
-                          border: `1px solid ${checked ? '#1a73e8' : '#cbd5e1'}`,
+                          backgroundColor: checked ? 'var(--bg-surface)' : 'var(--bg-secondary)',
+                          border: `1px solid ${checked ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
                           fontSize: 12,
                           cursor: 'pointer',
                         }}

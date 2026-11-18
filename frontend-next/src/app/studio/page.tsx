@@ -29,7 +29,6 @@ import {
 import StudioPlatformResourcesPanel, { PlatformSubTab } from './StudioPlatformResourcesPanel';
 import { usePlatform } from '@/lib/app-context';
 import { useAuth } from '@/lib/auth-context';
-import { clearCategoryCache } from '@/lib/category-service';
 import {
   SysApp,
   SysModule,
@@ -102,9 +101,32 @@ function AppBuilderStudioContent() {
   const canManageInteg = canStudio || hasPermission('integration.manage');
   const canAccessStudio = canStudio || canManageUsers || canManageRoles || canManageAuto || canViewAudit || canManageInteg;
 
-  const [workspace, setWorkspace] = useState<StudioWorkspace>('builder');
-  const [builderTab, setBuilderTab] = useState<BuilderSubTab>('columns');
-  const [platformTab, setPlatformTab] = useState<PlatformSubTab>('roles');
+  const defaultWorkspace: StudioWorkspace =
+    !canStudio && (canManageRoles || canManageUsers || canViewAudit) ? 'platform' : 'builder';
+  const defaultBuilderTab: BuilderSubTab =
+    !canStudio && !canManageRoles && !canManageUsers && !canViewAudit
+      ? canManageAuto
+        ? 'automations'
+        : canManageInteg
+        ? 'integrations'
+        : 'columns'
+      : 'columns';
+  const defaultPlatformTab: PlatformSubTab =
+    canManageRoles ? 'roles' : canManageUsers ? 'users' : canViewAudit ? 'audit' : 'roles';
+
+  const [workspaceOverride, setWorkspaceOverride] = useState<StudioWorkspace | null>(null);
+  const [builderTabOverride, setBuilderTabOverride] = useState<BuilderSubTab | null>(null);
+  const [studioAdvancedMode, setStudioAdvancedMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('smartapps_studio_advanced') === 'true';
+  });
+  const [platformTabOverride, setPlatformTabOverride] = useState<PlatformSubTab | null>(null);
+  const workspace = workspaceOverride ?? defaultWorkspace;
+  const setWorkspace = setWorkspaceOverride;
+  const builderTab = builderTabOverride ?? defaultBuilderTab;
+  const setBuilderTab = setBuilderTabOverride;
+  const platformTab = platformTabOverride ?? defaultPlatformTab;
+  const setPlatformTab = setPlatformTabOverride;
   const [appQuery, setAppQuery] = useState('');
 
   const [selectedApp, setSelectedApp] = useState<SysApp | null>(null);
@@ -159,12 +181,6 @@ function AppBuilderStudioContent() {
   const [showAutoModal, setShowAutoModal] = useState(false);
   const [editingAuto, setEditingAuto] = useState<AppAutomation | null>(null);
   const [saving, setSaving] = useState(false);
-
-  // Category quick form
-  const [newCatCode, setNewCatCode] = useState('');
-  const [newCatName, setNewCatName] = useState('');
-  const [newItemCode, setNewItemCode] = useState('');
-  const [newItemName, setNewItemName] = useState('');
 
   const [confirm, setConfirm] = useState<{ open: boolean; title: string; message: string; onConfirm: () => void }>({
     open: false,
@@ -233,33 +249,19 @@ function AppBuilderStudioContent() {
   }, []);
 
   useEffect(() => {
-    loadCategories();
-    loadAllTables();
-    loadAutomations();
-    loadUsers();
-    loadRoles();
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      void loadCategories();
+      void loadAllTables();
+      void loadAutomations();
+      void loadUsers();
+      void loadRoles();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadCategories, loadAllTables, loadAutomations, loadUsers, loadRoles]);
-
-  useEffect(() => {
-    if (!canStudio) {
-      if (canManageRoles) {
-        setWorkspace('platform');
-        setPlatformTab('roles');
-      } else if (canManageUsers) {
-        setWorkspace('platform');
-        setPlatformTab('users');
-      } else if (canViewAudit) {
-        setWorkspace('platform');
-        setPlatformTab('audit');
-      } else if (canManageAuto) {
-        setWorkspace('builder');
-        setBuilderTab('automations');
-      } else if (canManageInteg) {
-        setWorkspace('builder');
-        setBuilderTab('integrations');
-      }
-    }
-  }, [canStudio, canManageRoles, canManageUsers, canManageAuto, canViewAudit, canManageInteg]);
 
   const loadGlobalAuditLogs = useCallback(async (appFilter?: string) => {
     const qs = appFilter ? `?appId=${encodeURIComponent(appFilter)}&limit=80` : '?limit=80';
@@ -273,8 +275,15 @@ function AppBuilderStudioContent() {
   }, []);
 
   useEffect(() => {
-    if (workspace === 'platform' && platformTab === 'audit') loadGlobalAuditLogs(auditAppFilter);
-    if (workspace === 'builder' && builderTab === 'integrations') loadApiKeys();
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      if (workspace === 'platform' && platformTab === 'audit') void loadGlobalAuditLogs(auditAppFilter);
+      if (workspace === 'builder' && builderTab === 'integrations') void loadApiKeys();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [workspace, platformTab, builderTab, auditAppFilter, loadGlobalAuditLogs, loadApiKeys]);
 
   useEffect(() => {
@@ -287,19 +296,26 @@ function AppBuilderStudioContent() {
   const appliedQueryAppRef = useRef(false);
   useEffect(() => {
     if (apps.length === 0) return;
-    if (requestedAppId && !appliedQueryAppRef.current) {
-      const target = apps.find((a) => a.id === requestedAppId || a.code.toUpperCase() === requestedAppId.toUpperCase());
-      if (target) {
-        appliedQueryAppRef.current = true;
-        setSelectedApp(target);
-        setWorkspace('builder');
-        return;
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      if (requestedAppId && !appliedQueryAppRef.current) {
+        const target = apps.find((a) => a.id === requestedAppId || a.code.toUpperCase() === requestedAppId.toUpperCase());
+        if (target) {
+          appliedQueryAppRef.current = true;
+          setSelectedApp(target);
+          setWorkspaceOverride('builder');
+          return;
+        }
       }
-    }
-    setSelectedApp((prev) => {
-      if (!prev) return apps[0];
-      return apps.find((a) => a.id === prev.id) || apps[0];
+      setSelectedApp((prev) => {
+        if (!prev) return apps[0];
+        return apps.find((a) => a.id === prev.id) || apps[0];
+      });
     });
+    return () => {
+      cancelled = true;
+    };
   }, [apps, requestedAppId]);
 
   const loadModules = useCallback(async (appId: string) => {
@@ -312,11 +328,18 @@ function AppBuilderStudioContent() {
   }, []);
 
   useEffect(() => {
-    if (selectedApp) loadModules(selectedApp.id);
-    else {
-      setModules([]);
-      setSelectedModule(null);
-    }
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      if (selectedApp) void loadModules(selectedApp.id);
+      else {
+        setModules([]);
+        setSelectedModule(null);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedApp, loadModules]);
 
   const loadTables = useCallback(async (appId: string, moduleId: string) => {
@@ -329,11 +352,18 @@ function AppBuilderStudioContent() {
   }, []);
 
   useEffect(() => {
-    if (selectedApp && selectedModule) loadTables(selectedApp.id, selectedModule.id);
-    else {
-      setTables([]);
-      setSelectedTable(null);
-    }
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      if (selectedApp && selectedModule) void loadTables(selectedApp.id, selectedModule.id);
+      else {
+        setTables([]);
+        setSelectedTable(null);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedApp, selectedModule, loadTables]);
 
   const loadColumnsAndPreview = useCallback(async (tableId: string) => {
@@ -346,13 +376,20 @@ function AppBuilderStudioContent() {
   }, []);
 
   useEffect(() => {
-    if (selectedTable) {
-      loadColumnsAndPreview(selectedTable.id);
-      setCompiledSchema(null);
-    } else {
-      setColumns([]);
-      setRecords([]);
-    }
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      if (selectedTable) {
+        void loadColumnsAndPreview(selectedTable.id);
+        setCompiledSchema(null);
+      } else {
+        setColumns([]);
+        setRecords([]);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedTable, loadColumnsAndPreview]);
 
   useEffect(() => {
@@ -450,7 +487,7 @@ function AppBuilderStudioContent() {
     }
   };
 
-  const saveRecord = async (data: Record<string, any>) => {
+  const saveRecord = async (data: Record<string, unknown>) => {
     if (!selectedApp || !selectedModule || !selectedTable) return;
     setSaving(true);
     try {
@@ -564,45 +601,6 @@ function AppBuilderStudioContent() {
     }
   };
 
-  const addCategory = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCatCode.trim() || !newCatName.trim()) return;
-    const res = await fetch('/api/categories', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ categoryCode: newCatCode, categoryName: newCatName }),
-    }).then((r) => r.json());
-    if (res.success) {
-      setNewCatCode('');
-      setNewCatName('');
-      await loadCategories();
-      setSelectedCat(res.data);
-      toast('Đã tạo danh mục mới!');
-    }
-  };
-
-  const addCategoryItem = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedCat || !newItemCode.trim() || !newItemName.trim()) return;
-    const res = await fetch('/api/categories/items', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        categoryCode: selectedCat.categoryCode,
-        itemCode: newItemCode,
-        itemName: newItemName,
-        orderIndex: catItems.length + 1,
-      }),
-    }).then((r) => r.json());
-    if (res.success) {
-      setNewItemCode('');
-      setNewItemName('');
-      clearCategoryCache(selectedCat.categoryCode);
-      setCatItems((prev) => [...prev, res.data]);
-      toast('Đã thêm mục chọn vào danh mục!');
-    }
-  };
-
   const filteredApps = useMemo(() => {
     const q = appQuery.trim().toLowerCase();
     if (!q) return apps;
@@ -613,6 +611,101 @@ function AppBuilderStudioContent() {
         (a.department || '').toLowerCase().includes(q)
     );
   }, [apps, appQuery]);
+
+  const tableModalInitial = useMemo<TableFormState>(() => (
+    editingTable
+      ? {
+          id: editingTable.id,
+          appId: editingTable.appId,
+          moduleId: editingTable.moduleId,
+          tableName: editingTable.tableName,
+          displayName: editingTable.displayName,
+          description: editingTable.description || '',
+          primaryView: editingTable.primaryView,
+          rowScope: editingTable.rowScope || 'ALL',
+          approvalEnabled: Boolean(editingTable.approvalEnabled),
+          approvalField: editingTable.approvalField || 'trang_thai_duyet',
+          approverRoles: editingTable.approverRoles || [],
+          publicFormEnabled: Boolean(editingTable.publicFormEnabled),
+          publicFormExpiresAt: editingTable.publicFormExpiresAt || '',
+          publicFormMaxSubmissions: editingTable.publicFormMaxSubmissions ?? '',
+          formRules: editingTable.formRules || [],
+          orderIndex: editingTable.orderIndex,
+        }
+      : {
+          id: '',
+          appId: selectedApp?.id || '',
+          moduleId: selectedModule?.id || '',
+          tableName: '',
+          displayName: '',
+          description: '',
+          primaryView: 'table',
+          rowScope: 'ALL',
+          approvalEnabled: false,
+          approvalField: 'trang_thai_duyet',
+          approverRoles: [],
+          publicFormEnabled: false,
+          publicFormExpiresAt: '',
+          publicFormMaxSubmissions: '',
+          orderIndex: tables.length + 1,
+        }
+  ), [editingTable, selectedApp?.id, selectedModule?.id, tables.length]);
+
+  const columnModalInitial = useMemo<ColumnFormState>(() => (
+    editingColumn
+      ? {
+          id: editingColumn.id,
+          tableId: editingColumn.tableId,
+          columnCode: editingColumn.columnCode,
+          columnName: editingColumn.columnName,
+          excelHeader: editingColumn.excelHeader,
+          dataType: editingColumn.dataType,
+          isRequired: editingColumn.isRequired,
+          isIdentityKey: editingColumn.isIdentityKey,
+          showInTable: editingColumn.showInTable,
+          showInForm: editingColumn.showInForm,
+          showInParentForm: editingColumn.showInParentForm ?? false,
+          width: editingColumn.width,
+          validationRegex: editingColumn.validationRegex || '',
+          refCategoryCode: editingColumn.refCategoryCode || '',
+          allowQuickCreate: Boolean(editingColumn.allowQuickCreate),
+          refAppId: editingColumn.refAppId || '',
+          refTableId: editingColumn.refTableId || '',
+          refValueField: editingColumn.refValueField || '',
+          refDisplayField: editingColumn.refDisplayField || '',
+          formula: editingColumn.formula || '',
+          defaultValue: editingColumn.defaultValue || '',
+          hiddenForRoles: editingColumn.hiddenForRoles || [],
+          readOnlyForRoles: editingColumn.readOnlyForRoles || [],
+          orderIndex: editingColumn.orderIndex,
+        }
+      : {
+          id: '',
+          tableId: selectedTable?.id || '',
+          columnCode: '',
+          columnName: '',
+          excelHeader: '',
+          dataType: 'STRING',
+          isRequired: false,
+          isIdentityKey: false,
+          showInTable: true,
+          showInForm: true,
+          showInParentForm: false,
+          width: 170,
+          validationRegex: '',
+          refCategoryCode: '',
+          allowQuickCreate: false,
+          refAppId: '',
+          refTableId: '',
+          refValueField: '',
+          refDisplayField: '',
+          formula: '',
+          defaultValue: '',
+          hiddenForRoles: [],
+          readOnlyForRoles: [],
+          orderIndex: columns.length + 1,
+        }
+  ), [editingColumn, selectedTable?.id, columns.length]);
 
   if (!canAccessStudio) {
     return (
@@ -1190,17 +1283,19 @@ function AppBuilderStudioContent() {
                             <TableViewRoundedIcon sx={{ fontSize: 15 }} />
                             Xem thử Dữ liệu ({records.length})
                           </button>
-                          <button
-                            type="button"
-                            className={`segmented-tab ${builderTab === 'compile' ? 'active' : ''}`}
-                            onClick={() => setBuilderTab('compile')}
-                          >
-                            <CodeRoundedIcon sx={{ fontSize: 15 }} />
-                            Biên dịch Schema
-                          </button>
+                          {(studioAdvancedMode || !canStudio) && (
+                            <button
+                              type="button"
+                              className={`segmented-tab ${builderTab === 'compile' ? 'active' : ''}`}
+                              onClick={() => setBuilderTab('compile')}
+                            >
+                              <CodeRoundedIcon sx={{ fontSize: 15 }} />
+                              Biên dịch Schema
+                            </button>
+                          )}
                         </>
                       )}
-                      {canManageAuto && (
+                      {canManageAuto && (studioAdvancedMode || !canStudio) && (
                         <button
                           type="button"
                           className={`segmented-tab ${builderTab === 'automations' ? 'active' : ''}`}
@@ -1212,22 +1307,26 @@ function AppBuilderStudioContent() {
                       )}
                       {canManageInteg && (
                         <>
-                          <button
-                            type="button"
-                            className={`segmented-tab ${builderTab === 'plugins' ? 'active' : ''}`}
-                            onClick={() => setBuilderTab('plugins')}
-                          >
-                            <ExtensionRoundedIcon sx={{ fontSize: 15 }} />
-                            Plugin
-                          </button>
-                          <button
-                            type="button"
-                            className={`segmented-tab ${builderTab === 'integrations' ? 'active' : ''}`}
-                            onClick={() => setBuilderTab('integrations')}
-                          >
-                            <ApiRoundedIcon sx={{ fontSize: 15 }} />
-                            API
-                          </button>
+                          {(studioAdvancedMode || !canStudio) && (
+                            <>
+                              <button
+                                type="button"
+                                className={`segmented-tab ${builderTab === 'plugins' ? 'active' : ''}`}
+                                onClick={() => setBuilderTab('plugins')}
+                              >
+                                <ExtensionRoundedIcon sx={{ fontSize: 15 }} />
+                                Plugin
+                              </button>
+                              <button
+                                type="button"
+                                className={`segmented-tab ${builderTab === 'integrations' ? 'active' : ''}`}
+                                onClick={() => setBuilderTab('integrations')}
+                              >
+                                <ApiRoundedIcon sx={{ fontSize: 15 }} />
+                                API
+                              </button>
+                            </>
+                          )}
                           <button
                             type="button"
                             className={`segmented-tab ${builderTab === 'publicForms' ? 'active' : ''}`}
@@ -1237,6 +1336,24 @@ function AppBuilderStudioContent() {
                             Public Form ({allTables.filter((t) => t.publicFormEnabled).length})
                           </button>
                         </>
+                      )}
+                      {canStudio && (
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-xs"
+                          style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
+                          title={studioAdvancedMode ? 'Chuyển về chế độ Thiết kế Cơ bản' : 'Mở khóa tab Nâng cao (Schema, Automation, Plugin, API)'}
+                          onClick={() => {
+                            const next = !studioAdvancedMode;
+                            setStudioAdvancedMode(next);
+                            localStorage.setItem('smartapps_studio_advanced', String(next));
+                            if (!next && ['compile', 'automations', 'plugins', 'integrations'].includes(builderTab)) {
+                              setBuilderTab('columns');
+                            }
+                          }}
+                        >
+                          {studioAdvancedMode ? 'Chế độ: Nâng cao' : 'Chế độ: Cơ bản'}
+                        </button>
                       )}
                     </div>
 
@@ -1520,6 +1637,7 @@ function AppBuilderStudioContent() {
                                       UPDATE_SELF: 'Tự cập nhật nguồn',
                                       SEND_NOTIFICATION: 'Gửi Thông báo',
                                       CALL_WEBHOOK: 'Gọi Webhook',
+                                      RUN_PLUGIN: 'Chạy Plugin Tích hợp',
                                     } as Record<string, string>)[a.actionType] || a.actionType
                                   }</strong>
                                   {a.targetTableId && <> tại <code>{a.targetTableId}</code></>}
@@ -1770,17 +1888,7 @@ function AppBuilderStudioContent() {
             globalAuditLogs={globalAuditLogs}
             auditAppFilter={auditAppFilter}
             currentUserId={currentUser?.id}
-            newCatCode={newCatCode}
-            newCatName={newCatName}
-            newItemCode={newItemCode}
-            newItemName={newItemName}
-            onSetNewCatCode={setNewCatCode}
-            onSetNewCatName={setNewCatName}
-            onSetNewItemCode={setNewItemCode}
-            onSetNewItemName={setNewItemName}
             onSelectCategory={setSelectedCat}
-            onAddCategory={addCategory}
-            onAddCategoryItem={addCategoryItem}
             onRefreshCategory={async () => {
               await loadCategories();
               setSelectedCat((prev) => (prev ? { ...prev } : prev));
@@ -1930,40 +2038,7 @@ function AppBuilderStudioContent() {
         saving={saving}
         onClose={() => setShowTableModal(false)}
         onSave={saveTable}
-        initial={
-          editingTable
-            ? {
-                id: editingTable.id,
-                appId: editingTable.appId,
-                moduleId: editingTable.moduleId,
-                tableName: editingTable.tableName,
-                displayName: editingTable.displayName,
-                description: editingTable.description || '',
-                primaryView: editingTable.primaryView,
-                rowScope: editingTable.rowScope || 'ALL',
-                approvalEnabled: Boolean(editingTable.approvalEnabled),
-                approvalField: editingTable.approvalField || 'trang_thai_duyet',
-                approverRoles: editingTable.approverRoles || [],
-                publicFormEnabled: Boolean(editingTable.publicFormEnabled),
-                formRules: editingTable.formRules || [],
-                orderIndex: editingTable.orderIndex,
-              }
-            : {
-                id: '',
-                appId: selectedApp?.id || '',
-                moduleId: selectedModule?.id || '',
-                tableName: '',
-                displayName: '',
-                description: '',
-                primaryView: 'table',
-                rowScope: 'ALL',
-                approvalEnabled: false,
-                approvalField: 'trang_thai_duyet',
-                approverRoles: [],
-                publicFormEnabled: false,
-                orderIndex: tables.length + 1,
-              }
-        }
+        initial={tableModalInitial}
       />
 
       <ColumnModal
@@ -1976,61 +2051,7 @@ function AppBuilderStudioContent() {
         saving={saving}
         onClose={() => setShowColumnModal(false)}
         onSave={saveColumn}
-        initial={
-          editingColumn
-            ? {
-                id: editingColumn.id,
-                tableId: editingColumn.tableId,
-                columnCode: editingColumn.columnCode,
-                columnName: editingColumn.columnName,
-                excelHeader: editingColumn.excelHeader,
-                dataType: editingColumn.dataType,
-                isRequired: editingColumn.isRequired,
-                isIdentityKey: editingColumn.isIdentityKey,
-                showInTable: editingColumn.showInTable,
-                showInForm: editingColumn.showInForm,
-                showInParentForm: editingColumn.showInParentForm ?? false,
-                width: editingColumn.width,
-                validationRegex: editingColumn.validationRegex || '',
-                refCategoryCode: editingColumn.refCategoryCode || '',
-                allowQuickCreate: Boolean(editingColumn.allowQuickCreate),
-                refAppId: editingColumn.refAppId || '',
-                refTableId: editingColumn.refTableId || '',
-                refValueField: editingColumn.refValueField || '',
-                refDisplayField: editingColumn.refDisplayField || '',
-                formula: editingColumn.formula || '',
-                defaultValue: editingColumn.defaultValue || '',
-                hiddenForRoles: editingColumn.hiddenForRoles || [],
-                readOnlyForRoles: editingColumn.readOnlyForRoles || [],
-                orderIndex: editingColumn.orderIndex,
-              }
-            : {
-                id: '',
-                tableId: selectedTable?.id || '',
-                columnCode: '',
-                columnName: '',
-                excelHeader: '',
-                dataType: 'STRING',
-                isRequired: false,
-                isIdentityKey: false,
-                showInTable: true,
-                showInForm: true,
-                showInParentForm: false,
-                width: 170,
-                validationRegex: '',
-                refCategoryCode: '',
-                allowQuickCreate: false,
-                refAppId: '',
-                refTableId: '',
-                refValueField: '',
-                refDisplayField: '',
-                formula: '',
-                defaultValue: '',
-                hiddenForRoles: [],
-                readOnlyForRoles: [],
-                orderIndex: columns.length + 1,
-              }
-        }
+        initial={columnModalInitial}
       />
 
       {selectedTable && (
@@ -2082,7 +2103,6 @@ function AppBuilderStudioContent() {
         editing={editingAuto}
         allApps={apps}
         allTables={allTables}
-        allModules={modules}
         allRoles={roles}
         onClose={() => setShowAutoModal(false)}
         onSaved={async () => {

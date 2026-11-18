@@ -59,16 +59,16 @@ function LineChartSvg({
   return (
     <div style={{ width: '100%' }}>
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 140, display: 'block' }}>
-        <line x1={padX} y1={h - padY} x2={w - padX} y2={h - padY} stroke="#e8eaed" strokeWidth="1" />
+        <line x1={padX} y1={h - padY} x2={w - padX} y2={h - padY} stroke="var(--border-light)" strokeWidth="1" />
         {areaPath && <path d={areaPath} fill={`${color}1a`} />}
         {points.length > 1 && <polyline fill="none" stroke={color} strokeWidth="2.5" points={polyPoints} />}
         {points.map((p) => (
           <g key={p.code}>
-            <circle cx={p.x} cy={p.y} r="4.5" fill="#ffffff" stroke={color} strokeWidth="2.5" />
-            <text x={p.x} y={p.y - 8} textAnchor="middle" fontSize="10" fontWeight="700" fill="#202124">
+            <circle cx={p.x} cy={p.y} r="4.5" fill="var(--bg-surface)" stroke={color} strokeWidth="2.5" />
+            <text x={p.x} y={p.y - 8} textAnchor="middle" fontSize="10" fontWeight="700" fill="var(--text-primary)">
               {p.count}
             </text>
-            <text x={p.x} y={h - 3} textAnchor="middle" fontSize="9.5" fill="#5f6368">
+            <text x={p.x} y={h - 3} textAnchor="middle" fontSize="9.5" fill="var(--text-muted)">
               {p.label}
             </text>
           </g>
@@ -86,33 +86,33 @@ function DonutSvg({ items }: { items: Array<{ code: string; label: string; color
 
   const radius = 52;
   const circumference = 2 * Math.PI * radius;
-  let offset = 0;
+  const slices = items.reduce<Array<{ item: (typeof items)[number]; dash: number; offset: number }>>((acc, item) => {
+    const prev = acc.length > 0 ? acc[acc.length - 1] : null;
+    const offset = prev ? prev.offset + prev.dash : 0;
+    const dash = (item.count / total) * circumference;
+    acc.push({ item, dash, offset });
+    return acc;
+  }, []);
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
       <div style={{ position: 'relative', width: 136, height: 136, flexShrink: 0 }}>
         <svg width="136" height="136" viewBox="0 0 136 136">
-          <circle cx="68" cy="68" r={radius} fill="none" stroke="#f1f3f4" strokeWidth="18" />
-          {items.map((item) => {
-            const frac = item.count / total;
-            const dash = frac * circumference;
-            const seg = (
-              <circle
-                key={item.code}
-                cx="68"
-                cy="68"
-                r={radius}
-                fill="none"
-                stroke={item.color || '#1a73e8'}
-                strokeWidth="18"
-                strokeDasharray={`${dash} ${circumference - dash}`}
-                strokeDashoffset={-offset}
-                transform="rotate(-90 68 68)"
-              />
-            );
-            offset += dash;
-            return seg;
-          })}
+          <circle cx="68" cy="68" r={radius} fill="none" stroke="var(--bg-secondary)" strokeWidth="18" />
+          {slices.map(({ item, dash, offset }) => (
+            <circle
+              key={item.code}
+              cx="68"
+              cy="68"
+              r={radius}
+              fill="none"
+              stroke={item.color || '#1a73e8'}
+              strokeWidth="18"
+              strokeDasharray={`${dash} ${circumference - dash}`}
+              strokeDashoffset={-offset}
+              transform="rotate(-90 68 68)"
+            />
+          ))}
         </svg>
         <div
           style={{
@@ -162,6 +162,47 @@ export default function AppDashboardView({
   const [editingWidget, setEditingWidget] = useState<AppWidget | null>(null);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const allTables = React.useMemo(
+    () => appTree.modules.flatMap((m) => m.tables.map((t) => ({ id: t.table.id, displayName: t.table.displayName }))),
+    [appTree.modules]
+  );
+  const [nlTableId, setNlTableId] = useState('');
+  const effectiveNlTableId = nlTableId || allTables[0]?.id || '';
+  const [nlQuestion, setNlQuestion] = useState('');
+  const [nlBusy, setNlBusy] = useState(false);
+  const [nlError, setNlError] = useState('');
+  const [nlResult, setNlResult] = useState<{
+    question: string;
+    answer: string;
+    matchingRecords: number;
+    aggregateValue?: number | null;
+    breakdown: Array<{ group: string; count: number; metricValue: number }>;
+    engine: string;
+  } | null>(null);
+
+  const runNlInsights = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!effectiveNlTableId || !nlQuestion.trim() || nlBusy) return;
+    setNlBusy(true);
+    setNlError('');
+    try {
+      const res = await fetch('/api/records/ai-insights', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ tableId: effectiveNlTableId, question: nlQuestion.trim() }),
+      }).then((r) => r.json());
+      if (res?.success && res?.data) {
+        setNlResult(res.data);
+      } else {
+        setNlError(res?.message || 'Không phân tích được câu hỏi.');
+      }
+    } catch {
+      setNlError('Lỗi kết nối dịch vụ AI Insights.');
+    } finally {
+      setNlBusy(false);
+    }
+  };
 
   const loadWidgets = useCallback(async () => {
     setLoading(true);
@@ -183,7 +224,13 @@ export default function AppDashboardView({
   }, [appTree.app.id, customizeMode, personalMode, fromDate, toDate]);
 
   useEffect(() => {
-    loadWidgets();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadWidgets();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadWidgets]);
 
   const persistLayout = async (nextWidgets: AppWidget[]) => {
@@ -310,6 +357,92 @@ export default function AppDashboardView({
           )}
         </div>
       </div>
+
+      {/* AI NL2Query Insights Bar */}
+      {allTables.length > 0 && (
+        <div className="card" style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <form onSubmit={(e) => void runNlInsights(e)} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <strong style={{ fontSize: 13, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+              🤖 Hỏi đáp AI (NL2Query):
+            </strong>
+            <select
+              aria-label="Chọn bảng phân tích AI"
+              className="form-select"
+              style={{ width: 200, height: 34, fontSize: 12.5 }}
+              value={effectiveNlTableId}
+              onChange={(e) => setNlTableId(e.target.value)}
+            >
+              {allTables.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.displayName}
+                </option>
+              ))}
+            </select>
+            <input
+              type="text"
+              aria-label="Đặt câu hỏi tiếng Việt về dữ liệu bảng"
+              className="form-input"
+              style={{ flex: 1, minWidth: 240, height: 34, fontSize: 13 }}
+              placeholder="VD: Tổng chi phí đang chờ duyệt theo phòng ban? Hoặc: Bao nhiêu hồ sơ đã duyệt?"
+              value={nlQuestion}
+              onChange={(e) => setNlQuestion(e.target.value)}
+            />
+            <button type="submit" className="btn btn-primary btn-sm" style={{ backgroundColor: appTree.app.color }} disabled={nlBusy || !nlQuestion.trim()}>
+              {nlBusy ? 'Đang phân tích...' : 'Phân tích AI'}
+            </button>
+          </form>
+
+          {nlError && (
+            <div role="alert" style={{ fontSize: 12.5, color: 'var(--danger-text)' }}>
+              {nlError}
+            </div>
+          )}
+
+          {nlResult && (
+            <div
+              style={{
+                padding: 12,
+                borderRadius: 10,
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border-subtle)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{nlResult.answer}</span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span className="badge badge-info" style={{ fontSize: 11 }}>
+                    {nlResult.matchingRecords} hồ sơ khớp • {nlResult.engine}
+                  </span>
+                  <button type="button" className="btn btn-outline btn-xs" onClick={() => setNlResult(null)}>
+                    Ẩn
+                  </button>
+                </div>
+              </div>
+              {nlResult.breakdown && nlResult.breakdown.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {nlResult.breakdown.map((b) => (
+                    <div
+                      key={b.group}
+                      style={{
+                        padding: '5px 10px',
+                        borderRadius: 8,
+                        backgroundColor: 'var(--bg-surface)',
+                        border: '1px solid var(--border-light)',
+                        fontSize: 12,
+                      }}
+                    >
+                      <strong>{b.group}:</strong> {b.count} hồ sơ ({b.metricValue.toLocaleString('vi-VN')})
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 4-Column Responsive Widget Grid */}
       {loading ? (

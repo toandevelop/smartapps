@@ -105,6 +105,20 @@ function ChatWorkspaceInner() {
   const [taskDefaultAssignee, setTaskDefaultAssignee] = useState('');
   const [convertingMsgId, setConvertingMsgId] = useState<string | null>(null);
   const [submittingTask, setSubmittingTask] = useState(false);
+  const [copilotBusy, setCopilotBusy] = useState(false);
+  const [copilotResult, setCopilotResult] = useState<{
+    summary: string;
+    actionItems: Array<{
+      title: string;
+      assigneeUsername?: string | null;
+      dueDate?: string | null;
+      priority: string;
+      sourceMessageId?: string | null;
+    }>;
+    analyzedMessages: number;
+    engine: string;
+  } | null>(null);
+  const [creatingActionIdx, setCreatingActionIdx] = useState<number | null>(null);
 
   const [snack, setSnack] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' }>({
     open: false,
@@ -115,7 +129,9 @@ function ChatWorkspaceInner() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const activeConversationRef = useRef('');
-  activeConversationRef.current = `${user?.id || ''}:${activeChannelId}`;
+  useEffect(() => {
+    activeConversationRef.current = `${user?.id || ''}:${activeChannelId}`;
+  }, [user?.id, activeChannelId]);
   const latestRequestRef = useRef(0);
   const olderRequestRef = useRef<object | null>(null);
   const loadedOlderRef = useRef(false);
@@ -222,24 +238,36 @@ function ChatWorkspaceInner() {
   }, [user, loadChannelsAndUsers]);
 
   useEffect(() => {
-    if (requestedChannelId && channels.some((c) => c.id === requestedChannelId)) {
-      setActiveChannelId(requestedChannelId);
-    }
+    if (!requestedChannelId || !channels.some((c) => c.id === requestedChannelId)) return;
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) setActiveChannelId(requestedChannelId);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [requestedChannelId, channels]);
 
   useEffect(() => {
-    setMessages([]);
-    setChannelTasks([]);
-    setNextCursor(null);
-    loadedOlderRef.current = false;
-    olderRequestRef.current = null;
-    setLoadingOlder(false);
-    scrollUpdateRef.current = null;
-    if (activeChannelId) {
-      setShowPinnedOnly(false);
-      setReplyTo(null);
-      loadChannelContent(activeChannelId);
-    }
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      setMessages([]);
+      setChannelTasks([]);
+      setNextCursor(null);
+      loadedOlderRef.current = false;
+      olderRequestRef.current = null;
+      setLoadingOlder(false);
+      scrollUpdateRef.current = null;
+      if (activeChannelId) {
+        setShowPinnedOnly(false);
+        setReplyTo(null);
+        void loadChannelContent(activeChannelId);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [activeChannelId, user?.id, loadChannelContent]);
 
   useLayoutEffect(() => {
@@ -254,11 +282,15 @@ function ChatWorkspaceInner() {
   // Real-time SSE listener
   useEffect(() => {
     const onRealtime = (e: Event) => {
-      const detail = (e as CustomEvent<any>).detail;
+      const detail = (e as CustomEvent<{
+        type?: string;
+        data?: { deleted?: boolean; messageId?: string; channelId?: string };
+      }>).detail;
       if (!detail) return;
       if (detail.type === 'chat_message' || detail.type === 'chat_reaction' || detail.type === 'chat_channel_created') {
-        if (detail.data?.deleted && detail.data?.messageId)
-          setMessages((previous) => previous.filter((message) => message.id !== detail.data.messageId));
+        const deletedMessageId = detail.data?.deleted ? detail.data.messageId : undefined;
+        if (deletedMessageId)
+          setMessages((previous) => previous.filter((message) => message.id !== deletedMessageId));
         loadChannelsAndUsers();
         if (activeChannelId && (!detail.data?.channelId || detail.data.channelId === activeChannelId)) {
           loadChannelContent(activeChannelId, true);
@@ -438,6 +470,51 @@ function ChatWorkspaceInner() {
     }
   };
 
+  const runChatCopilot = async () => {
+    if (!activeChannelId || copilotBusy) return;
+    setCopilotBusy(true);
+    try {
+      const res = await fetch(`/api/chat/channels/${encodeURIComponent(activeChannelId)}/ai-copilot`, {
+        method: 'POST',
+        credentials: 'include',
+      }).then((r) => r.json());
+      if (res?.success && res?.data) {
+        setCopilotResult(res.data);
+      } else {
+        setSnack({ open: true, message: res?.message || 'AI Copilot chưa khả dụng.', severity: 'error' });
+      }
+    } catch {
+      setSnack({ open: true, message: 'Không kết nối được AI Chat Copilot.', severity: 'error' });
+    } finally {
+      setCopilotBusy(false);
+    }
+  };
+
+  const handleQuickCreateFromCopilot = async (
+    idx: number,
+    item: { title: string; assigneeUsername?: string | null; dueDate?: string | null; priority: string }
+  ) => {
+    if (!activeChannelId) return;
+    setCreatingActionIdx(idx);
+    try {
+      await handleSubmitTask({
+        title: item.title,
+        description: `Trích xuất tự động từ kênh #${activeChannel?.name || ''}`,
+        priority: item.priority || 'MEDIUM',
+        assigneeUsername: item.assigneeUsername || user?.username || users[0]?.username || '',
+        dueDate: item.dueDate || undefined,
+        checklist: [],
+        channelId: activeChannelId,
+        postToChat: true,
+      });
+      setCopilotResult((prev) =>
+        prev ? { ...prev, actionItems: prev.actionItems.filter((_, i) => i !== idx) } : null
+      );
+    } finally {
+      setCreatingActionIdx(null);
+    }
+  };
+
   const handleToggleReaction = async (msgId: string, emoji: string) => {
     setEmojiPickerForMsg(null);
     const res = await fetch(`/api/chat/messages/${encodeURIComponent(msgId)}/reactions`, {
@@ -564,9 +641,12 @@ function ChatWorkspaceInner() {
               const active = ch.id === activeChannelId;
               return (
                 <button
-                  key={ch.id}
                   type="button"
-                  onClick={() => setActiveChannelId(ch.id)}
+                  key={ch.id}
+                  onClick={() => {
+                    setActiveChannelId(ch.id);
+                    setCopilotResult(null);
+                  }}
                   style={{
                     width: '100%',
                     textAlign: 'left',
@@ -789,6 +869,15 @@ function ChatWorkspaceInner() {
                   <PushPinRoundedIcon sx={{ fontSize: 14 }} />
                   Đã ghim ({messages.filter((m) => m.isPinned).length})
                 </button>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-xs"
+                  disabled={copilotBusy}
+                  onClick={() => void runChatCopilot()}
+                  title="Tóm tắt hội thoại & tách việc tự động bằng AI"
+                >
+                  {copilotBusy ? 'AI đang tóm tắt...' : '✨ AI Tóm tắt & Tách việc'}
+                </button>
                 {systemSettings.allowTaskFromChat && (
                   <button
                     type="button"
@@ -810,6 +899,74 @@ function ChatWorkspaceInner() {
                 </button>
               </div>
             </div>
+
+            {/* AI Copilot Summary & Action Items Drawer Banner */}
+            {copilotResult && (
+              <div
+                style={{
+                  margin: '10px 20px 0',
+                  padding: 14,
+                  borderRadius: 12,
+                  backgroundColor: 'var(--info-bg)',
+                  border: '1px solid var(--info-border)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                  flexShrink: 0,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <strong style={{ fontSize: 13, color: 'var(--info-text)' }}>
+                    ✨ AI Chat Copilot ({copilotResult.analyzedMessages} tin nhắn • {copilotResult.engine})
+                  </strong>
+                  <button type="button" className="btn btn-outline btn-xs" onClick={() => setCopilotResult(null)}>
+                    Đóng
+                  </button>
+                </div>
+                <div style={{ fontSize: 12.5, whiteSpace: 'pre-wrap', color: 'var(--text-primary)', lineHeight: 1.45 }}>
+                  {copilotResult.summary}
+                </div>
+                {copilotResult.actionItems.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)' }}>
+                      Đầu việc đề xuất ({copilotResult.actionItems.length}):
+                    </div>
+                    {copilotResult.actionItems.map((item, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          backgroundColor: 'var(--bg-surface)',
+                          border: '1px solid var(--border-light)',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div style={{ fontSize: 12.5, flex: 1, minWidth: 200 }}>
+                          <strong>{item.title}</strong>
+                          <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+                            {item.assigneeUsername ? `@${item.assigneeUsername}` : ''}
+                            {item.dueDate ? ` • Hạn ${item.dueDate}` : ''} • {item.priority}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-xs"
+                          disabled={creatingActionIdx === idx || submittingTask}
+                          onClick={() => void handleQuickCreateFromCopilot(idx, item)}
+                        >
+                          {creatingActionIdx === idx ? 'Đang tạo...' : '+ Tạo Task'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Messages Area */}
             <div ref={messagesScrollRef} aria-busy={loadingMsgs || loadingOlder} style={{ flex: 1, overflowY: 'auto', padding: '16px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>

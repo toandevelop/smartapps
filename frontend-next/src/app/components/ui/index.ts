@@ -19,3 +19,4 @@ export { default as AnalyticsPanel } from './AnalyticsPanel';
 export { default as PrintableRecordModal } from './PrintableRecordModal';
 export { default as AppDashboardView } from './AppDashboardView';
 export { default as WidgetConfigModal } from './WidgetConfigModal';
+export { default as StructuredFilterBuilder } from './StructuredFilterBuilder';

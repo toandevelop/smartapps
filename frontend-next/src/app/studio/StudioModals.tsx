@@ -1,6 +1,6 @@
-'use client';
+﻿'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded';
@@ -10,15 +10,11 @@ import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
-import { ClusterIcon, APP_ICON_OPTIONS, DynamicFieldInput } from '@/app/components/ui';
-import RelatedChildTabPanel, { ChildDraftRow } from '@/app/components/ui/RelatedChildTabPanel';
+import { ClusterIcon, APP_ICON_OPTIONS } from '@/app/components/ui';
 import { APP_COLOR_PRESETS } from '@/lib/design-tokens';
 import { usePlatform } from '@/lib/app-context';
-import { useAuth } from '@/lib/auth-context';
-import { batchFetchLookups } from '@/lib/lookup-service';
-import { AppAutomation, ChildRelationMutation, RelatedTableGroup, SysApp, SysCategory, SysColumn, SysModule, SysRole, SysTable, AppRecord, AppTemplateSummary, FormRule } from '@/lib/types';
+import { AppAutomation, SysApp, SysCategory, SysColumn, SysModule, SysRole, SysTable, AppTemplateSummary, FormRule } from '@/lib/types';
 import FormRulesEditor from './FormRulesEditor';
-import { evaluateFormRules, prepareFormSubmission, requiredFormErrors, restoreProtectedFormValues, formDefaultValues, EMPTY_FORM_RULES, EMPTY_FORM_DEFAULTS } from '@/lib/form-rules';
 import { parseSubTableSchema, serializeSubTableSchema, SubTableColumnDef, SubTableDataType } from '@/lib/sub-table';
 
 /* =========================================================
@@ -52,17 +48,34 @@ export function AppModal({
   onClose: () => void;
   onSave: (form: AppFormState) => void;
 }) {
+  if (!open) return null;
+  return (
+    <AppModalBody
+      key={editing?.id || '__new__'}
+      editing={editing}
+      initial={initial}
+      saving={saving}
+      onClose={onClose}
+      onSave={onSave}
+    />
+  );
+}
+
+function AppModalBody({
+  editing,
+  initial,
+  saving,
+  onClose,
+  onSave,
+}: {
+  editing: SysApp | null;
+  initial: AppFormState;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (form: AppFormState) => void;
+}) {
   const [form, setForm] = useState<AppFormState>(initial);
   const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (open) {
-      setForm(initial);
-      setErr(null);
-    }
-  }, [open, initial]);
-
-  if (!open) return null;
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -234,12 +247,33 @@ export function ModuleModal({
   onClose: () => void;
   onSave: (form: ModuleFormState) => void;
 }) {
-  const [form, setForm] = useState<ModuleFormState>(initial);
-  useEffect(() => {
-    if (open) setForm(initial);
-  }, [open, initial]);
-
   if (!open) return null;
+  return (
+    <ModuleModalBody
+      key={editing?.id || '__new__'}
+      editing={editing}
+      initial={initial}
+      saving={saving}
+      onClose={onClose}
+      onSave={onSave}
+    />
+  );
+}
+
+function ModuleModalBody({
+  editing,
+  initial,
+  saving,
+  onClose,
+  onSave,
+}: {
+  editing: SysModule | null;
+  initial: ModuleFormState;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (form: ModuleFormState) => void;
+}) {
+  const [form, setForm] = useState<ModuleFormState>(initial);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -343,6 +377,8 @@ export interface TableFormState {
   approvalField: string;
   approverRoles: string[];
   publicFormEnabled: boolean;
+  publicFormExpiresAt?: string;
+  publicFormMaxSubmissions?: number | '';
   orderIndex: number;
   formRules?: FormRule[];
 }
@@ -364,30 +400,59 @@ export function TableModal({
   onClose: () => void;
   onSave: (form: TableFormState) => void;
 }) {
+  if (!open) return null;
+  return (
+    <TableModalBody
+      key={editing?.id || '__new__'}
+      editing={editing}
+      initial={initial}
+      allRoles={allRoles}
+      saving={saving}
+      onClose={onClose}
+      onSave={onSave}
+    />
+  );
+}
+
+function TableModalBody({
+  editing,
+  initial,
+  allRoles = [],
+  saving,
+  onClose,
+  onSave,
+}: {
+  editing: SysTable | null;
+  initial: TableFormState;
+  allRoles?: SysRole[];
+  saving: boolean;
+  onClose: () => void;
+  onSave: (form: TableFormState) => void;
+}) {
   const [form, setForm] = useState<TableFormState>(initial);
   const [ruleColumns, setRuleColumns] = useState<SysColumn[]>([]);
   const [loadingRuleColumns, setLoadingRuleColumns] = useState(false);
   const [ruleColumnError, setRuleColumnError] = useState('');
-  useEffect(() => {
-    if (open) setForm(initial);
-  }, [open, editing?.id]);
-  useEffect(() => {
-    setRuleColumns([]); setRuleColumnError(''); setLoadingRuleColumns(false);
-    if (!open || !editing?.id) return;
-    const controller = new AbortController();
-    setLoadingRuleColumns(true);
-    fetch(`/api/columns?tableId=${encodeURIComponent(editing.id)}`, { credentials: 'include', signal: controller.signal })
-      .then(async response => {
-        const result = await response.json();
-        if (!response.ok || !result.success) throw new Error(result.message || 'Không tải được cấu trúc cột.');
-        if (!controller.signal.aborted) setRuleColumns(result.data || []);
-      })
-      .catch(error => { if (!controller.signal.aborted) setRuleColumnError(error instanceof Error ? error.message : 'Lỗi tải cấu trúc cột.'); })
-      .finally(() => { if (!controller.signal.aborted) setLoadingRuleColumns(false); });
-    return () => controller.abort();
-  }, [open, editing?.id]);
 
-  if (!open) return null;
+  useEffect(() => {
+    if (!editing?.id) return;
+    const controller = new AbortController();
+    void Promise.resolve().then(() => {
+      if (controller.signal.aborted) return;
+      setRuleColumns([]);
+      setRuleColumnError('');
+      setLoadingRuleColumns(true);
+      fetch(`/api/columns?tableId=${encodeURIComponent(editing.id)}`, { credentials: 'include', signal: controller.signal })
+        .then(async response => {
+          const result = await response.json();
+          if (!response.ok || !result.success) throw new Error(result.message || 'Không tải được cấu trúc cột.');
+          if (!controller.signal.aborted) setRuleColumns(result.data || []);
+        })
+        .catch(error => { if (!controller.signal.aborted) setRuleColumnError(error instanceof Error ? error.message : 'Lỗi tải cấu trúc cột.'); })
+        .finally(() => { if (!controller.signal.aborted) setLoadingRuleColumns(false); });
+    });
+    return () => controller.abort();
+  }, [editing?.id]);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -403,7 +468,16 @@ export function TableModal({
           onSubmit={(e) => {
             e.preventDefault();
             if (!form.tableName.trim() || !form.displayName.trim()) return;
-            onSave(form);
+            onSave({
+              ...form,
+              publicFormExpiresAt: form.publicFormExpiresAt
+                ? new Date(form.publicFormExpiresAt).toISOString()
+                : undefined,
+              publicFormMaxSubmissions:
+                form.publicFormMaxSubmissions !== '' && form.publicFormMaxSubmissions !== undefined
+                  ? Number(form.publicFormMaxSubmissions) || undefined
+                  : undefined,
+            });
           }}
         >
           <div className="form-group">
@@ -458,7 +532,7 @@ export function TableModal({
               <option value="OWNER_ONLY">OWNER_ONLY — Nhân viên (STAFF) chỉ xem được bản ghi của mình</option>
             </select>
           </div>
-          <div style={{ padding: 12, borderRadius: 10, backgroundColor: '#f8fafc', border: '1px solid var(--border-light)', marginBottom: 12 }}>
+          <div style={{ padding: 12, borderRadius: 10, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-light)', marginBottom: 12 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', marginBottom: form.approvalEnabled ? 10 : 0 }}>
               <input
                 type="checkbox"
@@ -513,7 +587,7 @@ export function TableModal({
               </div>
             )}
           </div>
-          <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#f0f6ff', border: '1px solid #d2e3fc', marginBottom: 12 }}>
+          <div style={{ padding: 10, borderRadius: 10, backgroundColor: 'var(--info-bg)', border: '1px solid var(--info-border)', marginBottom: 12 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -522,8 +596,32 @@ export function TableModal({
               />
               Mở Biểu mẫu Công khai (Public Form không cần đăng nhập)
             </label>
+            {form.publicFormEnabled && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+                <div>
+                  <label className="form-label" style={{ fontSize: 11.5 }}>Hạn chót tiếp nhận (tùy chọn)</label>
+                  <input
+                    type="datetime-local"
+                    className="form-input"
+                    value={form.publicFormExpiresAt ? form.publicFormExpiresAt.slice(0, 16) : ''}
+                    onChange={(e) => setForm({ ...form, publicFormExpiresAt: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" style={{ fontSize: 11.5 }}>Số lượt nộp tối đa (tùy chọn)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    className="form-input"
+                    placeholder="Không giới hạn"
+                    value={form.publicFormMaxSubmissions ?? ''}
+                    onChange={(e) => setForm({ ...form, publicFormMaxSubmissions: e.target.value === '' ? '' : Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+            )}
             {form.publicFormEnabled && form.id && (
-              <div style={{ fontSize: 11.5, color: '#1a73e8', marginTop: 4 }}>
+              <div style={{ fontSize: 11.5, color: 'var(--info-text)', marginTop: 6 }}>
                 Đường dẫn chia sẻ: <code>/forms/{form.id}</code>
               </div>
             )}
@@ -615,37 +713,81 @@ export function ColumnModal({
   onClose: () => void;
   onSave: (form: ColumnFormState) => void;
 }) {
+  if (!open) return null;
+  return (
+    <ColumnModalBody
+      key={editing?.id || '__new__'}
+      editing={editing}
+      initial={initial}
+      categories={categories}
+      allApps={allApps}
+      allTables={allTables}
+      allRoles={allRoles}
+      saving={saving}
+      onClose={onClose}
+      onSave={onSave}
+    />
+  );
+}
+
+function ColumnModalBody({
+  editing,
+  initial,
+  categories,
+  allApps,
+  allTables,
+  allRoles = [],
+  saving,
+  onClose,
+  onSave,
+}: {
+  editing: SysColumn | null;
+  initial: ColumnFormState;
+  categories: SysCategory[];
+  allApps: SysApp[];
+  allTables: SysTable[];
+  allRoles?: SysRole[];
+  saving: boolean;
+  onClose: () => void;
+  onSave: (form: ColumnFormState) => void;
+}) {
   const [form, setForm] = useState<ColumnFormState>(initial);
   const [targetCols, setTargetCols] = useState<SysColumn[]>([]);
 
   useEffect(() => {
-    if (open) setForm(initial);
-  }, [open, initial]);
-
-  useEffect(() => {
-    if (!form.refTableId) {
-      setTargetCols([]);
-      return;
-    }
-    fetch(`/api/columns?tableId=${encodeURIComponent(form.refTableId)}`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success && Array.isArray(res.data)) {
-          setTargetCols(res.data);
-          if (!form.refValueField && res.data.length > 0) {
-            const keyCol = res.data.find((c: SysColumn) => c.isIdentityKey) || res.data[0];
-            const dispCol = res.data[1] || keyCol;
-            setForm((prev) => ({
-              ...prev,
-              refValueField: prev.refValueField || keyCol.columnCode,
-              refDisplayField: prev.refDisplayField || dispCol.columnCode,
-            }));
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      if (!form.refTableId) {
+        setTargetCols([]);
+        return;
+      }
+      fetch(`/api/columns?tableId=${encodeURIComponent(form.refTableId)}`)
+        .then((r) => r.json())
+        .then((res) => {
+          if (cancelled) return;
+          if (res.success && Array.isArray(res.data)) {
+            setTargetCols(res.data);
+            if (res.data.length > 0) {
+              const keyCol = res.data.find((c: SysColumn) => c.isIdentityKey) || res.data[0];
+              const dispCol = res.data[1] || keyCol;
+              setForm((prev) => {
+                if (prev.refValueField) return prev;
+                return {
+                  ...prev,
+                  refValueField: keyCol.columnCode,
+                  refDisplayField: prev.refDisplayField || dispCol.columnCode,
+                };
+              });
+            }
           }
-        }
-      });
+        })
+        .catch(() => {});
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [form.refTableId]);
-
-  if (!open) return null;
 
   const filteredTables = form.refAppId
     ? allTables.filter((t) => t.appId === form.refAppId)
@@ -847,6 +989,31 @@ export function ColumnModal({
                 onChange={(e) => setForm({ ...form, formula: e.target.value })}
                 placeholder="VD: IF(tong>1000,'Cao','Thấp')"
               />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                {[
+                  { label: 'IF(...)', tpl: "IF(field>0,'Đạt','Chưa đạt')" },
+                  { label: 'ROUND(...)', tpl: 'ROUND(so_luong * don_gia, 0)' },
+                  { label: 'DATEDIF', tpl: 'DATEDIF(tu_ngay, den_ngay)' },
+                  { label: 'SUM(sub)', tpl: 'SUM(chi_tiet.thanh_tien)' },
+                  { label: 'COUNT(sub)', tpl: 'COUNT(chi_tiet)' },
+                ].map((snip) => (
+                  <button
+                    key={snip.label}
+                    type="button"
+                    className="btn btn-outline btn-xs"
+                    title={`Chèn mẫu: ${snip.tpl}`}
+                    onClick={() =>
+                      setForm((prev) => ({
+                        ...prev,
+                        formula: prev.formula?.trim() ? `${prev.formula} ${snip.tpl}` : snip.tpl,
+                      }))
+                    }
+                    style={{ fontSize: 10.5, padding: '2px 7px', fontFamily: 'var(--font-mono)' }}
+                  >
+                    + {snip.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="form-group">
               <label className="form-label">
@@ -1074,385 +1241,8 @@ export function ColumnModal({
   );
 }
 
-/* =========================================================
- * 5. RECORD EDITOR MODAL (DYNAMIC FORM)
- * ========================================================= */
-export function RecordEditorModal({
-  open,
-  record,
-  tableId,
-  tableName,
-  columns,
-  defaultOverrides = EMPTY_FORM_DEFAULTS,
-  formRules = EMPTY_FORM_RULES,
-  lockedFields = [],
-  saving,
-  onClose,
-  onSave,
-  onSaveWithRelations,
-}: {
-  open: boolean;
-  record: AppRecord | null;
-  tableId?: string;
-  tableName: string;
-  columns: SysColumn[];
-  formRules?: FormRule[];
-  defaultOverrides?: Record<string, any>;
-  lockedFields?: string[];
-  saving: boolean;
-  onClose: () => void;
-  onSave: (data: Record<string, any>) => void;
-  onSaveWithRelations?: (data: Record<string, any>, childMutations: ChildRelationMutation[]) => void | Promise<void>;
-}) {
-  const { user } = useAuth();
-  const [formData, setFormData] = useState<Record<string, any>>({});
-  const [fieldErrors, setFieldErrors] = useState<{ field: string; message: string }[]>([]);
-  const [activeTab, setActiveTab] = useState<string>('main');
-  const [relatedGroups, setRelatedGroups] = useState<RelatedTableGroup[]>([]);
-  const [childDrafts, setChildDrafts] = useState<Record<string, ChildDraftRow[]>>({});
-  const [loadingRelations, setLoadingRelations] = useState(false);
-  const errorRef = useRef<HTMLDivElement>(null);
-  const states = evaluateFormRules(columns, formRules, formData);
-  const oldStates = record ? evaluateFormRules(columns, formRules, record.data || {}) : {};
-  useEffect(() => { setFieldErrors([]); }, [formData]);
-  useEffect(() => { if (fieldErrors.length) errorRef.current?.focus(); }, [fieldErrors]);
-  const userRoles = user?.roleCodes?.length ? user.roleCodes : (user?.roleCode ? [user.roleCode] : []);
-  const isUserAdmin = Boolean(user?.isAdmin || userRoles.some((r) => r.toUpperCase() === 'ADMIN'));
+export { RecordEditorModal } from './RecordEditorModal';
 
-  useEffect(() => {
-    if (!open) return;
-    setActiveTab('main');
-    if (record) {
-      setFormData({ ...(record.data || {}) });
-    } else {
-      const init: Record<string, any> = { ...formDefaultValues(columns) };
-      Object.entries(defaultOverrides).forEach(([k, v]) => {
-        if (v !== undefined && v !== null && v !== '') init[k] = v;
-      });
-      setFormData(init);
-    }
-  }, [open, record, columns, defaultOverrides]);
-
-  useEffect(() => {
-    if (!open || !tableId) {
-      setRelatedGroups([]);
-      setChildDrafts({});
-      return;
-    }
-    let cancelled = false;
-    setLoadingRelations(true);
-    const qs = new URLSearchParams({ tableId });
-    if (record?.id) qs.set('recordId', record.id);
-    fetch(`/api/records/table-relations?${qs.toString()}`, { credentials: 'include' })
-      .then((r) => r.json())
-      .then(async (res) => {
-        if (cancelled) return;
-        const groups: RelatedTableGroup[] = res?.success && Array.isArray(res.data) ? res.data : [];
-        const initDrafts: Record<string, ChildDraftRow[]> = {};
-        groups.forEach((g) => {
-          const gKey = `${g.tableId}::${g.viaColumnCode || ''}`;
-          initDrafts[gKey] = (g.records || []).map((rec) => ({
-            localKey: rec.id,
-            id: rec.id,
-            version: rec.version,
-            data: { ...(rec.data || {}) },
-            status: 'existing',
-            approvalStatus: rec.approvalStatus,
-          }));
-        });
-        setRelatedGroups(groups);
-        setChildDrafts(initDrafts);
-        const childCols = groups.flatMap((g) => g.columns);
-        if (childCols.some((c) => c.refTableId)) {
-          await batchFetchLookups(childCols);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setRelatedGroups([]);
-          setChildDrafts({});
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingRelations(false);
-      });
-    return () => { cancelled = true; };
-  }, [open, tableId, record?.id]);
-
-  useEffect(() => {
-    if (!open || !formRules.length) return;
-    setFormData(current => restoreProtectedFormValues(columns, formRules, current, record?.data, defaultOverrides));
-  }, [open, columns, formRules, formData, record, defaultOverrides]);
-
-  if (!open) return null;
-
-  const hasRelatedTabs = relatedGroups.length > 0;
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div
-        className="modal-dialog"
-        style={hasRelatedTabs ? { maxWidth: 980, width: '95vw' } : undefined}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <div>
-            <h3 style={{ fontSize: 17, fontWeight: 700 }}>
-              {record ? `Chỉnh sửa bản ghi (${record.recordKey || record.id})` : `Thêm mới — ${tableName}`}
-            </h3>
-            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              Form tự sinh theo cấu trúc động • Hỗ trợ Lookup đa App, Công thức tự tính &amp; Bảng phụ liên kết
-            </p>
-          </div>
-          <button type="button" className="btn btn-outline btn-xs" onClick={onClose}>
-            <CloseRoundedIcon sx={{ fontSize: 16 }} />
-          </button>
-        </div>
-
-        {(hasRelatedTabs || loadingRelations) && (
-          <div
-            style={{
-              display: 'flex',
-              gap: 6,
-              overflowX: 'auto',
-              paddingBottom: 10,
-              marginBottom: 14,
-              borderBottom: '1px solid var(--border-light)',
-            }}
-          >
-            <button
-              type="button"
-              className={`btn btn-xs ${activeTab === 'main' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => setActiveTab('main')}
-            >
-              Thông tin chính
-              {fieldErrors.length > 0 && (
-                <span style={{ marginLeft: 6, padding: '0 5px', borderRadius: 99, background: '#ef4444', color: '#fff', fontSize: 10 }}>
-                  {fieldErrors.length}
-                </span>
-              )}
-            </button>
-            {relatedGroups.map((g) => {
-              const gKey = `${g.tableId}::${g.viaColumnCode || ''}`;
-              const rows = childDrafts[gKey] || [];
-              const activeCount = rows.filter((r) => r.status !== 'deleted').length;
-              const hasPending = rows.some((r) => r.status !== 'existing');
-              return (
-                <button
-                  key={gKey}
-                  type="button"
-                  className={`btn btn-xs ${activeTab === gKey ? 'btn-primary' : 'btn-outline'}`}
-                  onClick={() => setActiveTab(gKey)}
-                  style={{ whiteSpace: 'nowrap' }}
-                >
-                  {g.tableDisplayName} ({activeCount})
-                  {hasPending && (
-                    <span
-                      title="Có thay đổi chưa lưu"
-                      style={{
-                        display: 'inline-block',
-                        width: 6,
-                        height: 6,
-                        borderRadius: '50%',
-                        background: activeTab === gKey ? '#fde047' : '#f59e0b',
-                        marginLeft: 6,
-                      }}
-                    />
-                  )}
-                </button>
-              );
-            })}
-            {loadingRelations && (
-              <span style={{ fontSize: 11.5, color: 'var(--text-muted)', alignSelf: 'center', marginLeft: 4 }}>
-                Đang tải bảng phụ...
-              </span>
-            )}
-          </div>
-        )}
-
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const issues = formRules.length ? requiredFormErrors(columns, formRules, formData, record?.data, defaultOverrides) : [];
-            if (issues.length) {
-              setFieldErrors(issues);
-              setActiveTab('main');
-              return;
-            }
-            const prepared = prepareFormSubmission(columns, formRules, formData, record?.data, defaultOverrides);
-            if (onSaveWithRelations) {
-              const mutations: ChildRelationMutation[] = [];
-              for (const g of relatedGroups) {
-                if (!g.moduleId || !g.viaColumnCode) continue;
-                const gKey = `${g.tableId}::${g.viaColumnCode}`;
-                const rows = childDrafts[gKey] || [];
-                const upserts = rows
-                  .filter((r) => r.status === 'new' || r.status === 'edited')
-                  .map((r) => ({
-                    id: r.id,
-                    expectedVersion: r.version,
-                    data: r.data,
-                  }));
-                const deleteIds = rows
-                  .filter((r) => r.status === 'deleted' && r.id)
-                  .map((r) => r.id!);
-                if (upserts.length > 0 || deleteIds.length > 0) {
-                  mutations.push({
-                    appId: g.appId,
-                    moduleId: g.moduleId,
-                    tableId: g.tableId,
-                    viaColumnCode: g.viaColumnCode,
-                    refValueField: g.refValueField || undefined,
-                    upserts,
-                    deleteIds,
-                  });
-                }
-              }
-              onSaveWithRelations(prepared, mutations);
-            } else {
-              onSave(prepared);
-            }
-          }}
-        >
-          {fieldErrors.length > 0 && activeTab === 'main' && <div ref={errorRef} role="alert" tabIndex={-1} style={{ marginBottom: 12 }}>
-            <strong>Cần bổ sung thông tin:</strong><ul>{fieldErrors.map(error => <li key={error.field}>{error.message}</li>)}</ul>
-          </div>}
-          {activeTab !== 'main' ? (() => {
-            const activeGroup = relatedGroups.find((g) => `${g.tableId}::${g.viaColumnCode || ''}` === activeTab);
-            if (!activeGroup) return null;
-            const gKey = `${activeGroup.tableId}::${activeGroup.viaColumnCode || ''}`;
-            return (
-              <RelatedChildTabPanel
-                group={activeGroup}
-                rows={childDrafts[gKey] || []}
-                onChangeRows={(next) => setChildDrafts((prev) => ({ ...prev, [gKey]: next }))}
-              />
-            );
-          })() : (() => {
-            const visibleCols = columns.filter(
-              (c) => states[c.columnCode]?.visible && (isUserAdmin || !(c.hiddenForRoles || []).some(r => userRoles.some(ur => ur.toUpperCase() === r.toUpperCase()))),
-            );
-            const mainCols = visibleCols.filter((c) => !['SUB_TABLE', 'TEXTAREA', 'FILE', 'MULTI_FILE', 'IMAGE', 'SIGNATURE'].includes((c.dataType || '').toUpperCase()));
-            const subTableCols = visibleCols.filter((c) => (c.dataType || '').toUpperCase() === 'SUB_TABLE');
-            const attachmentNoteCols = visibleCols.filter((c) => ['TEXTAREA', 'FILE', 'MULTI_FILE', 'IMAGE', 'SIGNATURE'].includes((c.dataType || '').toUpperCase()));
-            const useSections = subTableCols.length > 0 || (mainCols.length > 0 && attachmentNoteCols.length > 0);
-
-            const renderField = (col: SysColumn) => {
-              const isLocked = lockedFields.includes(col.columnCode);
-              const isRoleReadOnly = !isUserAdmin && (col.readOnlyForRoles || []).some((rr) =>
-                userRoles.some((ur) => ur.toUpperCase() === rr.toUpperCase()),
-              );
-              const isRuleReadOnly = states[col.columnCode].readOnly || oldStates[col.columnCode]?.readOnly;
-              const isDisabled = isLocked || isRoleReadOnly || isRuleReadOnly;
-              const required = states[col.columnCode].required;
-              return (
-                <div
-                  key={col.id}
-                  className="form-group"
-                  style={{
-                    marginBottom: 4,
-                    gridColumn: col.dataType === 'TEXTAREA' || col.dataType === 'SUB_TABLE' ? '1 / -1' : undefined,
-                  }}
-                >
-                  <label className="form-label">
-                    {col.columnName} {required && !isDisabled && <span style={{ color: '#d93025' }}>*</span>}
-                    {isLocked && (
-                      <span style={{ fontSize: 10.5, color: '#1a73e8', fontWeight: 600, marginLeft: 6 }}>
-                        (Tự động gắn tài khoản)
-                      </span>
-                    )}
-                    {!isLocked && isRoleReadOnly && (
-                      <span style={{ fontSize: 10.5, color: '#64748b', fontWeight: 600, marginLeft: 6 }}>
-                        (Chỉ đọc)
-                      </span>
-                    )}
-                  </label>
-                  {isRuleReadOnly && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Chỉ đọc theo quy tắc</span>}
-                  <DynamicFieldInput
-                    column={{ ...col, isRequired: required }}
-                    value={formData[col.columnCode]}
-                    formData={formData}
-                    disabled={isDisabled}
-                    onChange={(val) => setFormData((prev) => ({ ...prev, [col.columnCode]: val }))}
-                    onSelectDetail={(opt) => {
-                      if (!opt.data) return;
-                      setFormData((prev) => {
-                        const next = { ...prev };
-                        for (const c of columns) {
-                          const currentStates = evaluateFormRules(columns, formRules, prev);
-                          if (!currentStates[c.columnCode]?.visible || currentStates[c.columnCode]?.readOnly || oldStates[c.columnCode]?.readOnly) continue;
-                          if (c.columnCode === col.columnCode || c.isIdentityKey || c.formula || lockedFields.includes(c.columnCode)) continue;
-                          const cur = next[c.columnCode];
-                          const isEmpty = cur === undefined || cur === null || cur === '';
-                          if (!isEmpty) continue;
-                          const val = opt.data?.[c.columnCode];
-                          if (val !== undefined && val !== null && val !== '') {
-                            next[c.columnCode] = val;
-                          }
-                        }
-                        return next;
-                      });
-                    }}
-                  />
-                </div>
-              );
-            };
-
-            if (!useSections) {
-              return (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
-                  {visibleCols.map(renderField)}
-                </div>
-              );
-            }
-
-            return (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                {mainCols.length > 0 && (
-                  <div className="form-section-card">
-                    <div className="form-section-title">
-                      Thông tin chung
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 14 }}>
-                      {mainCols.map(renderField)}
-                    </div>
-                  </div>
-                )}
-                {subTableCols.length > 0 && (
-                  <div className="form-section-card" style={{ backgroundColor: 'var(--bg-surface)' }}>
-                    <div className="form-section-title">
-                      Chi tiết bảng con
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                      {subTableCols.map(renderField)}
-                    </div>
-                  </div>
-                )}
-                {attachmentNoteCols.length > 0 && (
-                  <div className="form-section-card">
-                    <div className="form-section-title">
-                      Tệp đính kèm &amp; Ghi chú
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 14 }}>
-                      {attachmentNoteCols.map(renderField)}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20, paddingTop: 14, borderTop: '1px solid var(--border-light)' }}>
-            <button type="button" className="btn btn-outline" onClick={onClose}>Hủy</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>
-              <SaveRoundedIcon sx={{ fontSize: 16 }} /> {saving ? 'Đang lưu...' : 'Lưu bản ghi'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
 
 /* =========================================================
  * 6. EXCEL TO APP WIZARD MODAL (30s App Builder)
@@ -1466,21 +1256,22 @@ export function ExcelToAppModal({
   onClose: () => void;
   onCreated: (app: SysApp) => void;
 }) {
+  if (!open) return null;
+  return <ExcelToAppModalBody onClose={onClose} onCreated={onCreated} />;
+}
+
+function ExcelToAppModalBody({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (app: SysApp) => void;
+}) {
   const [appCode, setAppCode] = useState('');
   const [appName, setAppName] = useState('');
   const [department, setDepartment] = useState('Toàn công ty');
-  const [sheets, setSheets] = useState<Array<{ sheetName: string; rows: Record<string, any>[] }>>([]);
+  const [sheets, setSheets] = useState<Array<{ sheetName: string; rows: Record<string, unknown>[] }>>([]);
   const [creating, setCreating] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setAppCode('');
-      setAppName('');
-      setSheets([]);
-    }
-  }, [open]);
-
-  if (!open) return null;
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1489,7 +1280,7 @@ export function ExcelToAppModal({
     const wb = XLSX.read(buf);
     const parsed = wb.SheetNames.map((name) => ({
       sheetName: name,
-      rows: XLSX.utils.sheet_to_json<Record<string, any>>(wb.Sheets[name]),
+      rows: XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets[name]),
     })).filter((s) => s.rows.length > 0);
     setSheets(parsed);
     if (!appName) setAppName(file.name.replace(/\.(xlsx|xls|csv)$/i, ''));
@@ -1585,6 +1376,25 @@ export function TemplateInstallModal({
   onInstalled: (app: SysApp) => void;
   onInstalledMany?: (apps: SysApp[]) => void;
 }) {
+  if (!open) return null;
+  return (
+    <TemplateInstallModalBody
+      onClose={onClose}
+      onInstalled={onInstalled}
+      onInstalledMany={onInstalledMany}
+    />
+  );
+}
+
+function TemplateInstallModalBody({
+  onClose,
+  onInstalled,
+  onInstalledMany,
+}: {
+  onClose: () => void;
+  onInstalled: (app: SysApp) => void;
+  onInstalledMany?: (apps: SysApp[]) => void;
+}) {
   const { apps } = usePlatform();
   const [templates, setTemplates] = useState<AppTemplateSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1600,25 +1410,34 @@ export function TemplateInstallModal({
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
-    if (!open) return;
-    setErrorMsg('');
-    setSelectedKeys([]);
-    setCustomOpenKey(null);
-    setLoading(true);
-    fetch('/api/apps/templates', { credentials: 'include' })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success && Array.isArray(res.data)) {
-          setTemplates(res.data);
-        } else {
-          setErrorMsg(res.message || 'Không thể tải thư viện App mẫu.');
-        }
-      })
-      .catch(() => setErrorMsg('Lỗi kết nối máy chủ khi tải App mẫu.'))
-      .finally(() => setLoading(false));
-  }, [open]);
-
-  if (!open) return null;
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      setErrorMsg('');
+      setSelectedKeys([]);
+      setCustomOpenKey(null);
+      setLoading(true);
+      fetch('/api/apps/templates', { credentials: 'include' })
+        .then((r) => r.json())
+        .then((res) => {
+          if (cancelled) return;
+          if (res.success && Array.isArray(res.data)) {
+            setTemplates(res.data);
+          } else {
+            setErrorMsg(res.message || 'Không thể tải thư viện App mẫu.');
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setErrorMsg('Lỗi kết nối máy chủ khi tải App mẫu.');
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const installedCodeSet = new Set(apps.map((a) => a.code.toUpperCase()));
   const categories = ['ALL', ...Array.from(new Set(templates.map((t) => t.category)))];
@@ -1816,7 +1635,7 @@ export function TemplateInstallModal({
                       justifyContent: 'space-between',
                       gap: 10,
                       outline: isSelected ? `2px solid ${tpl.color}` : undefined,
-                      backgroundColor: isSelected ? '#fbfdff' : '#ffffff',
+                      backgroundColor: isSelected ? 'var(--info-bg)' : 'var(--bg-surface)',
                     }}
                   >
                     <div>
@@ -2036,7 +1855,6 @@ export function AutomationModal({
   editing,
   allApps,
   allTables,
-  allModules,
   allRoles,
   onClose,
   onSaved,
@@ -2045,153 +1863,134 @@ export function AutomationModal({
   editing?: AppAutomation | null;
   allApps: SysApp[];
   allTables: SysTable[];
-  allModules: SysModule[];
   allRoles?: SysRole[];
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [sourceAppId, setSourceAppId] = useState('');
-  const [sourceTableId, setSourceTableId] = useState('');
-  const [triggerEvent, setTriggerEvent] = useState('RECORD_CREATED');
-  const [conditionField, setConditionField] = useState('');
-  const [conditionOperator, setConditionOperator] = useState('EQUALS');
-  const [conditionValue, setConditionValue] = useState('');
-  const [actionType, setActionType] = useState('CREATE_RECORD');
-  const [matchSourceField, setMatchSourceField] = useState('');
-  const [matchTargetField, setMatchTargetField] = useState('');
-  const [targetAppId, setTargetAppId] = useState('');
-  const [targetTableId, setTargetTableId] = useState('');
-  const [notifyRecipient, setNotifyRecipient] = useState('*');
-  const [notifyTemplate, setNotifyTemplate] = useState('Cập nhật bản ghi {{record_key}}');
-  const [webhookUrl, setWebhookUrl] = useState('');
-  const [webhookSecret, setWebhookSecret] = useState('');
-  const [mappingsJson, setMappingsJson] = useState('{\n  "ma_ticket": "{{AUTO_KEY}}",\n  "tieu_de": "Tự động từ {{record_key}}",\n  "han_xu_ly": "{{TODAY}}"\n}');
+  if (!open) return null;
+  return (
+    <AutomationModalBody
+      key={editing?.id || '__new__'}
+      editing={editing}
+      allApps={allApps}
+      allTables={allTables}
+      allRoles={allRoles}
+      onClose={onClose}
+      onSaved={onSaved}
+    />
+  );
+}
+
+function AutomationModalBody({
+  editing,
+  allApps,
+  allTables,
+  allRoles,
+  onClose,
+  onSaved,
+}: {
+  editing?: AppAutomation | null;
+  allApps: SysApp[];
+  allTables: SysTable[];
+  allRoles?: SysRole[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const fm = (editing?.fieldMappings || {}) as Record<string, string>;
+  const [name, setName] = useState(editing?.name || '');
+  const [description, setDescription] = useState(editing?.description || '');
+  const [sourceAppId, setSourceAppId] = useState(editing?.sourceAppId || allApps[0]?.id || '');
+  const [sourceTableId, setSourceTableId] = useState(editing?.sourceTableId || '');
+  const [triggerEvent, setTriggerEvent] = useState(editing?.triggerEvent || 'RECORD_CREATED');
+  const [conditionField, setConditionField] = useState(editing?.conditionField || '');
+  const [conditionOperator, setConditionOperator] = useState(editing?.conditionOperator || 'EQUALS');
+  const [conditionValue, setConditionValue] = useState(editing?.conditionValue || '');
+  const [actionType, setActionType] = useState(editing?.actionType || (editing ? 'CREATE_RECORD' : 'CREATE_USER'));
+  const [matchSourceField, setMatchSourceField] = useState(editing?.matchSourceField || '');
+  const [matchTargetField, setMatchTargetField] = useState(editing?.matchTargetField || '');
+  const [targetAppId, setTargetAppId] = useState(editing?.targetAppId || '');
+  const [targetTableId, setTargetTableId] = useState(editing?.targetTableId || '');
+  const [notifyRecipient, setNotifyRecipient] = useState(editing?.notifyRecipient || '*');
+  const [notifyTemplate, setNotifyTemplate] = useState(editing?.notifyTemplate || 'Cập nhật bản ghi {{record_key}}');
+  const [webhookUrl, setWebhookUrl] = useState(editing?.webhookUrl || '');
+  const [webhookSecret, setWebhookSecret] = useState(editing?.webhookSecret || '');
+  const [mappingsJson, setMappingsJson] = useState(
+    editing
+      ? JSON.stringify(editing.fieldMappings || {}, null, 2)
+      : '{\n  "ma_ticket": "{{AUTO_KEY}}",\n  "tieu_de": "Tự động từ {{record_key}}",\n  "han_xu_ly": "{{TODAY}}"\n}'
+  );
   // System action structured mappings (CREATE_USER, UPDATE_USER_STATUS, CREATE_TASK)
-  const [cuUsername, setCuUsername] = useState('{{EMAIL_PREFIX(email)}}');
-  const [cuFullName, setCuFullName] = useState('{{ho_ten}}');
-  const [cuEmail, setCuEmail] = useState('{{email}}');
-  const [cuEmployeeCode, setCuEmployeeCode] = useState('{{ma_nv}}');
-  const [cuDepartment, setCuDepartment] = useState('{{phong_ban}}');
-  const [cuRoleCode, setCuRoleCode] = useState('STAFF');
-  const [cuPassword, setCuPassword] = useState('123456');
-  const [usMatchBy, setUsMatchBy] = useState('employeeCode');
-  const [usMatchValue, setUsMatchValue] = useState('{{ma_nv}}');
-  const [usIsActive, setUsIsActive] = useState('false');
-  const [ctTitle, setCtTitle] = useState('Onboarding nhân sự: {{ho_ten}} ({{ma_nv}})');
-  const [ctDescription, setCtDescription] = useState('Chuẩn bị thiết bị, email và bàn giao quy trình cho {{ho_ten}} - {{phong_ban}}.');
-  const [ctAssigneeUsername, setCtAssigneeUsername] = useState('admin');
-  const [ctPriority, setCtPriority] = useState('MEDIUM');
-  const [ctDueDate, setCtDueDate] = useState('{{DATE_ADD(3)}}');
+  const [cuUsername, setCuUsername] = useState(fm.username ?? '{{EMAIL_PREFIX(email)}}');
+  const [cuFullName, setCuFullName] = useState(fm.fullName ?? '{{ho_ten}}');
+  const [cuEmail, setCuEmail] = useState(fm.email ?? '{{email}}');
+  const [cuEmployeeCode, setCuEmployeeCode] = useState(fm.employeeCode ?? '{{ma_nv}}');
+  const [cuDepartment, setCuDepartment] = useState(fm.department ?? '{{phong_ban}}');
+  const [cuRoleCode, setCuRoleCode] = useState(fm.roleCode ?? 'STAFF');
+  const [cuPassword, setCuPassword] = useState(fm.password ?? '123456');
+  const [usMatchBy, setUsMatchBy] = useState(fm.matchBy ?? 'employeeCode');
+  const [usMatchValue, setUsMatchValue] = useState(fm.matchValue ?? '{{ma_nv}}');
+  const [usIsActive, setUsIsActive] = useState(fm.isActive ?? 'false');
+  const [ctTitle, setCtTitle] = useState(fm.title ?? 'Onboarding nhân sự: {{ho_ten}} ({{ma_nv}})');
+  const [ctDescription, setCtDescription] = useState(fm.description ?? 'Chuẩn bị thiết bị, email và bàn giao quy trình cho {{ho_ten}} - {{phong_ban}}.');
+  const [ctAssigneeUsername, setCtAssigneeUsername] = useState(fm.assigneeUsername ?? 'admin');
+  const [ctPriority, setCtPriority] = useState(fm.priority ?? 'MEDIUM');
+  const [ctDueDate, setCtDueDate] = useState(fm.dueDate ?? '{{DATE_ADD(3)}}');
+  const [rpPluginCode, setRpPluginCode] = useState(fm.pluginCode ?? editing?.matchTargetField ?? '');
+  const [rpOperation, setRpOperation] = useState(fm.operation ?? 'issue_einvoice');
+  const [rpOrderRef, setRpOrderRef] = useState(fm.orderRef ?? '{{record_key}}');
+  const [rpAmount, setRpAmount] = useState(fm.amount ?? '{{tong_tien}}');
+  const [rpPhone, setRpPhone] = useState(fm.phone ?? '{{so_dien_thoai}}');
+  const [rpMessage, setRpMessage] = useState(fm.message ?? 'Hồ sơ {{record_key}} đã được xử lý.');
+  const [rpBuyerTaxCode, setRpBuyerTaxCode] = useState(fm.buyerTaxCode ?? '{{ma_so_thue}}');
+  const [pluginList, setPluginList] = useState<Array<{ code: string; name: string; category: string; isEnabled?: boolean }>>([]);
   const [sourceColumns, setSourceColumns] = useState<SysColumn[]>([]);
-  const [localRoles, setLocalRoles] = useState<SysRole[]>([]);
+  const [fetchedRoles, setFetchedRoles] = useState<SysRole[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
-    setErrorMsg('');
-    if (allRoles && allRoles.length > 0) {
-      setLocalRoles(allRoles);
-    } else {
+    let cancelled = false;
+    if (!allRoles || allRoles.length === 0) {
       fetch('/api/roles', { credentials: 'include' })
         .then((r) => r.json())
-        .then((res) => { if (res.success) setLocalRoles(res.data || []); })
+        .then((res) => { if (!cancelled && res.success) setFetchedRoles(res.data || []); })
         .catch(() => {});
     }
-  }, [open, allRoles]);
-
-  useEffect(() => {
-    if (!open || !sourceTableId) {
-      setSourceColumns([]);
-      return;
-    }
-    fetch(`/api/columns?tableId=${encodeURIComponent(sourceTableId)}`, { credentials: 'include' })
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setSourceColumns(res.data || []); })
+    fetch('/api/integrations/plugins', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((res) => {
+        if (!cancelled && res?.success && Array.isArray(res.data)) {
+          const rawPlugins = res.data as Array<{ code: string; name: string; category: string; isEnabled: boolean }>;
+          setPluginList(rawPlugins.map((p) => ({ code: p.code, name: p.name, category: p.category, isEnabled: p.isEnabled })));
+        }
+      })
       .catch(() => {});
-  }, [open, sourceTableId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [allRoles]);
 
   useEffect(() => {
-    if (!open) return;
-    if (editing) {
-      const fm = (editing.fieldMappings || {}) as Record<string, string>;
-      setName(editing.name || '');
-      setDescription(editing.description || '');
-      setSourceAppId(editing.sourceAppId || '');
-      setSourceTableId(editing.sourceTableId || '');
-      setTriggerEvent(editing.triggerEvent || 'RECORD_CREATED');
-      setConditionField(editing.conditionField || '');
-      setConditionOperator(editing.conditionOperator || 'EQUALS');
-      setConditionValue(editing.conditionValue || '');
-      setActionType(editing.actionType || 'CREATE_RECORD');
-      setMatchSourceField(editing.matchSourceField || '');
-      setMatchTargetField(editing.matchTargetField || '');
-      setTargetAppId(editing.targetAppId || '');
-      setTargetTableId(editing.targetTableId || '');
-      setNotifyRecipient(editing.notifyRecipient || '*');
-      setNotifyTemplate(editing.notifyTemplate || 'Cập nhật bản ghi {{record_key}}');
-      setWebhookUrl(editing.webhookUrl || '');
-      setWebhookSecret(editing.webhookSecret || '');
-      setMappingsJson(JSON.stringify(editing.fieldMappings || {}, null, 2));
-      setCuUsername(fm.username ?? '{{EMAIL_PREFIX(email)}}');
-      setCuFullName(fm.fullName ?? '{{ho_ten}}');
-      setCuEmail(fm.email ?? '{{email}}');
-      setCuEmployeeCode(fm.employeeCode ?? '{{ma_nv}}');
-      setCuDepartment(fm.department ?? '{{phong_ban}}');
-      setCuRoleCode(fm.roleCode ?? 'STAFF');
-      setCuPassword(fm.password ?? '123456');
-      setUsMatchBy(fm.matchBy ?? 'employeeCode');
-      setUsMatchValue(fm.matchValue ?? '{{ma_nv}}');
-      setUsIsActive(fm.isActive ?? 'false');
-      setCtTitle(fm.title ?? 'Onboarding nhân sự: {{ho_ten}} ({{ma_nv}})');
-      setCtDescription(fm.description ?? 'Chuẩn bị thiết bị, email và bàn giao quy trình cho {{ho_ten}} - {{phong_ban}}.');
-      setCtAssigneeUsername(fm.assigneeUsername ?? 'admin');
-      setCtPriority(fm.priority ?? 'MEDIUM');
-      setCtDueDate(fm.dueDate ?? '{{DATE_ADD(3)}}');
-    } else {
-      setName('');
-      setDescription('');
-      setSourceAppId(allApps[0]?.id || '');
-      setSourceTableId('');
-      setTriggerEvent('RECORD_CREATED');
-      setConditionField('');
-      setConditionOperator('EQUALS');
-      setConditionValue('');
-      setActionType('CREATE_USER');
-      setMatchSourceField('');
-      setMatchTargetField('');
-      setTargetAppId('');
-      setTargetTableId('');
-      setNotifyRecipient('*');
-      setNotifyTemplate('Cập nhật bản ghi {{record_key}}');
-      setWebhookUrl('');
-      setWebhookSecret('');
-      setMappingsJson('{\n  "ma_ticket": "{{AUTO_KEY}}",\n  "tieu_de": "Tự động từ {{record_key}}",\n  "han_xu_ly": "{{TODAY}}"\n}');
-      setCuUsername('{{EMAIL_PREFIX(email)}}');
-      setCuFullName('{{ho_ten}}');
-      setCuEmail('{{email}}');
-      setCuEmployeeCode('{{ma_nv}}');
-      setCuDepartment('{{phong_ban}}');
-      setCuRoleCode('STAFF');
-      setCuPassword('123456');
-      setUsMatchBy('employeeCode');
-      setUsMatchValue('{{ma_nv}}');
-      setUsIsActive('false');
-      setCtTitle('Onboarding nhân sự: {{ho_ten}} ({{ma_nv}})');
-      setCtDescription('Chuẩn bị thiết bị, email và bàn giao quy trình cho {{ho_ten}} - {{phong_ban}}.');
-      setCtAssigneeUsername('admin');
-      setCtPriority('MEDIUM');
-      setCtDueDate('{{DATE_ADD(3)}}');
-    }
-  }, [open, editing, allApps]);
-
-  if (!open) return null;
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      if (!sourceTableId) {
+        setSourceColumns([]);
+        return;
+      }
+      fetch(`/api/columns?tableId=${encodeURIComponent(sourceTableId)}`, { credentials: 'include' })
+        .then((r) => r.json())
+        .then((res) => { if (!cancelled && res.success) setSourceColumns(res.data || []); })
+        .catch(() => {});
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceTableId]);
 
   const srcTables = allTables.filter((t) => !sourceAppId || t.appId === sourceAppId);
   const tgtTables = allTables.filter((t) => !targetAppId || t.appId === targetAppId);
-  const rolesList = localRoles.length > 0 ? localRoles : (allRoles || []);
+  const rolesList = allRoles && allRoles.length > 0 ? allRoles : fetchedRoles;
 
   const applyPreset = (preset: 'HRM_CREATE_USER' | 'HRM_LOCK_USER' | 'HRM_ONBOARD_TASK' | 'SCHEDULED_30D_TASK') => {
     const hrmApp = allApps.find((a) => a.code.toUpperCase() === 'HRM');
@@ -2301,6 +2100,20 @@ export function AutomationModal({
         priority: ctPriority || 'MEDIUM',
         dueDate: ctDueDate.trim(),
       };
+    } else if (actionType === 'RUN_PLUGIN') {
+      if (!rpPluginCode.trim()) {
+        setErrorMsg('Vui lòng chọn hoặc nhập mã Plugin cần thực thi.');
+        return;
+      }
+      parsedMap = {
+        pluginCode: rpPluginCode.trim(),
+        operation: rpOperation.trim() || 'send_sms',
+        orderRef: rpOrderRef.trim() || '{{record_key}}',
+        amount: rpAmount.trim(),
+        phone: rpPhone.trim(),
+        message: rpMessage.trim(),
+        buyerTaxCode: rpBuyerTaxCode.trim(),
+      };
     }
 
     setSaving(true);
@@ -2324,7 +2137,11 @@ export function AutomationModal({
           targetTableId: needsTgt ? (tgtTable?.id || null) : null,
           actionType,
           matchSourceField: actionType === 'UPDATE_RECORD' ? matchSourceField : null,
-          matchTargetField: actionType === 'UPDATE_RECORD' ? matchTargetField : null,
+          matchTargetField: actionType === 'UPDATE_RECORD'
+            ? matchTargetField
+            : actionType === 'RUN_PLUGIN'
+              ? rpPluginCode.trim()
+              : null,
           notifyRecipient: actionType === 'SEND_NOTIFICATION' ? notifyRecipient : null,
           notifyTemplate: actionType === 'SEND_NOTIFICATION' ? notifyTemplate : null,
           webhookUrl: actionType === 'CALL_WEBHOOK' ? webhookUrl : null,
@@ -2356,7 +2173,7 @@ export function AutomationModal({
         </div>
 
         {!editing && (
-          <div style={{ marginBottom: 14, padding: '10px 12px', borderRadius: 10, backgroundColor: '#f8fafc', border: '1px solid var(--border-subtle)' }}>
+          <div style={{ marginBottom: 14, padding: '10px 12px', borderRadius: 10, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>
               Mẫu cấu hình nhanh 1-click (HRM → Hệ thống):
             </div>
@@ -2480,6 +2297,7 @@ export function AutomationModal({
                 <option value="UPDATE_SELF">Tự cập nhật chính bản ghi nguồn</option>
                 <option value="SEND_NOTIFICATION">Gửi Thông báo nội bộ</option>
                 <option value="CALL_WEBHOOK">Gọi Webhook ra ngoài</option>
+                <option value="RUN_PLUGIN">Chạy Plugin Tích hợp (HĐĐT / VietQR / Ký số / SMS)</option>
               </select>
             </div>
             {(actionType === 'CREATE_RECORD' || actionType === 'UPDATE_RECORD') && (
@@ -2503,8 +2321,8 @@ export function AutomationModal({
           </div>
 
           {actionType === 'CREATE_USER' && (
-            <div style={{ padding: 12, borderRadius: 10, border: '1px solid #bfdbfe', backgroundColor: '#eff6ff', marginBottom: 14 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: '#1e40af', marginBottom: 8 }}>
+            <div style={{ padding: 12, borderRadius: 10, border: '1px solid var(--info-border)', backgroundColor: 'var(--info-bg)', marginBottom: 14 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--info-text)', marginBottom: 8 }}>
                 Cấu hình Tài khoản User được tạo tự động (nếu Username/Mã NV/Email đã tồn tại sẽ tự liên kết, không tạo trùng)
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
@@ -2585,8 +2403,8 @@ export function AutomationModal({
           )}
 
           {actionType === 'CREATE_TASK' && (
-            <div style={{ padding: 12, borderRadius: 10, border: '1px solid #bbf7d0', backgroundColor: '#f0fdf4', marginBottom: 14 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: '#166534', marginBottom: 8 }}>
+            <div style={{ padding: 12, borderRadius: 10, border: '1px solid var(--success-border)', backgroundColor: 'var(--success-bg)', marginBottom: 14 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--success-text)', marginBottom: 8 }}>
                 Cấu hình Đầu việc tự động trong App Giao việc &amp; Tiến độ
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
@@ -2643,6 +2461,78 @@ export function AutomationModal({
               <div className="form-group">
                 <label className="form-label">HMAC Secret (tùy chọn)</label>
                 <input className="form-input" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} placeholder="secret-key" />
+              </div>
+            </div>
+          )}
+
+          {actionType === 'RUN_PLUGIN' && (
+            <div style={{ padding: 12, borderRadius: 10, border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-secondary)', marginBottom: 14 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>
+                Cấu hình thực thi Plugin Doanh nghiệp (HĐĐT / Thanh toán / Ký số / SMS VN)
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Plugin đích (pluginCode) *</label>
+                  {pluginList.length > 0 ? (
+                    <select
+                      className="form-select"
+                      value={rpPluginCode}
+                      onChange={(e) => {
+                        const code = e.target.value;
+                        setRpPluginCode(code);
+                        const plg = pluginList.find((p) => p.code === code);
+                        const cat = (plg?.category || '').toUpperCase();
+                        if (cat === 'EINVOICE') setRpOperation('issue_einvoice');
+                        else if (cat === 'DIGITAL_SIGN') setRpOperation('request_sign');
+                        else if (cat === 'SMS_VN') setRpOperation('send_sms');
+                        else if (cat) setRpOperation('create_payment');
+                      }}
+                    >
+                      <option value="">-- Chọn Plugin đã cài đặt --</option>
+                      {pluginList.map((p) => (
+                        <option key={p.code} value={p.code}>
+                          {p.name} ({p.code}){p.isEnabled === false ? ' [Đang tắt]' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      className="form-input"
+                      value={rpPluginCode}
+                      onChange={(e) => setRpPluginCode(e.target.value)}
+                      placeholder="VD: misa-meinvoice, vietqr, vnpt-smartca, viettel-sms"
+                    />
+                  )}
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Thao tác (operation) *</label>
+                  <select className="form-select" value={rpOperation} onChange={(e) => setRpOperation(e.target.value)}>
+                    <option value="issue_einvoice">Phát hành Hóa đơn điện tử (issue_einvoice)</option>
+                    <option value="create_payment">Tạo giao dịch / VietQR (create_payment)</option>
+                    <option value="request_sign">Gửi yêu cầu ký số (request_sign)</option>
+                    <option value="send_sms">Gửi SMS / Zalo ZNS (send_sms)</option>
+                  </select>
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Mã tham chiếu chứng từ (orderRef)</label>
+                  <input className="form-input" value={rpOrderRef} onChange={(e) => setRpOrderRef(e.target.value)} placeholder="{{record_key}} hoặc {{ma_don}}" />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Số tiền (amount)</label>
+                  <input className="form-input" value={rpAmount} onChange={(e) => setRpAmount(e.target.value)} placeholder="{{tong_tien}}" />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">SĐT nhận SMS/ZNS (phone)</label>
+                  <input className="form-input" value={rpPhone} onChange={(e) => setRpPhone(e.target.value)} placeholder="{{so_dien_thoai}}" />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Mã số thuế người mua (buyerTaxCode)</label>
+                  <input className="form-input" value={rpBuyerTaxCode} onChange={(e) => setRpBuyerTaxCode(e.target.value)} placeholder="{{ma_so_thue}}" />
+                </div>
+                <div className="form-group" style={{ gridColumn: '1 / -1', marginBottom: 0 }}>
+                  <label className="form-label">Nội dung thông điệp / diễn giải (message)</label>
+                  <input className="form-input" value={rpMessage} onChange={(e) => setRpMessage(e.target.value)} placeholder="Hồ sơ {{record_key}} đã được xử lý." />
+                </div>
               </div>
             </div>
           )}

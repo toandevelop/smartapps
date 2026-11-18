@@ -56,9 +56,14 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   useEffect(() => {
-    if (!loadingAuth) {
-      refreshApps();
-    }
+    if (loadingAuth) return;
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void refreshApps();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadingAuth, user?.username, user?.roleCode, refreshApps]);
 
   return (

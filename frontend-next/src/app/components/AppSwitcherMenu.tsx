@@ -38,6 +38,8 @@ export default function AppSwitcherMenu() {
         onClick={() => setOpen((p) => !p)}
         title="Chuyển nhanh giữa các App công ty"
         aria-label="Chuyển đổi ứng dụng"
+        aria-expanded={open}
+        aria-haspopup="true"
         style={{
           width: 38,
           height: 38,
@@ -60,7 +62,8 @@ export default function AppSwitcherMenu() {
             position: 'absolute',
             right: 0,
             top: 'calc(100% + 8px)',
-            width: 340,
+            width: 300,
+            maxWidth: 'calc(100vw - 24px)',
             backgroundColor: 'var(--bg-surface)',
             border: '1px solid var(--border-subtle)',
             borderRadius: 16,
@@ -85,22 +88,26 @@ export default function AppSwitcherMenu() {
             )}
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
             {visibleApps.map((app) => (
               <Link
                 key={app.id}
                 href={`/apps/${app.code}`}
+                title={app.name}
                 onClick={() => setOpen(false)}
                 style={{
+                  minWidth: 0,
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
                   textAlign: 'center',
-                  padding: '10px 6px',
+                  padding: '12px 8px',
                   borderRadius: 12,
+                  border: '1px solid var(--border-light)',
+                  backgroundColor: 'var(--bg-primary)',
                   textDecoration: 'none',
                   color: 'var(--text-primary)',
-                  transition: 'background-color 0.15s ease',
+                  transition: 'background-color 0.15s ease, border-color 0.15s ease',
                 }}
               >
                 <div
@@ -113,14 +120,23 @@ export default function AppSwitcherMenu() {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    marginBottom: 6,
+                    marginBottom: 8,
                   }}
                 >
                   <ClusterIcon icon={app.icon} fontSize={22} />
                 </div>
-                <span style={{ fontSize: 11.5, fontWeight: 600, lineHeight: 1.25 }}>{app.code}</span>
-                <span style={{ fontSize: 10.5, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
-                  {app.name}
+                <span
+                  style={{
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    lineHeight: 1.25,
+                    maxWidth: '100%',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {app.code}
                 </span>
               </Link>
             ))}

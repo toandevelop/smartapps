@@ -93,7 +93,7 @@ export default function SearchableSelect({
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 6,
-          backgroundColor: disabled ? '#f1f3f4' : '#ffffff',
+          backgroundColor: disabled ? 'var(--bg-secondary)' : 'var(--bg-surface)',
           border: `1px solid ${isOpen ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
           borderRadius: 8,
           fontSize: size === 'sm' ? 12 : 13,
@@ -108,14 +108,14 @@ export default function SearchableSelect({
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
           {isClearable && currentVal && !disabled && (
             <CloseRoundedIcon
-              sx={{ fontSize: 15, color: '#5f6368' }}
+              sx={{ fontSize: 15, color: 'var(--text-muted)' }}
               onClick={(e) => {
                 e.stopPropagation();
                 onChange('');
               }}
             />
           )}
-          <ExpandMoreRoundedIcon sx={{ fontSize: 18, color: '#5f6368' }} />
+          <ExpandMoreRoundedIcon sx={{ fontSize: 18, color: 'var(--text-muted)' }} />
         </span>
       </button>
 
@@ -172,9 +172,9 @@ export default function SearchableSelect({
                       justifyContent: 'space-between',
                       gap: 8,
                       border: 'none',
-                      borderBottom: '1px solid #f1f5f9',
-                      backgroundColor: isSelected ? '#e8f0fe' : '#ffffff',
-                      color: isSelected ? '#1a73e8' : '#202124',
+                      borderBottom: '1px solid var(--border-light)',
+                      backgroundColor: isSelected ? 'var(--accent-primary-container)' : 'var(--bg-surface)',
+                      color: isSelected ? 'var(--accent-primary)' : 'var(--text-primary)',
                       fontWeight: isSelected ? 600 : 400,
                       fontSize: 12.5,
                       cursor: 'pointer',
@@ -186,7 +186,7 @@ export default function SearchableSelect({
                         {opt.label}
                       </span>
                       {showSub && (
-                        <span style={{ fontSize: 11, color: '#64748b', fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
                           {opt.subLabel}
                         </span>
                       )}

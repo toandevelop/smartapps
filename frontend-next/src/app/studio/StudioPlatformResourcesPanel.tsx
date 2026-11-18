@@ -46,17 +46,7 @@ interface StudioPlatformResourcesPanelProps {
   globalAuditLogs: AppAuditLog[];
   auditAppFilter: string;
   currentUserId?: string;
-  newCatCode: string;
-  newCatName: string;
-  newItemCode: string;
-  newItemName: string;
-  onSetNewCatCode: (v: string) => void;
-  onSetNewCatName: (v: string) => void;
-  onSetNewItemCode: (v: string) => void;
-  onSetNewItemName: (v: string) => void;
   onSelectCategory: (cat: SysCategory) => void;
-  onAddCategory: (e: React.FormEvent) => void;
-  onAddCategoryItem: (e: React.FormEvent) => void;
   onCreateRole: () => void;
   onEditRole: (role: SysRole) => void;
   onDeleteRole: (role: SysRole) => void;
@@ -86,17 +76,7 @@ export default function StudioPlatformResourcesPanel({
   globalAuditLogs,
   auditAppFilter,
   currentUserId,
-  newCatCode,
-  newCatName,
-  newItemCode,
-  newItemName,
-  onSetNewCatCode,
-  onSetNewCatName,
-  onSetNewItemCode,
-  onSetNewItemName,
   onSelectCategory,
-  onAddCategory,
-  onAddCategoryItem,
   onCreateRole,
   onEditRole,
   onDeleteRole,

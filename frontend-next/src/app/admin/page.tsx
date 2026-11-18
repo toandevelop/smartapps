@@ -13,6 +13,10 @@ import UserFormModal from '@/app/studio/UserFormModal';
 import { AutomationModal } from '@/app/studio/StudioModals';
 import RoleFormModal from './RoleFormModal';
 import WorkflowFormModal from './WorkflowFormModal';
+import OrgUnitsPanel from './OrgUnitsPanel';
+import StorageGovernancePanel from './StorageGovernancePanel';
+import WorkflowGovernancePanels from './WorkflowGovernancePanels';
+import { OutboxMonitorPanel } from '@/app/studio/StudioPlatformPanels';
 import { usePlatform } from '@/lib/app-context';
 import { useAuth } from '@/lib/auth-context';
 import {
@@ -21,7 +25,6 @@ import {
   AppRoleMatrixItem,
   AppWorkflow,
   PermissionCatalog,
-  SysModule,
   SysRole,
   SysTable,
   SysUser,
@@ -43,9 +46,11 @@ import SaveRoundedIcon from '@mui/icons-material/SaveRounded';
 import ArrowForwardRoundedIcon from '@mui/icons-material/ArrowForwardRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import KeyRoundedIcon from '@mui/icons-material/KeyRounded';
+import CorporateFareRoundedIcon from '@mui/icons-material/CorporateFareRounded';
+import CloudQueueRoundedIcon from '@mui/icons-material/CloudQueueRounded';
 import { useEscapeKey } from '@/lib/ui-hooks';
 
-type AdminTab = 'users' | 'roles' | 'workflows' | 'automations';
+type AdminTab = 'users' | 'orgUnits' | 'roles' | 'workflows' | 'automations' | 'storage';
 
 const TRIGGER_LABELS: Record<string, string> = {
   RECORD_CREATED: 'Khi Tạo mới',
@@ -65,6 +70,7 @@ const ACTION_LABELS: Record<string, string> = {
   UPDATE_SELF: 'Tự cập nhật bản ghi nguồn',
   SEND_NOTIFICATION: 'Gửi Thông báo',
   CALL_WEBHOOK: 'Gọi Webhook',
+  RUN_PLUGIN: 'Chạy Plugin Tích hợp',
 };
 
 export default function AdminGovernancePage() {
@@ -75,13 +81,25 @@ export default function AdminGovernancePage() {
   const canRoles = hasPermission('role.manage') || hasPermission('user.manage') || hasPermission('studio.manage');
   const canWorkflows = hasPermission('workflow.manage') || hasPermission('studio.manage');
   const canAutomations = hasPermission('automation.manage') || hasPermission('studio.manage');
-  const hasAnyAdminPerm = canUsers || canRoles || canWorkflows || canAutomations;
+  const canStorage = hasPermission('studio.manage') || Boolean(currentUser?.isAdmin);
+  const hasAnyAdminPerm = canUsers || canRoles || canWorkflows || canAutomations || canStorage;
 
-  const [activeTab, setActiveTab] = useState<AdminTab>('users');
+  const [selectedTab, setActiveTab] = useState<AdminTab | null>(null);
+  const defaultTab: AdminTab = canUsers
+    ? 'users'
+    : canRoles
+    ? 'roles'
+    : canWorkflows
+    ? 'workflows'
+    : canAutomations
+    ? 'automations'
+    : canStorage
+    ? 'storage'
+    : 'users';
+  const activeTab: AdminTab = selectedTab ?? defaultTab;
 
   // Shared metadata
   const [allTables, setAllTables] = useState<SysTable[]>([]);
-  const [allModules, setAllModules] = useState<SysModule[]>([]);
 
   // Users & Roles
   const [users, setUsers] = useState<SysUser[]>([]);
@@ -97,7 +115,8 @@ export default function AdminGovernancePage() {
   // Role & App Matrix
   const [showRoleModal, setShowRoleModal] = useState(false);
   const [editingRole, setEditingRole] = useState<SysRole | null>(null);
-  const [matrixAppId, setMatrixAppId] = useState('');
+  const [selectedMatrixAppId, setMatrixAppId] = useState('');
+  const matrixAppId = selectedMatrixAppId || apps[0]?.id || '';
   const [matrixRows, setMatrixRows] = useState<AppRoleMatrixItem[]>([]);
   const [savingMatrix, setSavingMatrix] = useState(false);
 
@@ -111,7 +130,10 @@ export default function AdminGovernancePage() {
   const [autoLogs, setAutoLogs] = useState<AppAutomationLog[]>([]);
   const [showAutoModal, setShowAutoModal] = useState(false);
   const [editingAuto, setEditingAuto] = useState<AppAutomation | null>(null);
-  const [dryRunResult, setDryRunResult] = useState<{ title: string; data: any } | null>(null);
+  const [dryRunResult, setDryRunResult] = useState<{
+    title: string;
+    data: { matched?: boolean; reason?: string; previewPayload?: unknown };
+  } | null>(null);
   useEscapeKey(Boolean(resetPwUser), () => setResetPwUser(null));
   useEscapeKey(Boolean(dryRunResult), () => setDryRunResult(null));
 
@@ -131,12 +153,8 @@ export default function AdminGovernancePage() {
     setSnack({ open: true, message, severity });
 
   const loadMetadata = useCallback(async () => {
-    const [tRes, mRes] = await Promise.all([
-      fetch('/api/tables', { credentials: 'include' }).then((r) => r.json()),
-      fetch('/api/modules', { credentials: 'include' }).then((r) => r.json()),
-    ]);
+    const tRes = await fetch('/api/tables', { credentials: 'include' }).then((r) => r.json());
     if (tRes.success) setAllTables(tRes.data || []);
-    if (mRes.success) setAllModules(mRes.data || []);
   }, []);
 
   const loadUsersAndRoles = useCallback(async () => {
@@ -177,22 +195,28 @@ export default function AdminGovernancePage() {
 
   useEffect(() => {
     if (!hasAnyAdminPerm) return;
-    loadMetadata();
-    loadUsersAndRoles();
-    loadWorkflows();
-    loadAutomations();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      void loadMetadata();
+      void loadUsersAndRoles();
+      void loadWorkflows();
+      void loadAutomations();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [hasAnyAdminPerm, loadMetadata, loadUsersAndRoles, loadWorkflows, loadAutomations]);
 
   useEffect(() => {
-    if (!matrixAppId && apps.length > 0) {
-      setMatrixAppId(apps[0].id);
-    }
-  }, [apps, matrixAppId]);
-
-  useEffect(() => {
-    if (matrixAppId && canRoles) {
-      loadAppMatrix(matrixAppId);
-    }
+    if (!matrixAppId || !canRoles) return;
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadAppMatrix(matrixAppId);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [matrixAppId, canRoles, loadAppMatrix]);
 
   const filteredUsers = useMemo(() => {
@@ -350,6 +374,15 @@ export default function AdminGovernancePage() {
                 <PeopleRoundedIcon sx={{ fontSize: 16 }} /> Người dùng ({users.length})
               </button>
             )}
+            {canUsers && (
+              <button
+                type="button"
+                className={`segmented-tab ${activeTab === 'orgUnits' ? 'active' : ''}`}
+                onClick={() => setActiveTab('orgUnits')}
+              >
+                <CorporateFareRoundedIcon sx={{ fontSize: 16 }} /> Cơ cấu Tổ chức
+              </button>
+            )}
             {canRoles && (
               <button
                 type="button"
@@ -375,6 +408,15 @@ export default function AdminGovernancePage() {
                 onClick={() => setActiveTab('automations')}
               >
                 <BoltRoundedIcon sx={{ fontSize: 16 }} /> Automation ({automations.length})
+              </button>
+            )}
+            {canStorage && (
+              <button
+                type="button"
+                className={`segmented-tab ${activeTab === 'storage' ? 'active' : ''}`}
+                onClick={() => setActiveTab('storage')}
+              >
+                <CloudQueueRoundedIcon sx={{ fontSize: 16 }} /> Lưu trữ &amp; Quota
               </button>
             )}
           </div>
@@ -578,7 +620,7 @@ export default function AdminGovernancePage() {
                       padding: 14,
                       borderRadius: 12,
                       border: '1px solid var(--border-subtle)',
-                      backgroundColor: '#fcfcfd',
+                      backgroundColor: 'var(--bg-primary)',
                       display: 'flex',
                       flexDirection: 'column',
                       justifyContent: 'space-between',
@@ -794,7 +836,7 @@ export default function AdminGovernancePage() {
                       padding: 16,
                       borderRadius: 14,
                       border: '1px solid var(--border-subtle)',
-                      backgroundColor: '#fcfcfd',
+                      backgroundColor: 'var(--bg-primary)',
                       display: 'flex',
                       flexDirection: 'column',
                       gap: 12,
@@ -878,6 +920,7 @@ export default function AdminGovernancePage() {
                             <strong style={{ color: 'var(--accent-primary)' }}>Bước {st.stepOrder}: {st.name}</strong>
                             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
                               Duyệt: {[...st.approverRoles, ...st.approverUsers.map((u) => `@${u}`)].join(', ')} • SLA {st.slaHours}h
+                              {st.approvalMode && st.approvalMode !== 'ANY' ? ` • ${st.approvalMode === 'ALL' ? 'Đồng duyệt ALL' : `Tối thiểu ${st.quorumCount || 1} phiếu`}` : ''}
                             </div>
                           </div>
                         </React.Fragment>
@@ -889,6 +932,8 @@ export default function AdminGovernancePage() {
                 ))}
               </div>
             )}
+
+            <WorkflowGovernancePanels apps={apps} users={users} toast={toast} />
           </div>
         )}
 
@@ -1055,7 +1100,17 @@ export default function AdminGovernancePage() {
                 </table>
               )}
             </div>
+
+            <OutboxMonitorPanel toast={toast} />
           </div>
+        )}
+
+        {activeTab === 'orgUnits' && (
+          <OrgUnitsPanel users={users} toast={toast} onOrgUnitsChanged={loadUsersAndRoles} />
+        )}
+
+        {activeTab === 'storage' && (
+          <StorageGovernancePanel apps={apps} toast={toast} />
         )}
       </div>
 
@@ -1109,7 +1164,6 @@ export default function AdminGovernancePage() {
         editing={editingAuto}
         allApps={apps}
         allTables={allTables}
-        allModules={allModules}
         allRoles={roles}
         onClose={() => setShowAutoModal(false)}
         onSaved={async () => {
@@ -1170,8 +1224,8 @@ export default function AdminGovernancePage() {
               />
             </div>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>{dryRunResult.data.reason}</p>
-            {dryRunResult.data.previewPayload && (
-              <pre style={{ padding: 12, borderRadius: 10, background: '#f8fafc', border: '1px solid var(--border-light)', fontSize: 12, overflowX: 'auto' }}>
+            {dryRunResult.data.previewPayload !== undefined && dryRunResult.data.previewPayload !== null && (
+              <pre style={{ padding: 12, borderRadius: 10, background: 'var(--bg-secondary)', border: '1px solid var(--border-light)', fontSize: 12, overflowX: 'auto' }}>
                 {JSON.stringify(dryRunResult.data.previewPayload, null, 2)}
               </pre>
             )}

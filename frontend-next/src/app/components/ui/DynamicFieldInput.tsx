@@ -15,13 +15,17 @@ import { LookupOption, SysColumn } from '@/lib/types';
 
 export interface DynamicFieldInputProps {
   column: SysColumn;
-  value: any;
-  onChange: (val: any) => void;
+  value: unknown;
+  onChange: (val: unknown) => void;
   onSelectDetail?: (opt: LookupOption) => void;
   disabled?: boolean;
+  required?: boolean;
+  inputId?: string;
   placeholder?: string;
   size?: 'sm' | 'md';
-  formData?: Record<string, any>;
+  formData?: Record<string, unknown>;
+  publicFormTableId?: string;
+  publicCategories?: Array<{ id: string; itemCode: string; itemName: string }>;
 }
 
 export default function DynamicFieldInput({
@@ -30,9 +34,13 @@ export default function DynamicFieldInput({
   onChange,
   onSelectDetail,
   disabled = false,
+  required = false,
+  inputId,
   placeholder,
   size = 'md',
   formData,
+  publicFormTableId,
+  publicCategories,
 }: DynamicFieldInputProps) {
   const [options, setOptions] = useState<SearchableSelectOption[]>([]);
   const [lookupDetails, setLookupDetails] = useState<LookupOption[]>([]);
@@ -40,6 +48,7 @@ export default function DynamicFieldInput({
   const [creatingOpt, setCreatingOpt] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [localImagePreview, setLocalImagePreview] = useState<string>('');
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const lookupFilterVal =
@@ -49,74 +58,98 @@ export default function DynamicFieldInput({
 
   useEffect(() => {
     let mounted = true;
-    if (column.refTableId) {
-      setLoadingOpts(true);
-      fetchLookupOptions(
-        column.refTableId,
-        column.refValueField,
-        column.refDisplayField,
-        true,
-        column.lookupFilterField,
-        lookupFilterVal
-      )
-        .then((items) => {
-          if (!mounted) return;
-          setLookupDetails(items);
-          setOptions(items.map((it) => ({
-            value: it.value,
-            label: it.label,
-            subLabel: it.subLabel,
-            searchText: it.searchText,
-          })));
-        })
-        .finally(() => {
-          if (mounted) setLoadingOpts(false);
-        });
-    } else if (column.refCategoryCode) {
-      setLookupDetails([]);
-      setLoadingOpts(true);
-      fetchCategoryItems(column.refCategoryCode)
-        .then((items) => {
-          if (!mounted) return;
+    void Promise.resolve().then(() => {
+      if (!mounted) return;
+      if (column.refTableId) {
+        setLoadingOpts(true);
+        const loadReq: Promise<LookupOption[]> = publicFormTableId
+          ? fetch(
+              `/api/public/forms/${encodeURIComponent(publicFormTableId)}/lookup-options?columnCode=${encodeURIComponent(column.columnCode)}${lookupFilterVal ? `&filterValue=${encodeURIComponent(lookupFilterVal)}` : ''}`,
+            )
+              .then((r) => r.json())
+              .then((res) => (res.success && Array.isArray(res.data) ? (res.data as LookupOption[]) : []))
+              .catch(() => [])
+          : fetchLookupOptions(
+              column.refTableId,
+              column.refValueField,
+              column.refDisplayField,
+              true,
+              column.lookupFilterField,
+              lookupFilterVal,
+            );
+        loadReq
+          .then((items) => {
+            if (!mounted) return;
+            setLookupDetails(items);
+            setOptions(items.map((it) => ({
+              value: it.value,
+              label: it.label,
+              subLabel: it.subLabel,
+              searchText: it.searchText,
+            })));
+          })
+          .finally(() => {
+            if (mounted) setLoadingOpts(false);
+          });
+      } else if (column.refCategoryCode) {
+        setLookupDetails([]);
+        if (publicCategories && publicCategories.length > 0) {
           setOptions(
-            items.map((it) => ({
+            publicCategories.map((it) => ({
               value: it.itemCode,
               label: `${it.itemCode} - ${it.itemName}`,
               subLabel: it.itemName,
-            }))
-          );
-        })
-        .finally(() => {
-          if (mounted) setLoadingOpts(false);
-        });
-    } else if ((column.dataType || '').toUpperCase() === 'USER') {
-      setLookupDetails([]);
-      setLoadingOpts(true);
-      fetch('/api/users', { credentials: 'include' })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((res) => {
-          if (!mounted || !res?.success || !Array.isArray(res.data)) return;
-          setOptions(
-            res.data.map((u: any) => ({
-              value: u.username,
-              label: u.fullName ? `${u.fullName} (@${u.username})` : `@${u.username}`,
-              subLabel: u.department || u.roleCode || '',
             })),
           );
-        })
-        .catch(() => {})
-        .finally(() => {
-          if (mounted) setLoadingOpts(false);
-        });
-    } else {
-      setLookupDetails([]);
-      setOptions([]);
-    }
+        } else if (!publicFormTableId) {
+          setLoadingOpts(true);
+          fetchCategoryItems(column.refCategoryCode)
+            .then((items) => {
+              if (!mounted) return;
+              setOptions(
+                items.map((it) => ({
+                  value: it.itemCode,
+                  label: `${it.itemCode} - ${it.itemName}`,
+                  subLabel: it.itemName,
+                })),
+              );
+            })
+            .finally(() => {
+              if (mounted) setLoadingOpts(false);
+            });
+        } else {
+          setOptions([]);
+        }
+      } else if ((column.dataType || '').toUpperCase() === 'USER' && !publicFormTableId) {
+        setLookupDetails([]);
+        setLoadingOpts(true);
+        fetch('/api/users', { credentials: 'include' })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((res) => {
+            if (!mounted || !res?.success || !Array.isArray(res.data)) return;
+            const userRows = res.data as Array<{ username: string; fullName?: string | null; department?: string | null; roleCode?: string | null }>;
+            setOptions(
+              userRows.map((u) => ({
+                value: u.username,
+                label: u.fullName ? `${u.fullName} (@${u.username})` : `@${u.username}`,
+                subLabel: u.department || u.roleCode || '',
+              })),
+            );
+          })
+          .catch(() => {})
+          .finally(() => {
+            if (mounted) setLoadingOpts(false);
+          });
+      } else {
+        setLookupDetails([]);
+        setOptions([]);
+      }
+    });
     return () => {
       mounted = false;
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     };
-  }, [column.dataType, column.refCategoryCode, column.refTableId, column.refValueField, column.refDisplayField, column.lookupFilterField, lookupFilterVal]);
+  }, [column.columnCode, column.dataType, column.refCategoryCode, column.refTableId, column.refValueField, column.refDisplayField, column.lookupFilterField, lookupFilterVal, publicFormTableId, publicCategories]);
 
   const handleLookupSearch = (term: string) => {
     if (!column.refTableId) return;
@@ -124,14 +157,21 @@ export default function DynamicFieldInput({
     const trimmed = term.trim();
     if (trimmed.length < 2) return;
     searchTimerRef.current = setTimeout(async () => {
-      const remote = await searchLookupOptions(
-        column.refTableId!,
-        column.refValueField,
-        column.refDisplayField,
-        trimmed,
-        column.lookupFilterField,
-        lookupFilterVal
-      );
+      const remote: LookupOption[] = publicFormTableId
+        ? await fetch(
+            `/api/public/forms/${encodeURIComponent(publicFormTableId)}/lookup-options?columnCode=${encodeURIComponent(column.columnCode)}&q=${encodeURIComponent(trimmed)}${lookupFilterVal ? `&filterValue=${encodeURIComponent(lookupFilterVal)}` : ''}`,
+          )
+            .then((r) => r.json())
+            .then((res) => (res.success && Array.isArray(res.data) ? (res.data as LookupOption[]) : []))
+            .catch(() => [])
+        : await searchLookupOptions(
+            column.refTableId!,
+            column.refValueField,
+            column.refDisplayField,
+            trimmed,
+            column.lookupFilterField,
+            lookupFilterVal,
+          );
       if (remote.length === 0) return;
       setLookupDetails((prev) => {
         const map = new Map(prev.map((x) => [x.value, x]));
@@ -161,10 +201,10 @@ export default function DynamicFieldInput({
           alignItems: 'center',
           justifyContent: 'space-between',
           borderRadius: 8,
-          backgroundColor: '#f8fafc',
-          border: '1px dashed #cbd5e1',
+          backgroundColor: 'var(--bg-secondary)',
+          border: '1px dashed var(--border-subtle)',
           fontSize: 12.5,
-          color: '#475569',
+          color: 'var(--text-secondary)',
         }}
       >
         <span>{value !== null && value !== undefined ? String(value) : 'Tự động tính khi lưu'}</span>
@@ -199,7 +239,7 @@ export default function DynamicFieldInput({
           isClearable={!column.isRequired}
           creatingOption={creatingOpt}
           onCreateOption={
-            column.refCategoryCode && !column.refTableId && column.allowQuickCreate
+            !publicFormTableId && column.refCategoryCode && !column.refTableId && column.allowQuickCreate
               ? async (inputText) => {
                   if (!column.refCategoryCode) return;
                   setCreatingOpt(true);
@@ -223,8 +263,8 @@ export default function DynamicFieldInput({
               marginTop: 6,
               padding: '8px 10px',
               borderRadius: 8,
-              backgroundColor: '#f0f6ff',
-              border: '1px solid #bfdbfe',
+              backgroundColor: 'var(--info-bg)',
+              border: '1px solid var(--info-border)',
               fontSize: 11.5,
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))',
@@ -234,7 +274,7 @@ export default function DynamicFieldInput({
             {selectedDetail.summaryFields.map((sf) => (
               <div key={sf.code} style={{ minWidth: 0 }}>
                 <span style={{ color: '#64748b' }}>{sf.label}: </span>
-                <strong style={{ color: '#0f172a', wordBreak: 'break-word' }}>{sf.value}</strong>
+                <strong style={{ color: 'var(--text-primary)', wordBreak: 'break-word' }}>{sf.value}</strong>
               </div>
             ))}
           </div>
@@ -246,18 +286,20 @@ export default function DynamicFieldInput({
   if (dt === 'BOOLEAN') {
     const parsed = normalizeBoolVal(value);
     const checked = parsed !== null ? parsed : resolveDefaultBoolVal(column.defaultValue);
-    return <BooleanSwitch checked={checked} onChange={(b) => onChange(b)} disabled={disabled} size={size} />;
+    return <BooleanSwitch id={inputId} checked={checked} onChange={(b) => onChange(b)} disabled={disabled} size={size} />;
   }
 
   if (dt === 'DATE') {
     const str = value ? String(value).substring(0, 10) : '';
     return (
       <input
+        id={inputId}
         type="date"
         className="form-input"
         value={str}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
+        required={required}
       />
     );
   }
@@ -265,13 +307,15 @@ export default function DynamicFieldInput({
   if (dt === 'NUMBER' || dt === 'CURRENCY') {
     return (
       <input
+        id={inputId}
         type="number"
         className="form-input"
         style={{ textAlign: value !== null && value !== undefined && value !== '' ? 'right' : 'left' }}
-        value={value !== null && value !== undefined ? value : ''}
+        value={typeof value === 'number' || typeof value === 'string' ? value : ''}
         onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
         placeholder={placeholder || `Nhập ${cleanName.toLowerCase()}...`}
         disabled={disabled}
+        required={required}
       />
     );
   }
@@ -279,12 +323,14 @@ export default function DynamicFieldInput({
   if (dt === 'TEXTAREA') {
     return (
       <textarea
+        id={inputId}
         className="form-textarea"
         rows={3}
         value={value !== null && value !== undefined ? String(value) : ''}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder || `Nhập ${cleanName.toLowerCase()}...`}
         disabled={disabled}
+        required={required}
       />
     );
   }
@@ -303,7 +349,10 @@ export default function DynamicFieldInput({
           const fd = new FormData();
           fd.append('file', file);
           if (column.tableId) fd.append('tableId', column.tableId);
-          const res = await fetch('/api/attachments', { method: 'POST', credentials: 'include', body: fd });
+          const endpoint = publicFormTableId
+            ? `/api/public/forms/${encodeURIComponent(publicFormTableId)}/upload`
+            : '/api/attachments';
+          const res = await fetch(endpoint, { method: 'POST', credentials: 'include', body: fd });
           const json = await res.json();
           if (!res.ok || !json.success) {
             setUploadError(json.message || `Lỗi tải tệp ${file.name}`);
@@ -335,7 +384,7 @@ export default function DynamicFieldInput({
         {fileList.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {fileList.map((f, idx) => (
-              <div key={`${f.id}_${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '6px 10px', borderRadius: 8, backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 12.5 }}>
+              <div key={`${f.id}_${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '6px 10px', borderRadius: 8, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', fontSize: 12.5 }}>
                 <a href={f.url} target="_blank" rel="noreferrer" style={{ color: '#1a73e8', fontWeight: 600, textDecoration: 'underline', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {f.fileName}
                 </a>
@@ -456,7 +505,11 @@ export default function DynamicFieldInput({
   }
 
   if (dt === 'FILE' || dt === 'IMAGE') {
-    const urlStr = typeof value === 'string' ? value : value?.url || '';
+    const urlStr = typeof value === 'string'
+      ? value
+      : typeof value === 'object' && value !== null && 'url' in value
+      ? String((value as { url?: unknown }).url ?? '')
+      : '';
     let fileLabel = '';
     if (urlStr) {
       const match = urlStr.match(/[?&]name=([^&]+)/);
@@ -472,7 +525,10 @@ export default function DynamicFieldInput({
         const fd = new FormData();
         fd.append('file', file);
         if (column.tableId) fd.append('tableId', column.tableId);
-        const res = await fetch('/api/attachments', {
+        const endpoint = publicFormTableId
+          ? `/api/public/forms/${encodeURIComponent(publicFormTableId)}/upload`
+          : '/api/attachments';
+        const res = await fetch(endpoint, {
           method: 'POST',
           credentials: 'include',
           body: fd,
@@ -482,6 +538,9 @@ export default function DynamicFieldInput({
           setUploadError(json.message || 'Lỗi tải tệp lên');
         } else {
           const att = json.data;
+          if (publicFormTableId && dt === 'IMAGE') {
+            setLocalImagePreview(URL.createObjectURL(file));
+          }
           onChange(`/api/attachments/${att.id}?name=${encodeURIComponent(att.fileName || file.name)}`);
         }
       } catch {
@@ -533,9 +592,9 @@ export default function DynamicFieldInput({
           )}
         </div>
 
-        {dt === 'IMAGE' && urlStr && (
+        {dt === 'IMAGE' && (urlStr || localImagePreview) && (
           <img
-            src={urlStr}
+            src={localImagePreview || urlStr}
             alt={fileLabel || 'Preview'}
             style={{
               maxWidth: 180,
@@ -564,10 +623,10 @@ export default function DynamicFieldInput({
           alignItems: 'center',
           justifyContent: 'space-between',
           borderRadius: 8,
-          backgroundColor: '#f8fafc',
-          border: '1px dashed #cbd5e1',
+          backgroundColor: 'var(--bg-secondary)',
+          border: '1px dashed var(--border-subtle)',
           fontSize: 12.5,
-          color: '#334155',
+          color: 'var(--text-secondary)',
         }}
       >
         <code>{value ? String(value) : `Tự sinh (${column.defaultValue || 'REC-{YYYY}-'}0001)`}</code>
@@ -578,12 +637,12 @@ export default function DynamicFieldInput({
 
   if (dt === 'SUB_TABLE') {
     const subCols = parseSubTableSchema(column.defaultValue);
-    const rows: Array<Record<string, any>> = Array.isArray(value)
-      ? value
+    const rows: Array<Record<string, unknown>> = Array.isArray(value)
+      ? (value as Array<Record<string, unknown>>)
       : typeof value === 'string' && value.trim().startsWith('[')
       ? (() => {
           try {
-            return JSON.parse(value);
+            return JSON.parse(value) as Array<Record<string, unknown>>;
           } catch {
             return [];
           }
@@ -591,7 +650,7 @@ export default function DynamicFieldInput({
       : [];
 
     const cellErrors = validateSubTableRows(column.columnCode, subCols, rows);
-    const updateRows = (next: Array<Record<string, any>>) => onChange(next);
+    const updateRows = (next: Array<Record<string, unknown>>) => onChange(next);
 
     return (
       <div
@@ -620,7 +679,7 @@ export default function DynamicFieldInput({
               type="button"
               className="btn btn-outline btn-xs"
               onClick={() => {
-                const emptyRow: Record<string, any> = {
+                const emptyRow: Record<string, unknown> = {
                   _rowId: `row_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
                 };
                 subCols.forEach((sc) => {
@@ -636,7 +695,7 @@ export default function DynamicFieldInput({
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
-              <tr style={{ backgroundColor: '#fbfcfd', borderBottom: '1px solid var(--border-light)' }}>
+              <tr style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-light)' }}>
                 <th style={{ padding: '6px 8px', width: 34, textAlign: 'center', color: 'var(--text-muted)' }}>#</th>
                 {subCols.map((sc) => (
                   <th key={sc.code} style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600 }}>
@@ -656,7 +715,7 @@ export default function DynamicFieldInput({
                 </tr>
               ) : (
                 rows.map((r, rIdx) => (
-                  <tr key={r?._rowId || rIdx} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                  <tr key={String(r?._rowId || rIdx)} style={{ borderBottom: '1px solid var(--border-light)' }}>
                     <td style={{ padding: '4px 8px', textAlign: 'center', color: 'var(--text-muted)' }}>{rIdx + 1}</td>
                     {subCols.map((sc) => {
                       const errKey = `${column.columnCode}[${rIdx}].${sc.code}`;
@@ -665,7 +724,7 @@ export default function DynamicFieldInput({
                       const cellDisabled = disabled || isFormula;
                       const cellVal = r?.[sc.code];
 
-                      const handleCellChange = (nextVal: any) => {
+                      const handleCellChange = (nextVal: unknown) => {
                         const copy = [...rows];
                         const updatedRow = evaluateSubTableRowFormulas(subCols, {
                           ...(copy[rIdx] || {}),
@@ -705,7 +764,7 @@ export default function DynamicFieldInput({
                                 borderColor: cellErr ? '#d93025' : undefined,
                               }}
                               disabled={cellDisabled}
-                              value={cellVal ?? ''}
+                              value={typeof cellVal === 'number' || typeof cellVal === 'string' ? cellVal : ''}
                               onChange={(e) => handleCellChange(e.target.value)}
                             />
                           )}
@@ -740,12 +799,14 @@ export default function DynamicFieldInput({
   const inputType = dt === 'EMAIL' ? 'email' : dt === 'TEL' ? 'tel' : 'text';
   return (
     <input
+      id={inputId}
       type={inputType}
       className="form-input"
       value={value !== null && value !== undefined ? String(value) : ''}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder || `Nhập ${cleanName.toLowerCase()}...`}
       disabled={disabled}
+      required={required}
     />
   );
 }

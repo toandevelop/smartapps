@@ -11,11 +11,11 @@ import { SysColumn } from '@/lib/types';
 interface DynamicInlineCellProps {
   rowId: string;
   column: SysColumn;
-  value: any;
+  value: unknown;
   displayNode: React.ReactNode;
   selectOptions?: SearchableSelectOption[];
   disabled?: boolean;
-  onDirectSave?: (rowId: string, field: string, newVal: any) => Promise<boolean>;
+  onDirectSave?: (rowId: string, field: string, newVal: unknown) => Promise<boolean>;
 }
 
 export default function DynamicInlineCell({
@@ -28,7 +28,7 @@ export default function DynamicInlineCell({
   onDirectSave,
 }: DynamicInlineCellProps) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<any>(value ?? '');
+  const [draft, setDraft] = useState<unknown>(value ?? '');
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -36,13 +36,18 @@ export default function DynamicInlineCell({
   const isLocked = disabled || !onDirectSave || Boolean(column.formula);
 
   useEffect(() => {
-    if (editing) {
-      setDraft(dt === 'DATE' && value ? String(value).substring(0, 10) : value ?? '');
-      setTimeout(() => inputRef.current?.focus(), 20);
-    }
-  }, [editing, value, dt]);
+    if (!editing) return;
+    const timer = setTimeout(() => inputRef.current?.focus(), 20);
+    return () => clearTimeout(timer);
+  }, [editing]);
 
-  const commit = async (nextVal: any) => {
+  const startEditing = () => {
+    if (isLocked) return;
+    setDraft(dt === 'DATE' && value ? String(value).substring(0, 10) : value ?? '');
+    setEditing(true);
+  };
+
+  const commit = async (nextVal: unknown) => {
     if (!onDirectSave) return;
     if (String(nextVal ?? '') === String(value ?? '')) {
       setEditing(false);
@@ -75,8 +80,17 @@ export default function DynamicInlineCell({
     return (
       <div
         className={`staging-inline-cell-view ${isLocked ? 'is-locked' : ''}`}
-        onClick={() => !isLocked && setEditing(true)}
-        title={column.formula ? `Công thức tự động: ${column.formula}` : isLocked ? undefined : 'Nhấp để sửa nhanh'}
+        tabIndex={isLocked ? undefined : 0}
+        role={isLocked ? undefined : 'button'}
+        aria-label={isLocked ? undefined : `Sửa ${column.columnName}`}
+        onClick={startEditing}
+        onKeyDown={(e) => {
+          if (!isLocked && (e.key === 'Enter' || e.key === 'F2')) {
+            e.preventDefault();
+            startEditing();
+          }
+        }}
+        title={column.formula ? `Công thức tự động: ${column.formula}` : isLocked ? undefined : 'Nhấp hoặc nhấn Enter để sửa nhanh'}
       >
         <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {displayNode}
@@ -118,7 +132,7 @@ export default function DynamicInlineCell({
         ref={inputRef}
         className="staging-inline-input"
         type={dt === 'DATE' ? 'date' : dt === 'NUMBER' || dt === 'CURRENCY' ? 'number' : 'text'}
-        value={draft ?? ''}
+        value={typeof draft === 'number' || typeof draft === 'string' ? draft : ''}
         disabled={saving}
         onChange={(e) =>
           setDraft(dt === 'NUMBER' || dt === 'CURRENCY' ? (e.target.value === '' ? null : Number(e.target.value)) : e.target.value)

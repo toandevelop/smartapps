@@ -64,7 +64,7 @@ export default function TasksAppWorkspace() {
   const [priorityFilter, setPriorityFilter] = useState('ALL');
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<'kanban' | 'list'>('kanban');
-  const [appViewMode, setAppViewMode] = useState<'admin' | 'personal'>('admin');
+  const [appViewModes, setAppViewModes] = useState<Record<string, 'admin' | 'personal'>>({});
 
   const [modalOpen, setModalOpen] = useState(false);
   const [showPermModal, setShowPermModal] = useState(false);
@@ -89,11 +89,11 @@ export default function TasksAppWorkspace() {
   const canDelete = canPerformTableAction(TASKS_APP_CODE, TASKS_TABLE_ID, 'delete');
   const canStudio = hasPermission('studio.manage');
 
+  const viewKey = user?.username || '';
+  const appViewMode: 'admin' | 'personal' = !canViewAllTasks ? 'personal' : (appViewModes[viewKey] ?? 'admin');
+  const setAppViewMode = (mode: 'admin' | 'personal') =>
+    setAppViewModes((prev) => ({ ...prev, [viewKey]: mode }));
   const effectivePersonalMode = !canViewAllTasks || appViewMode === 'personal';
-
-  useEffect(() => {
-    setAppViewMode(canViewAllTasks ? 'admin' : 'personal');
-  }, [canViewAllTasks, user?.username]);
 
   const loadData = useCallback(async () => {
     if (!user || !userCanAccess) {
@@ -135,12 +135,19 @@ export default function TasksAppWorkspace() {
   }, [user, userCanAccess, scope, effectivePersonalMode, priorityFilter, search]);
 
   useEffect(() => {
-    if (user) loadData();
+    if (!user) return;
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadData();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [user, loadData]);
 
   useEffect(() => {
     const onRt = (e: Event) => {
-      const detail = (e as CustomEvent<any>).detail;
+      const detail = (e as CustomEvent<{ type?: string }>).detail;
       if (detail?.type === 'task_updated') loadData();
     };
     window.addEventListener('smartapps_realtime', onRt);

@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { UserSettings, SystemSettings } from './types';
 import { useAuth } from './auth-context';
+import { AppLanguage, TranslationKey, normalizeLanguage, translate } from './i18n';
 
 export interface UnreadSummary {
   unreadChatCount: number;
@@ -49,6 +50,9 @@ interface SettingsContextValue {
   userSettings: UserSettings;
   systemSettings: SystemSettings;
   unreadSummary: UnreadSummary;
+  language: AppLanguage;
+  setLanguage: (lang: AppLanguage) => Promise<void>;
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string;
   refreshSettings: () => Promise<void>;
   refreshUnreadSummary: () => Promise<void>;
   saveUserSettings: (next: UserSettings) => Promise<boolean>;
@@ -61,6 +65,9 @@ const SettingsContext = createContext<SettingsContextValue>({
   userSettings: DEFAULT_USER_SETTINGS,
   systemSettings: DEFAULT_SYSTEM_SETTINGS,
   unreadSummary: { unreadChatCount: 0, pendingTaskCount: 0, unreadNotifCount: 0 },
+  language: 'vi',
+  setLanguage: async () => {},
+  t: (key, vars) => translate('vi', key, vars),
   refreshSettings: async () => {},
   refreshUnreadSummary: async () => {},
   saveUserSettings: async () => false,
@@ -87,6 +94,26 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     pendingTaskCount: 0,
     unreadNotifCount: 0,
   });
+  const [localLang, setLocalLang] = useState<AppLanguage>(() => {
+    if (typeof window === 'undefined') return 'vi';
+    return normalizeLanguage(localStorage.getItem('smartapps_lang'));
+  });
+
+  const language: AppLanguage = user ? normalizeLanguage(userSettings.language || localLang) : localLang;
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = language;
+    }
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('smartapps_lang', language);
+    }
+  }, [language]);
+
+  const t = useCallback(
+    (key: TranslationKey, vars?: Record<string, string | number>) => translate(language, key, vars),
+    [language]
+  );
 
   const applyVisualTheme = useCallback((settings: UserSettings) => {
     if (typeof document === 'undefined') return;
@@ -158,15 +185,21 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, [user, applyVisualTheme]);
 
   useEffect(() => {
-    if (!loadingAuth) {
-      refreshSettings();
-      refreshUnreadSummary();
-    }
+    if (loadingAuth) return;
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      void refreshSettings();
+      void refreshUnreadSummary();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadingAuth, user?.username, refreshSettings, refreshUnreadSummary]);
 
   useEffect(() => {
     const onRealtime = (e: Event) => {
-      const detail = (e as CustomEvent<any>).detail;
+      const detail = (e as CustomEvent<{ type?: string; data?: SystemSettings }>).detail;
       if (!detail) return;
       if (detail.type === 'system_settings_updated' && detail.data) {
         setSystemSettings(detail.data);
@@ -276,6 +309,23 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         userSettings,
         systemSettings,
         unreadSummary,
+        language,
+        setLanguage: async (nextLang: AppLanguage) => {
+          const normalized = normalizeLanguage(nextLang);
+          setLocalLang(normalized);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('smartapps_lang', normalized);
+          }
+          if (typeof document !== 'undefined') {
+            document.documentElement.lang = normalized;
+          }
+          const updated = { ...userSettings, language: normalized };
+          setUserSettings(updated);
+          if (user) {
+            await saveUserSettings(updated);
+          }
+        },
+        t,
         refreshSettings,
         refreshUnreadSummary,
         saveUserSettings,

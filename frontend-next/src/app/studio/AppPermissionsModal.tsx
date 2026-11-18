@@ -37,27 +37,39 @@ export default function AppPermissionsModal({
 
   useEffect(() => {
     if (!open || !app) return;
-    setError('');
-    setLoading(true);
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      setError('');
+      setLoading(true);
 
-    const reqs: Promise<any>[] = [
-      fetch(`/api/roles/by-app/${encodeURIComponent(app.id)}`, { credentials: 'include' }).then((r) => r.json()),
-      fetch(`/api/roles/by-app/${encodeURIComponent(app.id)}/tables`, { credentials: 'include' }).then((r) => r.json()),
-    ];
-    if (!propCatalog || propCatalog.appPermissions.length === 0) {
-      reqs.push(fetch('/api/roles/catalog', { credentials: 'include' }).then((r) => r.json()));
-    }
+      const reqs: Promise<{ success?: boolean; data?: unknown; message?: string }>[] = [
+        fetch(`/api/roles/by-app/${encodeURIComponent(app.id)}`, { credentials: 'include' }).then((r) => r.json()),
+        fetch(`/api/roles/by-app/${encodeURIComponent(app.id)}/tables`, { credentials: 'include' }).then((r) => r.json()),
+      ];
+      if (!propCatalog || propCatalog.appPermissions.length === 0) {
+        reqs.push(fetch('/api/roles/catalog', { credentials: 'include' }).then((r) => r.json()));
+      }
 
-    Promise.all(reqs)
-      .then(([appRes, tblRes, catRes]) => {
-        if (appRes.success && Array.isArray(appRes.data)) setRows(appRes.data);
-        else setError(appRes.message || 'Không tải được ma trận phân quyền App.');
+      Promise.all(reqs)
+        .then(([appRes, tblRes, catRes]) => {
+          if (cancelled) return;
+          if (appRes.success && Array.isArray(appRes.data)) setRows(appRes.data as AppRoleMatrixItem[]);
+          else setError(appRes.message || 'Không tải được ma trận phân quyền App.');
 
-        if (tblRes.success && Array.isArray(tblRes.data)) setTableRows(tblRes.data);
-        if (catRes?.success && catRes.data) setFetchedCatalog(catRes.data);
-      })
-      .catch(() => setError('Lỗi kết nối máy chủ.'))
-      .finally(() => setLoading(false));
+          if (tblRes.success && Array.isArray(tblRes.data)) setTableRows(tblRes.data as RoleTablePermissionItem[]);
+          if (catRes?.success && catRes.data) setFetchedCatalog(catRes.data as PermissionCatalog);
+        })
+        .catch(() => {
+          if (!cancelled) setError('Lỗi kết nối máy chủ.');
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [open, app, propCatalog]);
 
   if (!open || !app) return null;
@@ -293,7 +305,7 @@ export default function AppPermissionsModal({
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', padding: '8px 12px', backgroundColor: '#f8fafc', borderRadius: 8 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', padding: '8px 12px', backgroundColor: 'var(--bg-secondary)', borderRadius: 8 }}>
               Ví dụ với <strong>STAFF</strong> ở App HRM: chỉ xem <em>Hồ sơ Nhân viên</em> của mình (tắt Thêm/Sửa/Xóa), cho phép <strong>Thêm</strong> ở <em>Đơn xin Nghỉ phép</em>, và chỉ <strong>Xem</strong> ở <em>Lịch công tác</em> của mình.
             </div>
             <div style={{ overflowX: 'auto' }}>

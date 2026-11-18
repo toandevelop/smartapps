@@ -3,7 +3,7 @@ import { test, expect, input, submit } from '../fixtures';
 test('runtime updates visibility, resets protected drafts and enforces conditional required before saving', async ({ page, qa }) => {
   await qa.setRules();
   await qa.openRuntime(page);
-  await page.getByRole('button', { name: 'Thêm mới', exact: true }).click();
+  await page.getByRole('button', { name: 'Thêm Phiếu E2E điều kiện', exact: true }).click();
   await input(page, 'mã phiếu').fill('RUNTIME-NEW');
   await expect(input(page, 'chi tiết')).toHaveCount(0);
   await page.getByRole('button', { name: 'Lưu bản ghi', exact: true }).click();
@@ -55,7 +55,7 @@ test('runtime honors numeric boolean defaults and fractional numeric conditions'
   await qa.setRules();
   await qa.setApprovedDefault('1');
   await qa.openRuntime(page);
-  await page.getByRole('button', { name: 'Thêm mới', exact: true }).click();
+  await page.getByRole('button', { name: 'Thêm Phiếu E2E điều kiện', exact: true }).click();
   await input(page, 'mã phiếu').fill('RUNTIME-DEFAULT');
   await expect(page.getByRole('switch', { name: 'Có / Đúng', exact: true })).toBeChecked();
   await input(page, 'chế độ').fill('show');

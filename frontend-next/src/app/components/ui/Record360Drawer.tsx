@@ -16,9 +16,14 @@ import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded';
 import FactCheckRoundedIcon from '@mui/icons-material/FactCheckRounded';
 import ArrowForwardRoundedIcon from '@mui/icons-material/ArrowForwardRounded';
+import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
+import CancelRoundedIcon from '@mui/icons-material/CancelRounded';
+import UndoRoundedIcon from '@mui/icons-material/UndoRounded';
+import BlockRoundedIcon from '@mui/icons-material/BlockRounded';
 import { AppAuditLog, AppRecord, RelatedTableGroup, SysColumn, RecordComment } from '@/lib/types';
 import { batchFetchLookups, resolveLookupLabel } from '@/lib/lookup-service';
 import { computeAuditFieldDiffs, formatAuditValue, getAuditActionMeta } from '@/lib/audit-utils';
+import { requestLocalTokenSign } from '@/lib/tauri-bridge';
 import { useAuth } from '@/lib/auth-context';
 import StatusBadge from './StatusBadge';
 import DynamicFieldInput from './DynamicFieldInput';
@@ -28,6 +33,9 @@ export interface Record360DrawerProps {
   record: AppRecord | null;
   columns: SysColumn[];
   tableDisplayName: string;
+  appCode?: string;
+  canEdit?: boolean;
+  canApprove?: boolean;
   onClose: () => void;
   onChanged?: () => void;
 }
@@ -70,13 +78,29 @@ export default function Record360Drawer({
   record,
   columns,
   tableDisplayName,
+  appCode,
+  canEdit,
+  canApprove,
   onClose,
   onChanged,
 }: Record360DrawerProps) {
-  const { user } = useAuth();
+  const { user, canPerformTableAction } = useAuth();
   const userRoles = user?.roleCodes?.length ? user.roleCodes : (user?.roleCode ? [user.roleCode] : []);
   const isUserAdmin = Boolean(user?.isAdmin || userRoles.some((r) => r.toUpperCase() === 'ADMIN'));
+  const [liveRecordState, setLiveRecordState] = useState<{ baseId: string; rec: AppRecord } | null>(null);
+  const liveRecord = liveRecordState && record && liveRecordState.baseId === record.id ? liveRecordState.rec : null;
+  const setLiveRecord = (next: AppRecord | null) => {
+    setLiveRecordState(next && record ? { baseId: record.id, rec: next } : null);
+  };
+  const activeRecord = liveRecord || record;
+  const effectiveCanEdit = canEdit ?? (appCode && activeRecord ? canPerformTableAction(appCode, activeRecord.tableId, 'edit') : isUserAdmin);
+  const effectiveCanApprove = canApprove ?? (appCode && activeRecord ? canPerformTableAction(appCode, activeRecord.tableId, 'approve') : isUserAdmin);
   const [tab, setTab] = useState<string>('info');
+  const [wfBusy, setWfBusy] = useState(false);
+  const [wfActionMode, setWfActionMode] = useState<'reject' | 'return' | null>(null);
+  const [wfRejectReason, setWfRejectReason] = useState('');
+  const [wfFeedback, setWfFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [restoringAuditKey, setRestoringAuditKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [groups, setGroups] = useState<RelatedTableGroup[]>([]);
   const [audits, setAudits] = useState<AppAuditLog[]>([]);
@@ -87,7 +111,7 @@ export default function Record360Drawer({
   // Inline quick-create or edit child record inside any linked tab
   const [quickFormKey, setQuickFormKey] = useState<string | null>(null);
   const [editingChildId, setEditingChildId] = useState<string | null>(null);
-  const [quickFormData, setQuickFormData] = useState<Record<string, any>>({});
+  const [quickFormData, setQuickFormData] = useState<Record<string, unknown>>({});
   const [quickSaving, setQuickSaving] = useState(false);
   const [quickError, setQuickError] = useState('');
   const [enabledPlugins, setEnabledPlugins] = useState<Array<{
@@ -104,24 +128,45 @@ export default function Record360Drawer({
     providerCode: string;
     operation: string;
     message: string;
-    data: Record<string, any>;
+    data: Record<string, unknown>;
   } | null>(null);
   const [aiSummary, setAiSummary] = useState<{ summary: string; engine: string } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiTriage, setAiTriage] = useState<{
+    riskLevel: string;
+    riskScore: number;
+    recommendation: string;
+    recommendationLabel: string;
+    summaryBullets: string[];
+    anomalies: string[];
+    historicalSampleSize: number;
+    engine: string;
+  } | null>(null);
+  const [triageLoading, setTriageLoading] = useState(false);
 
   const loadRelationsAndLogs = useCallback(async () => {
     if (!record) return;
     setPluginResult(null);
     setAiSummary(null);
-    if (isUserAdmin) {
+    setAiTriage(null);
+    const canRunPlugins = isUserAdmin || effectiveCanEdit || effectiveCanApprove;
+    if (canRunPlugins) {
       fetch(`/api/integrations/apps/${encodeURIComponent(record.appId)}/plugins?enabledOnly=true`)
         .then((r) => (r.ok ? r.json() : null))
         .then((res) => {
           if (res?.success && Array.isArray(res.data)) {
+            const bindings = res.data as Array<{
+              id: string;
+              pluginCode: string;
+              pluginName: string;
+              category: string;
+              tableId?: string | null;
+              fieldMapping?: Record<string, string>;
+            }>;
             setEnabledPlugins(
-              res.data
-                .filter((p: any) => p.category !== 'WEBHOOK_INBOUND' && (!p.tableId || p.tableId === record.tableId))
-                .map((p: any) => ({
+              bindings
+                .filter((p) => p.category !== 'WEBHOOK_INBOUND' && (!p.tableId || p.tableId === record.tableId))
+                .map((p) => ({
                   id: p.id,
                   code: p.pluginCode,
                   name: p.pluginName,
@@ -133,6 +178,8 @@ export default function Record360Drawer({
           }
         })
         .catch(() => {});
+    } else {
+      setEnabledPlugins([]);
     }
     setLoading(true);
     try {
@@ -153,23 +200,120 @@ export default function Record360Drawer({
     } finally {
       setLoading(false);
     }
-  }, [record, columns]);
+  }, [record, columns, isUserAdmin, effectiveCanEdit, effectiveCanApprove]);
 
   useEffect(() => {
     if (!open || !record) return;
-    setTab('info');
-    setQuickFormKey(null);
-    setEditingChildId(null);
-    setQuickError('');
-    loadRelationsAndLogs();
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      setWfActionMode(null);
+      setWfRejectReason('');
+      setWfFeedback(null);
+      setTab('info');
+      setQuickFormKey(null);
+      setEditingChildId(null);
+      setQuickError('');
+      void loadRelationsAndLogs();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [open, record, loadRelationsAndLogs]);
+
+  const runDrawerApproval = async (
+    action: 'submit' | 'approve' | 'reject' | 'return' | 'recall' | 'cancel',
+    reasonText?: string
+  ) => {
+    if (!activeRecord) return;
+    setWfBusy(true);
+    setWfFeedback(null);
+    try {
+      const url = action === 'submit'
+        ? `/api/records/${activeRecord.id}/submit-approval`
+        : action === 'recall'
+          ? `/api/records/${activeRecord.id}/recall-approval`
+          : action === 'cancel'
+            ? `/api/records/${activeRecord.id}/cancel-approval`
+            : `/api/records/${activeRecord.id}/approve`;
+      const body = action === 'submit'
+        ? {}
+        : action === 'recall' || action === 'cancel'
+          ? { expectedVersion: activeRecord.version, reason: reasonText }
+          : {
+              approve: action === 'approve',
+              action: action === 'return' ? 'RETURN' : action === 'reject' ? 'REJECT' : 'APPROVE',
+              reason: action === 'reject'
+                ? (reasonText?.trim() || 'Từ chối phê duyệt')
+                : action === 'return'
+                  ? (reasonText?.trim() || 'Trả lại bước trước để bổ sung')
+                  : 'Phê duyệt',
+              expectedVersion: activeRecord.version,
+              expectedStepOrder: activeRecord.currentStepOrder,
+            };
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
+      if (res.success && res.data) {
+        setLiveRecord(res.data);
+        setWfActionMode(null);
+        setWfRejectReason('');
+        setWfFeedback({
+          ok: true,
+          msg: action === 'recall'
+            ? 'Đã thu hồi trình duyệt.'
+            : action === 'cancel'
+              ? 'Đã hủy hồ sơ.'
+              : action === 'return'
+                ? 'Đã trả lại bước trước.'
+                : 'Đã cập nhật trạng thái quy trình.',
+        });
+        onChanged?.();
+      } else {
+        setWfFeedback({ ok: false, msg: res.message || 'Thao tác thất bại.' });
+      }
+    } finally {
+      setWfBusy(false);
+    }
+  };
+
+  const restoreAuditField = async (auditId: string, fieldCode: string) => {
+    if (!activeRecord || restoringAuditKey) return;
+    const key = `${auditId}_${fieldCode}`;
+    setRestoringAuditKey(key);
+    try {
+      const res = await fetch(`/api/records/${activeRecord.id}/restore-fields`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          auditId,
+          fields: [fieldCode],
+          expectedVersion: activeRecord.version,
+        }),
+      }).then((r) => r.json());
+      if (res.success && res.data) {
+        setLiveRecord(res.data);
+        await loadRelationsAndLogs();
+        onChanged?.();
+        setWfFeedback({ ok: true, msg: `Đã khôi phục trường '${fieldCode}' từ lịch sử.` });
+      } else {
+        setWfFeedback({ ok: false, msg: res.message || 'Không thể khôi phục trường dữ liệu này.' });
+      }
+    } finally {
+      setRestoringAuditKey(null);
+    }
+  };
 
   const openQuickCreate = (g: RelatedTableGroup, groupKey: string) => {
     if (quickFormKey === groupKey && !editingChildId) {
       setQuickFormKey(null);
       return;
     }
-    const init: Record<string, any> = {};
+    const init: Record<string, unknown> = {};
     g.columns.forEach((c) => {
       if (c.defaultValue !== null && c.defaultValue !== undefined) {
         if (c.dataType === 'BOOLEAN') init[c.columnCode] = c.defaultValue === 'true';
@@ -262,9 +406,9 @@ export default function Record360Drawer({
   };
 
   const titleColumn = columns.find((c) => !c.isIdentityKey && (c.dataType === 'STRING' || c.columnCode.includes('ten') || c.columnCode.includes('tieu_de')));
-  const headlineText = titleColumn && record?.data?.[titleColumn.columnCode]
-    ? `${record.data[titleColumn.columnCode]} (${record?.recordKey || record?.id})`
-    : `${record?.recordKey || record?.id || ''}`;
+  const headlineText = titleColumn && activeRecord?.data?.[titleColumn.columnCode]
+    ? `${activeRecord.data[titleColumn.columnCode]} (${activeRecord?.recordKey || activeRecord?.id})`
+    : `${activeRecord?.recordKey || activeRecord?.id || ''}`;
 
   const activeRelationGroup = groups.find((_, idx) => tab === `rel_${idx}`);
 
@@ -309,7 +453,7 @@ export default function Record360Drawer({
                 <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
                   {headlineText}
                 </span>
-                {record && <StatusBadge status={record.status} size="sm" />}
+                {activeRecord && <StatusBadge status={activeRecord.approvalStatus || activeRecord.status} size="sm" />}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
                 {tableDisplayName} • Hồ sơ chi tiết đa Tab ({groups.length} bảng liên kết)
@@ -379,8 +523,8 @@ export default function Record360Drawer({
                     borderRadius: 999,
                     fontSize: 10.5,
                     fontWeight: 700,
-                    backgroundColor: isSelected ? 'rgba(255,255,255,0.22)' : '#eef2ff',
-                    color: isSelected ? '#ffffff' : '#1e40af',
+                    backgroundColor: isSelected ? 'rgba(255,255,255,0.22)' : 'var(--info-bg)',
+                    color: isSelected ? '#ffffff' : 'var(--info-text)',
                   }}
                 >
                   {g.records.length}
@@ -430,7 +574,7 @@ export default function Record360Drawer({
             record && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 {enabledPlugins.length > 0 && (
-                  <div className="card" style={{ padding: 14, backgroundColor: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                  <div className="card" style={{ padding: 14, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>
                       THAO TÁC TÍCH HỢP 1-CLICK
                     </div>
@@ -457,7 +601,7 @@ export default function Record360Drawer({
                             type="button"
                             disabled={pluginRunning !== null}
                             className="btn btn-xs btn-outline"
-                            style={{ backgroundColor: '#ffffff' }}
+                            style={{ backgroundColor: 'var(--bg-surface)' }}
                             onClick={async () => {
                               setPluginRunning(plg.code);
                               setPluginResult(null);
@@ -470,8 +614,10 @@ export default function Record360Drawer({
                                 const res = await fetch(`/api/integrations/plugins/${encodeURIComponent(plg.code)}/execute`, {
                                   method: 'POST',
                                   headers: { 'Content-Type': 'application/json' },
+                                  credentials: 'include',
                                   body: JSON.stringify({
                                     operation: op,
+                                    appId: activeRecord?.appId || record.appId,
                                     recordId: record.id,
                                     tableId: record.tableId,
                                     orderRef,
@@ -482,6 +628,10 @@ export default function Record360Drawer({
                                 }).then((r) => r.json());
                                 if (res?.data) {
                                   setPluginResult(res.data);
+                                  if (res.updatedRecord) {
+                                    setLiveRecord(res.updatedRecord);
+                                    onChanged?.();
+                                  }
                                 } else {
                                   setPluginResult({
                                     success: false,
@@ -516,38 +666,97 @@ export default function Record360Drawer({
                           marginTop: 10,
                           padding: 12,
                           borderRadius: 8,
-                          backgroundColor: pluginResult.success ? '#f0fdf4' : '#fef2f2',
-                          border: `1px solid ${pluginResult.success ? '#bbf7d0' : '#fecaca'}`,
+                          backgroundColor: pluginResult.success ? 'var(--success-bg)' : 'var(--danger-bg)',
+                          border: `1px solid ${pluginResult.success ? 'var(--success-border)' : 'var(--danger-border)'}`,
                           fontSize: 12.5,
                         }}
                       >
-                        <div style={{ fontWeight: 700, color: pluginResult.success ? '#166534' : '#991b1b', marginBottom: 4 }}>
+                        <div style={{ fontWeight: 700, color: pluginResult.success ? 'var(--success-text)' : 'var(--danger-text)', marginBottom: 4 }}>
                           {pluginResult.message}
                         </div>
-                        {pluginResult.data?.qrUrl && (
+                        {Boolean(pluginResult.data?.qrUrl) && (
                           <div style={{ marginTop: 8 }}>
                             <img
                               src={String(pluginResult.data.qrUrl)}
                               alt="VietQR"
-                              style={{ maxWidth: 200, borderRadius: 8, border: '1px solid #e2e8f0', backgroundColor: '#fff' }}
+                              style={{ maxWidth: 200, borderRadius: 8, border: '1px solid var(--border-subtle)', backgroundColor: '#fff' }}
                             />
                           </div>
                         )}
-                        {pluginResult.data?.paymentUrl && (
+                        {Boolean(pluginResult.data?.paymentUrl) && (
                           <div style={{ marginTop: 6 }}>
-                            <a href={String(pluginResult.data.paymentUrl)} target="_blank" rel="noreferrer" style={{ color: '#1a73e8', fontWeight: 600 }}>
+                            <a href={String(pluginResult.data.paymentUrl)} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>
                               Mở liên kết thanh toán ↗
                             </a>
                           </div>
                         )}
-                        {pluginResult.data?.invoiceNo && (
+                        {Boolean(pluginResult.data?.invoiceNo) && (
                           <div style={{ marginTop: 4, color: 'var(--text-secondary)' }}>
-                            Số HĐ: <strong>{pluginResult.data.invoiceNo}</strong> • Mã tra cứu: <strong>{pluginResult.data.lookupCode}</strong>
+                            Số HĐ: <strong>{String(pluginResult.data.invoiceNo)}</strong> • Mã tra cứu: <strong>{String(pluginResult.data.lookupCode ?? '')}</strong>
                           </div>
                         )}
-                        {pluginResult.data?.signTransactionId && (
-                          <div style={{ marginTop: 4, color: 'var(--text-secondary)' }}>
-                            Mã GD ký số: <strong>{pluginResult.data.signTransactionId}</strong> ({pluginResult.data.signStatus})
+                        {Boolean(pluginResult.data?.signTransactionId) && (
+                          <div style={{ marginTop: 4, color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <div>
+                              Mã GD ký số: <strong>{String(pluginResult.data.signTransactionId)}</strong> ({String(pluginResult.data.signStatus ?? '')})
+                            </div>
+                            {pluginResult.data.signStatus === 'PENDING_USER_CONFIRM' && Boolean(pluginResult.data.documentHash) && (
+                              <div>
+                                <button
+                                  type="button"
+                                  className="btn btn-outline btn-xs"
+                                  disabled={pluginRunning !== null}
+                                  onClick={async () => {
+                                    setPluginRunning(pluginResult.providerCode || 'local-sign');
+                                    try {
+                                      const signOut = await requestLocalTokenSign({
+                                        documentId: record.recordKey || record.id,
+                                        documentHash: String(pluginResult.data?.documentHash || ''),
+                                        providerCode: pluginResult.providerCode,
+                                      });
+                                      if (!signOut.success || !signOut.signatureBase64) {
+                                        setPluginResult({
+                                          success: false,
+                                          providerCode: pluginResult.providerCode,
+                                          operation: 'complete_local_sign',
+                                          message: signOut.message,
+                                          data: pluginResult.data || {},
+                                        });
+                                        return;
+                                      }
+                                      const completed = await fetch(`/api/integrations/plugins/${encodeURIComponent(pluginResult.providerCode)}/execute`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        credentials: 'include',
+                                        body: JSON.stringify({
+                                          operation: 'complete_local_sign',
+                                          appId: activeRecord?.appId || record.appId,
+                                          recordId: record.id,
+                                          tableId: record.tableId,
+                                          signTransactionId: signOut.signTransactionId || pluginResult.data?.signTransactionId,
+                                          documentHash: pluginResult.data?.documentHash,
+                                          signatureBase64: signOut.signatureBase64,
+                                          certificateSubject: signOut.certificateSubject,
+                                          certificateSerial: signOut.certificateSerial,
+                                          signedAt: signOut.signedAt,
+                                        }),
+                                      }).then((r) => r.json());
+                                      if (completed?.data) {
+                                        setPluginResult(completed.data);
+                                        if (completed.updatedRecord) {
+                                          setLiveRecord(completed.updatedRecord);
+                                          onChanged?.();
+                                        }
+                                      }
+                                    } finally {
+                                      setPluginRunning(null);
+                                    }
+                                  }}
+                                >
+                                  Ký bằng USB Token cục bộ (PKCS#11)
+                                </button>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -579,16 +788,16 @@ export default function Record360Drawer({
                         {aiLoading ? 'Đang tóm tắt...' : '✨ Tóm tắt AI'}
                       </button>
                       <span style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-muted)' }}>
-                        Cập nhật: {record.updatedAt ? new Date(record.updatedAt).toLocaleString('vi-VN') : '—'} bởi @{record.updatedBy || record.createdBy}
+                        Cập nhật: {activeRecord?.updatedAt ? new Date(activeRecord.updatedAt).toLocaleString('vi-VN') : '—'} bởi @{activeRecord?.updatedBy || activeRecord?.createdBy}
                       </span>
                     </div>
                   </div>
                   {aiSummary && (
-                    <div style={{ marginBottom: 14, padding: 12, borderRadius: 8, backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', fontSize: 12.5, whiteSpace: 'pre-wrap' }}>
-                      <div style={{ fontWeight: 700, color: '#1e40af', marginBottom: 4 }}>
+                    <div style={{ marginBottom: 14, padding: 12, borderRadius: 8, backgroundColor: 'var(--info-bg)', border: '1px solid var(--info-border)', fontSize: 12.5, whiteSpace: 'pre-wrap' }}>
+                      <div style={{ fontWeight: 700, color: 'var(--info-text)', marginBottom: 4 }}>
                         Tóm tắt nhanh ({aiSummary.engine})
                       </div>
-                      <div style={{ color: '#1e293b', lineHeight: 1.5 }}>{aiSummary.summary}</div>
+                      <div style={{ color: 'var(--text-primary)', lineHeight: 1.5 }}>{aiSummary.summary}</div>
                     </div>
                   )}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px 18px' }}>
@@ -599,8 +808,8 @@ export default function Record360Drawer({
                           gridColumn: (c.dataType || '').toUpperCase() === 'TEXTAREA' ? '1 / -1' : undefined,
                           padding: '8px 10px',
                           borderRadius: 8,
-                          backgroundColor: '#f8fafc',
-                          border: '1px solid #f1f5f9',
+                          backgroundColor: 'var(--bg-secondary)',
+                          border: '1px solid var(--border-light)',
                         }}
                       >
                         <div style={{ color: 'var(--text-muted)', fontSize: 11.5, marginBottom: 3 }}>
@@ -610,7 +819,7 @@ export default function Record360Drawer({
                           )}
                         </div>
                         <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
-                          {formatFieldDisplay(c, record.data?.[c.columnCode])}
+                          {formatFieldDisplay(c, activeRecord?.data?.[c.columnCode])}
                         </div>
                       </div>
                     ))}
@@ -643,7 +852,7 @@ export default function Record360Drawer({
                             <span className="badge" style={{ fontSize: 10.5, backgroundColor: 'var(--bg-secondary)', color: g.appColor }}>
                               {g.appCode}
                             </span>
-                            <strong style={{ fontSize: 16, color: '#0f172a' }}>{g.records.length}</strong>
+                            <strong style={{ fontSize: 16, color: 'var(--text-primary)' }}>{g.records.length}</strong>
                           </div>
                           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
                             {g.tableDisplayName}
@@ -681,7 +890,7 @@ export default function Record360Drawer({
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span className="badge" style={{ backgroundColor: '#f1f5f9', color: g.appColor }}>
+                        <span className="badge" style={{ backgroundColor: 'var(--bg-secondary)', color: g.appColor }}>
                           {g.appCode}
                         </span>
                         <strong style={{ fontSize: 15 }}>{g.tableDisplayName}</strong>
@@ -716,11 +925,11 @@ export default function Record360Drawer({
                         marginBottom: 16,
                         padding: 14,
                         borderRadius: 10,
-                        backgroundColor: '#f8fafc',
-                        border: '1px solid #cbd5e1',
+                        backgroundColor: 'var(--bg-secondary)',
+                        border: '1px solid var(--border-subtle)',
                       }}
                     >
-                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#0f172a' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: 'var(--text-primary)' }}>
                         {editingChildId ? `Chỉnh sửa bản ghi — ${g.tableDisplayName}` : `Thêm nhanh bản ghi vào ${g.tableDisplayName}`}
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
@@ -744,7 +953,7 @@ export default function Record360Drawer({
                                 <label className="form-label">
                                   {col.columnName} {col.isRequired && !isDisabled && <span style={{ color: '#d93025' }}>*</span>}
                                   {!isLockedParent && isRoleReadOnly && (
-                                    <span style={{ fontSize: 10.5, color: '#64748b', marginLeft: 5 }}>(Chỉ đọc)</span>
+                                    <span style={{ fontSize: 10.5, color: 'var(--text-muted)', marginLeft: 5 }}>(Chỉ đọc)</span>
                                   )}
                                 </label>
                                 <DynamicFieldInput
@@ -773,7 +982,7 @@ export default function Record360Drawer({
                           })}
                       </div>
                       {quickError && (
-                        <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, backgroundColor: '#fef2f2', color: '#b91c1c', fontSize: 12 }}>
+                        <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, backgroundColor: 'var(--danger-bg)', color: 'var(--danger-text)', fontSize: 12 }}>
                           {quickError}
                         </div>
                       )}
@@ -790,7 +999,7 @@ export default function Record360Drawer({
                   )}
 
                   {g.records.length === 0 ? (
-                    <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, backgroundColor: '#f8fafc', borderRadius: 10 }}>
+                    <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, backgroundColor: 'var(--bg-secondary)', borderRadius: 10 }}>
                       Chưa có dữ liệu nào trong mục <strong>{g.tableDisplayName}</strong> cho hồ sơ này.
                     </div>
                   ) : (
@@ -848,14 +1057,14 @@ export default function Record360Drawer({
                         </tbody>
                         {hasAnySummary && (
                           <tfoot>
-                            <tr style={{ backgroundColor: '#f1f5f9', fontWeight: 700 }}>
+                            <tr style={{ backgroundColor: 'var(--bg-secondary)', fontWeight: 700 }}>
                               {g.columns.map((col, ci) => {
                                 const info = numericSums[ci];
                                 if (ci === 0 && !info) {
                                   return <td key={col.id} style={{ fontSize: 12 }}>Tổng cộng ({g.records.length})</td>;
                                 }
                                 return (
-                                  <td key={col.id} style={{ fontSize: 12.5, color: '#0f172a' }}>
+                                  <td key={col.id} style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>
                                     {info
                                       ? info.dt === 'CURRENCY'
                                         ? `${info.sum.toLocaleString('vi-VN')} đ`
@@ -875,58 +1084,240 @@ export default function Record360Drawer({
                 </div>
               );
             })()
-          ) : tab === 'workflow' ? (
+          ) : tab === 'workflow' ? (() => {
+            const st = (activeRecord?.approvalStatus || 'DRAFT').toUpperCase();
+            const isOwner = Boolean(
+              user?.username && activeRecord?.createdBy && user.username.toLowerCase() === activeRecord.createdBy.toLowerCase()
+            );
+            const canRecallOrCancel = isOwner || isUserAdmin;
+            return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div className="card" style={{ padding: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                   <strong style={{ fontSize: 13.5 }}>Trạng thái Quy trình Hiện tại</strong>
                   <StatusBadge
                     status={
-                      record?.approvalStatus === 'APPROVED'
+                      st === 'APPROVED'
                         ? 'ACTIVE'
-                        : record?.approvalStatus === 'REJECTED'
+                        : st === 'REJECTED' || st === 'CANCELLED'
                         ? 'ERROR'
                         : 'PENDING'
                     }
-                    label={record?.approvalStatus || 'DRAFT'}
+                    label={activeRecord?.approvalStatus || 'DRAFT'}
                     size="sm"
                   />
                 </div>
-                {record?.approvalStatus === 'PENDING' && (
-                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                {st === 'PENDING' && activeRecord && (
+                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 8 }}>
                     Đang chờ tại:{' '}
                     <strong>
-                      {record.totalWorkflowSteps && record.totalWorkflowSteps > 1
-                        ? `Bước ${record.currentStepOrder || 1}/${record.totalWorkflowSteps}: `
+                      {activeRecord.totalWorkflowSteps && activeRecord.totalWorkflowSteps > 1
+                        ? `Bước ${activeRecord.currentStepOrder || 1}/${activeRecord.totalWorkflowSteps}: `
                         : ''}
-                      {record.currentStepName || 'Phê duyệt'}
+                      {activeRecord.currentStepName || 'Phê duyệt'}
                     </strong>
-                    {record.currentStepApproverRoles && record.currentStepApproverRoles.length > 0 && (
+                    {activeRecord.currentStepApproverRoles && activeRecord.currentStepApproverRoles.length > 0 && (
                       <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>
-                        Vai trò được duyệt: {record.currentStepApproverRoles.join(', ')}
+                        Vai trò được duyệt: {activeRecord.currentStepApproverRoles.join(', ')}
+                      </div>
+                    )}
+                    {activeRecord.stepApprovals && activeRecord.stepApprovals.length > 0 && (
+                      <div style={{ fontSize: 11.5, color: 'var(--info-text)', marginTop: 4 }}>
+                        Phiếu đồng duyệt bước hiện tại ({activeRecord.stepApprovals.length}):{' '}
+                        {activeRecord.stepApprovals.map((v) => `@${v.actor}${v.delegatedFrom ? ` (thay @${v.delegatedFrom})` : ''}`).join(', ')}
                       </div>
                     )}
                   </div>
                 )}
-                {record?.rejectionReason && (
-                  <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 8, backgroundColor: '#fce8e6', color: '#c5221f', fontSize: 12 }}>
-                    Lý do từ chối: {record.rejectionReason}
+                {activeRecord?.rejectionReason && (
+                  <div style={{ marginTop: 6, marginBottom: 8, padding: '6px 10px', borderRadius: 8, backgroundColor: 'var(--danger-bg)', color: 'var(--danger-text)', fontSize: 12 }}>
+                    Lý do: {activeRecord.rejectionReason}
+                  </div>
+                )}
+
+                {wfFeedback && (
+                  <div
+                    style={{
+                      marginBottom: 8,
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      fontSize: 12,
+                      backgroundColor: wfFeedback.ok ? 'rgba(19, 115, 51, 0.1)' : 'rgba(197, 34, 31, 0.1)',
+                      color: wfFeedback.ok ? '#137333' : '#c5221f',
+                    }}
+                  >
+                    {wfFeedback.msg}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                  {(st === 'DRAFT' || st === 'REJECTED' || st === 'RECALLED') && effectiveCanEdit && (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-xs"
+                      disabled={wfBusy}
+                      onClick={() => void runDrawerApproval('submit')}
+                    >
+                      <FactCheckRoundedIcon sx={{ fontSize: 14 }} /> {st === 'DRAFT' ? 'Trình duyệt' : 'Nộp lại duyệt'}
+                    </button>
+                  )}
+                  {st === 'PENDING' && (effectiveCanApprove || isUserAdmin) && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-xs"
+                        style={{ backgroundColor: '#137333' }}
+                        disabled={wfBusy}
+                        onClick={() => void runDrawerApproval('approve')}
+                      >
+                        <CheckCircleRoundedIcon sx={{ fontSize: 14 }} /> Phê duyệt
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-xs"
+                        style={{ color: '#b06000', borderColor: 'var(--warning-border)' }}
+                        disabled={wfBusy}
+                        onClick={() => {
+                          setWfActionMode((m) => (m === 'return' ? null : 'return'));
+                        }}
+                      >
+                        <UndoRoundedIcon sx={{ fontSize: 14 }} /> Trả lại bước trước
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-xs"
+                        style={{ color: '#c5221f', borderColor: '#f5c2c7' }}
+                        disabled={wfBusy}
+                        onClick={() => {
+                          setWfActionMode((m) => (m === 'reject' ? null : 'reject'));
+                        }}
+                      >
+                        <CancelRoundedIcon sx={{ fontSize: 14 }} /> Từ chối
+                      </button>
+                    </>
+                  )}
+                  {st === 'PENDING' && canRecallOrCancel && (
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-xs"
+                      disabled={wfBusy}
+                      onClick={() => void runDrawerApproval('recall')}
+                    >
+                      <UndoRoundedIcon sx={{ fontSize: 14 }} /> Thu hồi
+                    </button>
+                  )}
+                  {(st === 'PENDING' || st === 'REJECTED' || st === 'RECALLED') && canRecallOrCancel && (
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-xs"
+                      style={{ color: 'var(--text-muted)' }}
+                      disabled={wfBusy}
+                      onClick={() => void runDrawerApproval('cancel')}
+                    >
+                      <BlockRoundedIcon sx={{ fontSize: 14 }} /> Hủy hồ sơ
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-xs"
+                    disabled={triageLoading || !activeRecord?.id}
+                    onClick={async () => {
+                      if (!activeRecord?.id) return;
+                      setTriageLoading(true);
+                      try {
+                        const res = await fetch(`/api/records/${encodeURIComponent(activeRecord.id)}/ai-triage`, {
+                          method: 'POST',
+                          credentials: 'include',
+                        }).then((r) => r.json());
+                        if (res?.success && res?.data) setAiTriage(res.data);
+                      } finally {
+                        setTriageLoading(false);
+                      }
+                    }}
+                  >
+                    {triageLoading ? 'AI đang chấm rủi ro...' : '🛡️ AI Đánh giá rủi ro'}
+                  </button>
+                </div>
+
+                {aiTriage && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: 12,
+                      borderRadius: 8,
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor:
+                        aiTriage.riskLevel === 'HIGH'
+                          ? 'var(--danger-bg)'
+                          : aiTriage.riskLevel === 'MEDIUM'
+                            ? 'var(--warning-bg)'
+                            : 'var(--info-bg)',
+                      fontSize: 12.5,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                      <strong>{aiTriage.recommendationLabel}</strong>
+                      <span className="badge" style={{ fontSize: 11 }}>
+                        Rủi ro: {aiTriage.riskLevel} ({aiTriage.riskScore}/100) • {aiTriage.historicalSampleSize} mẫu LS
+                      </span>
+                    </div>
+                    {aiTriage.anomalies.length > 0 && (
+                      <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--danger-text)' }}>
+                        {aiTriage.anomalies.map((a, idx) => (
+                          <li key={idx}>{a}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {aiTriage.summaryBullets.length > 0 && (
+                      <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--text-primary)' }}>
+                        {aiTriage.summaryBullets.map((b, idx) => (
+                          <li key={idx}>{b}</li>
+                        ))}
+                      </ul>
+                    )}
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Nguồn: {aiTriage.engine}</div>
+                  </div>
+                )}
+
+                {wfActionMode && st === 'PENDING' && (
+                  <div style={{ marginTop: 10, padding: 10, borderRadius: 8, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <input
+                      className="form-input"
+                      placeholder={wfActionMode === 'return' ? 'Nhập ghi chú yêu cầu bổ sung (khi trả lại bước trước)...' : 'Nhập lý do từ chối...'}
+                      value={wfRejectReason}
+                      onChange={(e) => setWfRejectReason(e.target.value)}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+                      <button type="button" className="btn btn-outline btn-xs" onClick={() => setWfActionMode(null)}>Đóng</button>
+                      <button
+                        type="button"
+                        className="btn btn-xs"
+                        style={{ backgroundColor: wfActionMode === 'return' ? '#b06000' : '#d93025', color: '#fff', border: 'none' }}
+                        disabled={wfBusy}
+                        onClick={() => void runDrawerApproval(wfActionMode, wfRejectReason)}
+                      >
+                        {wfActionMode === 'return' ? 'Xác nhận trả lại' : 'Xác nhận từ chối'}
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
 
-              {!record?.workflowHistory || record.workflowHistory.length === 0 ? (
+              {!activeRecord?.workflowHistory || activeRecord.workflowHistory.length === 0 ? (
                 <div className="card" style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)', fontSize: 13 }}>
                   Hồ sơ này chưa có lượt trình duyệt / phê duyệt nào.
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {record.workflowHistory.map((h, i) => (
-                    <div key={i} className="card" style={{ padding: 12, borderLeft: `4px solid ${h.action === 'APPROVE' ? '#1e8e3e' : h.action === 'REJECT' ? '#d93025' : '#1a73e8'}` }}>
+                  {activeRecord.workflowHistory.map((h, i) => (
+                    <div key={i} className="card" style={{ padding: 12, borderLeft: `4px solid ${h.action === 'APPROVE' ? '#1e8e3e' : (h.action === 'REJECT' || h.action === 'CANCEL') ? '#d93025' : h.action === 'RECALL' ? '#f59e0b' : '#1a73e8'}` }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span className={`badge ${h.action === 'APPROVE' ? 'badge-success' : h.action === 'REJECT' ? 'badge-danger' : 'badge-info'}`}>
-                            {h.action === 'APPROVE' ? 'Đã duyệt' : h.action === 'REJECT' ? 'Từ chối' : 'Trình duyệt'}
+                          <span className={`badge ${h.action === 'APPROVE' ? 'badge-success' : (h.action === 'REJECT' || h.action === 'CANCEL') ? 'badge-danger' : h.action === 'RECALL' ? 'badge-warning' : 'badge-info'}`}>
+                            {h.action === 'APPROVE' ? 'Đã duyệt' : h.action === 'REJECT' ? 'Từ chối' : h.action === 'RECALL' ? 'Thu hồi' : h.action === 'CANCEL' ? 'Đã hủy' : 'Trình duyệt'}
                           </span>
                           <strong style={{ fontSize: 13 }}>{h.stepName}</strong>
                         </div>
@@ -944,7 +1335,8 @@ export default function Record360Drawer({
                 </div>
               )}
             </div>
-          ) : tab === 'comments' ? (
+            );
+          })() : tab === 'comments' ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <form onSubmit={submitComment} className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1032,22 +1424,34 @@ export default function Record360Drawer({
                           <span style={{ fontWeight: 600, color: 'var(--text-secondary)', minWidth: 110 }}>{d.label}:</span>
                           {d.kind === 'changed' ? (
                             <>
-                              <span style={{ textDecoration: 'line-through', color: '#c5221f', backgroundColor: '#fce8e6', padding: '1px 6px', borderRadius: 4 }}>
+                              <span style={{ textDecoration: 'line-through', color: 'var(--danger-text)', backgroundColor: 'var(--danger-bg)', padding: '1px 6px', borderRadius: 4 }}>
                                 {formatAuditValue(d.oldVal)}
                               </span>
                               <ArrowForwardRoundedIcon sx={{ fontSize: 13, color: 'var(--text-muted)' }} />
-                              <span style={{ color: '#137333', backgroundColor: '#e6f4ea', padding: '1px 6px', borderRadius: 4, fontWeight: 600 }}>
+                              <span style={{ color: 'var(--success-text)', backgroundColor: 'var(--success-bg)', padding: '1px 6px', borderRadius: 4, fontWeight: 600 }}>
                                 {formatAuditValue(d.newVal)}
                               </span>
                             </>
                           ) : d.kind === 'added' ? (
-                            <span style={{ color: '#137333', backgroundColor: '#e6f4ea', padding: '1px 6px', borderRadius: 4, fontWeight: 500 }}>
+                            <span style={{ color: 'var(--success-text)', backgroundColor: 'var(--success-bg)', padding: '1px 6px', borderRadius: 4, fontWeight: 500 }}>
                               {formatAuditValue(d.newVal)}
                             </span>
                           ) : (
-                            <span style={{ textDecoration: 'line-through', color: '#c5221f', backgroundColor: '#fce8e6', padding: '1px 6px', borderRadius: 4 }}>
+                            <span style={{ textDecoration: 'line-through', color: 'var(--danger-text)', backgroundColor: 'var(--danger-bg)', padding: '1px 6px', borderRadius: 4 }}>
                               {formatAuditValue(d.oldVal)}
                             </span>
+                          )}
+                          {effectiveCanEdit && log.oldData && (d.kind === 'changed' || d.kind === 'removed') && (
+                            <button
+                              type="button"
+                              className="btn btn-outline btn-xs"
+                              style={{ marginLeft: 'auto', fontSize: 10.5, padding: '1px 7px' }}
+                              disabled={restoringAuditKey === `${log.id}_${d.key}`}
+                              onClick={() => void restoreAuditField(log.id, d.key)}
+                              title="Khôi phục giá trị trước khi thay đổi"
+                            >
+                              {restoringAuditKey === `${log.id}_${d.key}` ? 'Đang khôi phục...' : 'Khôi phục trường'}
+                            </button>
                           )}
                         </div>
                       ))}

@@ -37,17 +37,32 @@ export function CategoryFormModal({
   onSaved: (savedCode: string) => Promise<void> | void;
   toast?: (msg: string, type?: 'success' | 'error') => void;
 }) {
-  const [categoryCode, setCategoryCode] = useState('');
-  const [categoryName, setCategoryName] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setCategoryCode(editing?.categoryCode || '');
-    setCategoryName(editing?.categoryName || '');
-  }, [open, editing]);
-
   if (!open) return null;
+  return (
+    <CategoryFormModalBody
+      key={editing?.categoryCode || '__new__'}
+      editing={editing}
+      onClose={onClose}
+      onSaved={onSaved}
+      toast={toast}
+    />
+  );
+}
+
+function CategoryFormModalBody({
+  editing,
+  onClose,
+  onSaved,
+  toast,
+}: {
+  editing: SysCategory | null;
+  onClose: () => void;
+  onSaved: (savedCode: string) => Promise<void> | void;
+  toast?: (msg: string, type?: 'success' | 'error') => void;
+}) {
+  const [categoryCode, setCategoryCode] = useState(editing?.categoryCode || '');
+  const [categoryName, setCategoryName] = useState(editing?.categoryName || '');
+  const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -148,21 +163,40 @@ export function CategoryItemFormModal({
   onSaved: () => Promise<void> | void;
   toast?: (msg: string, type?: 'success' | 'error') => void;
 }) {
-  const [itemCode, setItemCode] = useState('');
-  const [itemName, setItemName] = useState('');
-  const [color, setColor] = useState('#1a73e8');
-  const [orderIndex, setOrderIndex] = useState(1);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setItemCode(editing?.itemCode || '');
-    setItemName(editing?.itemName || '');
-    setColor(editing?.color || '#1a73e8');
-    setOrderIndex(editing?.orderIndex ?? defaultOrder);
-  }, [open, editing, defaultOrder]);
-
   if (!open || !category) return null;
+  return (
+    <CategoryItemFormModalBody
+      key={`${category.categoryCode}:${editing?.id || '__new__'}`}
+      category={category}
+      editing={editing}
+      defaultOrder={defaultOrder}
+      onClose={onClose}
+      onSaved={onSaved}
+      toast={toast}
+    />
+  );
+}
+
+function CategoryItemFormModalBody({
+  category,
+  editing,
+  defaultOrder,
+  onClose,
+  onSaved,
+  toast,
+}: {
+  category: SysCategory;
+  editing: SysCategoryItem | null;
+  defaultOrder: number;
+  onClose: () => void;
+  onSaved: () => Promise<void> | void;
+  toast?: (msg: string, type?: 'success' | 'error') => void;
+}) {
+  const [itemCode, setItemCode] = useState(editing?.itemCode || '');
+  const [itemName, setItemName] = useState(editing?.itemName || '');
+  const [color, setColor] = useState(editing?.color || '#1a73e8');
+  const [orderIndex, setOrderIndex] = useState(editing?.orderIndex ?? defaultOrder);
+  const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -336,31 +370,58 @@ export function CategoryExportPreviewModal({
   onClose: () => void;
   toast?: (msg: string, type?: 'success' | 'error') => void;
 }) {
+  if (!open || !category) return null;
+  return (
+    <CategoryExportPreviewModalBody
+      key={category.categoryCode}
+      category={category}
+      items={items}
+      categoriesCount={categoriesCount}
+      onClose={onClose}
+      toast={toast}
+    />
+  );
+}
+
+function CategoryExportPreviewModalBody({
+  category,
+  items,
+  categoriesCount,
+  onClose,
+  toast,
+}: {
+  category: SysCategory;
+  items: SysCategoryItem[];
+  categoriesCount: number;
+  onClose: () => void;
+  toast?: (msg: string, type?: 'success' | 'error') => void;
+}) {
   const [scope, setScope] = useState<'current' | 'all'>('current');
   const [allItems, setAllItems] = useState<SysCategoryItem[]>([]);
   const [loadingAll, setLoadingAll] = useState(false);
-  const [fileName, setFileName] = useState('');
+  const [fileName, setFileName] = useState(`danh_muc_${category.categoryCode.toLowerCase()}.xlsx`);
 
   useEffect(() => {
-    if (!open || !category) return;
-    setScope('current');
-    setFileName(`danh_muc_${category.categoryCode.toLowerCase()}.xlsx`);
-  }, [open, category]);
-
-  useEffect(() => {
-    if (!open || scope !== 'all') return;
-    setLoadingAll(true);
-    fetch('/api/categories/items', { credentials: 'include' })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res?.success && Array.isArray(res.data)) {
-          setAllItems(res.data);
-        }
-      })
-      .finally(() => setLoadingAll(false));
-  }, [open, scope]);
-
-  if (!open || !category) return null;
+    if (scope !== 'all') return;
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      setLoadingAll(true);
+      fetch('/api/categories/items', { credentials: 'include' })
+        .then((r) => r.json())
+        .then((res) => {
+          if (!cancelled && res?.success && Array.isArray(res.data)) {
+            setAllItems(res.data);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingAll(false);
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [scope]);
 
   const previewRows = scope === 'current' ? items : allItems;
 
@@ -531,6 +592,32 @@ export function CategoryImportPreviewModal({
   onImported: () => Promise<void> | void;
   toast?: (msg: string, type?: 'success' | 'error') => void;
 }) {
+  if (!open) return null;
+  return (
+    <CategoryImportPreviewModalBody
+      key={category?.categoryCode || '__none__'}
+      category={category}
+      existingItems={existingItems}
+      onClose={onClose}
+      onImported={onImported}
+      toast={toast}
+    />
+  );
+}
+
+function CategoryImportPreviewModalBody({
+  category,
+  existingItems,
+  onClose,
+  onImported,
+  toast,
+}: {
+  category: SysCategory | null;
+  existingItems: SysCategoryItem[];
+  onClose: () => void;
+  onImported: () => Promise<void> | void;
+  toast?: (msg: string, type?: 'success' | 'error') => void;
+}) {
   const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState('');
@@ -558,16 +645,6 @@ export function CategoryImportPreviewModal({
     setOrderCol(findCol([/thứ tự/, /order/, /^stt$/]));
     setColorCol(findCol([/màu/, /color/]));
   };
-
-  useEffect(() => {
-    if (!open) {
-      setWorkbook(null);
-      setSheetNames([]);
-      setSelectedSheet('');
-      setHeaders([]);
-      setRawRows([]);
-    }
-  }, [open]);
 
   const existingByCode = useMemo(() => {
     const map = new Map<string, SysCategoryItem>();

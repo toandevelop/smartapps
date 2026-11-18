@@ -31,6 +31,9 @@ export default function ExcelImportDialog({ appId, moduleId, tableId, tableName,
   const [error, setError] = useState('');
   const [onlyErrors, setOnlyErrors] = useState(false);
   const [page, setPage] = useState(0);
+  const [aiMappingBusy, setAiMappingBusy] = useState(false);
+  const [aiMapHints, setAiMapHints] = useState<Record<string, { confidence: number; transformHint: string; reason?: string }>>({});
+  const [aiMapEngine, setAiMapEngine] = useState('');
   const admin = Boolean(user?.isAdmin || user?.roleCode === 'ADMIN' || user?.roleCodes?.includes('ADMIN'));
   const roles = useMemo(() => new Set([user?.roleCode, ...(user?.roleCodes || [])].map(r => r?.toUpperCase())), [user?.roleCode, user?.roleCodes]);
   const visibleColumns = useMemo(() => columns.filter(c => admin || !(c.hiddenForRoles || []).some(r => roles.has(r.toUpperCase()))), [columns, admin, roles]);
@@ -50,6 +53,54 @@ export default function ExcelImportDialog({ appId, moduleId, tableId, tableName,
   useEffect(() => { if (error || preview) summaryRef.current?.focus(); }, [error, preview]);
 
   const invalidate = () => { setPreview(null); setCheckedRequest(null); setError(''); setPage(0); };
+
+  const runAiImportMap = async () => {
+    if (headers.length === 0 || aiMappingBusy) return;
+    setAiMappingBusy(true);
+    setError('');
+    try {
+      const strHeaders = headers.map((h) => String(h ?? ''));
+      const sampleRows = sourceRows.slice(0, 3).map((row) =>
+        strHeaders.map((_, idx) => {
+          const v = row.values[idx];
+          return v === null || v === undefined ? null : String(v);
+        })
+      );
+      const res = await fetch('/api/records/ai-import-map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ tableId, headers: strHeaders, sampleRows }),
+      }).then((r) => r.json());
+      if (!res?.success || !res?.data?.mappings) {
+        setError(res?.message || 'AI gợi ý ghép cột chưa sẵn sàng.');
+        return;
+      }
+      invalidate();
+      const hints: Record<string, { confidence: number; transformHint: string; reason?: string }> = {};
+      const nextMapping = strHeaders.map((h) => {
+        const match = (res.data.mappings as Array<{ excelHeader: string; columnCode?: string; confidence?: number; transformHint?: string; reason?: string }>)
+          .find((m) => m.excelHeader === h);
+        if (match?.columnCode) {
+          hints[h] = {
+            confidence: match.confidence ?? 0.8,
+            transformHint: match.transformHint || 'NONE',
+            reason: match.reason,
+          };
+          if (match.transformHint === 'DATE_DMY') setDateFormat('dd/MM/yyyy');
+          if (match.transformHint === 'VND_INT') setNumberFormat('vi-VN');
+        }
+        return match?.columnCode || '';
+      });
+      setMapping(nextMapping);
+      setAiMapHints(hints);
+      setAiMapEngine(res.data.engine || 'AI Mapper');
+    } catch {
+      setError('Không kết nối được dịch vụ AI gợi ý ghép cột.');
+    } finally {
+      setAiMappingBusy(false);
+    }
+  };
 
   const selectSheet = (book: XLSX.WorkBook, name: string, row = 1) => {
     invalidate();
@@ -186,6 +237,10 @@ export default function ExcelImportDialog({ appId, moduleId, tableId, tableName,
               </select>
             </label>
             <label style={{ alignSelf: 'center' }}><input type="checkbox" checked={upsert} onChange={e => { invalidate(); setUpsert(e.target.checked); }} /> Cập nhật khi trùng mã định danh</label>
+            <button type="button" className="btn btn-outline btn-sm" style={{ alignSelf: 'center' }} disabled={aiMappingBusy || headers.length === 0} onClick={() => void runAiImportMap()}>
+              {aiMappingBusy ? 'AI đang phân tích cột...' : '✨ AI Gợi ý ghép cột'}
+            </button>
+            {aiMapEngine && <span style={{ alignSelf: 'center', fontSize: 12, color: 'var(--info-text)' }}>Nguồn: {aiMapEngine}</span>}
           </div>
           <p style={{ fontSize: 13 }}>Trường không ánh xạ được giữ nguyên khi cập nhật; ô trống trong cột đã ánh xạ sẽ xóa giá trị cũ. Dùng mã danh mục/liên kết, không dùng nhãn hiển thị. Mã có số 0 đầu cần lưu dạng văn bản trong Excel.</p>
           {duplicateMapping && <p id="mapping-error" role="alert" style={{ color: '#b3261e' }}>Mỗi trường đích chỉ được ánh xạ một lần.</p>}
@@ -200,7 +255,11 @@ export default function ExcelImportDialog({ appId, moduleId, tableId, tableName,
                   value={mapping[index] || ''} onChange={e => { invalidate(); setMapping(current => current.map((value, i) => i === index ? e.target.value : value)); }}>
                   <option value="">Bỏ qua cột này</option>
                   {importColumns.map(c => <option key={c.columnCode} value={c.columnCode}>{c.columnName} ({c.columnCode}){c.isRequired ? ' *' : ''}</option>)}
-                </select></td>
+                </select>{aiMapHints[String(header ?? '')]?.transformHint && aiMapHints[String(header ?? '')].transformHint !== 'NONE' && (
+                  <div style={{ fontSize: 11, color: 'var(--info-text)', marginTop: 3 }}>
+                    Chuẩn hóa gợi ý: {aiMapHints[String(header ?? '')].transformHint} ({Math.round(aiMapHints[String(header ?? '')].confidence * 100)}%)
+                  </div>
+                )}</td>
               </tr>)}</tbody>
             </table>
           </div>

@@ -6,7 +6,7 @@ test('anonymous public form enforces rules and resets defaults for a second subm
   const code = page.getByRole('textbox', { name: /^Mã phiếu/ });
   const mode = page.getByRole('textbox', { name: 'Chế độ', exact: true });
   const reason = page.getByRole('textbox', { name: /^Lý do/ });
-  const approved = page.getByRole('checkbox', { name: 'Xác nhận', exact: true });
+  const approved = page.getByRole('switch', { name: 'Xác nhận', exact: true });
   await expect(mode).toHaveValue('normal');
   await expect(approved).not.toBeChecked();
   await expect(page.getByRole('textbox', { name: 'Chi tiết', exact: true })).toHaveCount(0);
@@ -14,7 +14,7 @@ test('anonymous public form enforces rules and resets defaults for a second subm
   await mode.fill('show');
   const details = page.getByRole('textbox', { name: 'Chi tiết', exact: true });
   await details.fill('UNSAVED');
-  await approved.check();
+  await approved.click();
   await expect(details).toBeDisabled();
   await expect(details).toHaveValue('DEFAULT');
   await expect(reason).not.toHaveAttribute('required');
@@ -54,7 +54,7 @@ test('public form normalizes boolean default 1 and retains it for subsequent sub
   await qa.setApprovedDefault('1');
   await qa.openPublic(page);
   for (const code of ['PUBLIC-DEFAULT-FIRST', 'PUBLIC-DEFAULT-SECOND']) {
-    await expect(page.getByRole('checkbox', { name: 'Xác nhận', exact: true })).toBeChecked();
+    await expect(page.getByRole('switch', { name: 'Xác nhận', exact: true })).toBeChecked();
     await expect(page.getByRole('textbox', { name: 'Chế độ', exact: true })).toHaveValue('normal');
     await expect(page.getByRole('textbox', { name: /^Lý do/ })).not.toHaveAttribute('required');
     await page.getByRole('textbox', { name: /^Mã phiếu/ }).fill(code);

@@ -17,7 +17,7 @@ export interface ChildDraftRow {
   localKey: string;
   id?: string;
   version?: number;
-  data: Record<string, any>;
+  data: Record<string, unknown>;
   status: 'existing' | 'new' | 'edited' | 'deleted';
   approvalStatus?: string;
 }
@@ -97,11 +97,14 @@ export default function RelatedChildTabPanel({
   onChangeRows,
 }: RelatedChildTabPanelProps) {
   const { user } = useAuth();
-  const userRoles = user?.roleCodes?.length ? user.roleCodes : (user?.roleCode ? [user.roleCode] : []);
+  const userRoles = useMemo(
+    () => (user?.roleCodes?.length ? user.roleCodes : (user?.roleCode ? [user.roleCode] : [])),
+    [user]
+  );
   const isUserAdmin = Boolean(user?.isAdmin || userRoles.some((r) => r.toUpperCase() === 'ADMIN'));
 
   const [editingKey, setEditingKey] = useState<string | null>(null);
-  const [draftData, setDraftData] = useState<Record<string, any>>({});
+  const [draftData, setDraftData] = useState<Record<string, unknown>>({});
   const [rowError, setRowError] = useState('');
 
   const editableColumns = useMemo(() => {

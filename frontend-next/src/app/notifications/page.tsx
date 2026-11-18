@@ -77,18 +77,24 @@ export default function NotificationsPage() {
 
   useEffect(() => {
     if (!user) return;
-    loadNotifications();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadNotifications();
+    });
     fetch('/api/chat/users', { credentials: 'include' })
       .then((r) => r.json())
       .then((j) => {
-        if (j.success && Array.isArray(j.data)) setUsers(j.data);
+        if (!cancelled && j.success && Array.isArray(j.data)) setUsers(j.data);
       })
       .catch(() => null);
+    return () => {
+      cancelled = true;
+    };
   }, [user, loadNotifications]);
 
   useEffect(() => {
     const onRt = (e: Event) => {
-      const detail = (e as CustomEvent<any>).detail;
+      const detail = (e as CustomEvent<{ type?: string }>).detail;
       if (detail?.type === 'notification') loadNotifications();
     };
     window.addEventListener('smartapps_realtime', onRt);

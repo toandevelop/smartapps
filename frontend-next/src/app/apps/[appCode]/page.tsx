@@ -11,22 +11,24 @@ import {
   ConfirmDialog,
   NotificationSnackbar,
   EmptyState,
-  Record360Drawer,
-  AppActivityDrawer,
   KanbanBoardView,
   CalendarView,
   AnalyticsPanel,
-  PrintableRecordModal,
   AppDashboardView,
+  StructuredFilterBuilder,
 } from '@/app/components/ui';
-import { RecordEditorModal } from '@/app/studio/StudioModals';
-import AppPermissionsModal from '@/app/studio/AppPermissionsModal';
 import TasksAppWorkspace from '@/app/components/tasks/TasksAppWorkspace';
 import { usePlatform } from '@/lib/app-context';
 import { useAuth } from '@/lib/auth-context';
 import { batchFetchCategories, getCategoryItemName, getCategoryItems } from '@/lib/category-service';
 import { batchFetchLookups, getLookupOptions, resolveLookupLabel } from '@/lib/lookup-service';
-import { isTauriDesktop, openAppDesktopWindow, saveOfflineSnapshot, queueOfflineMutation } from '@/lib/tauri-bridge';
+import {
+  openAppDesktopWindow,
+  saveOfflineSnapshot,
+  loadOfflineSnapshot,
+  queueOfflineMutation,
+} from '@/lib/tauri-bridge';
+import { useIsTauriDesktop } from '@/lib/ui-hooks';
 import type { ChildRelationMutation } from '@/lib/types';
 import DeleteSweepRoundedIcon from '@mui/icons-material/DeleteSweepRounded';
 import RestoreFromTrashRoundedIcon from '@mui/icons-material/RestoreFromTrashRounded';
@@ -34,7 +36,13 @@ import BookmarkAddRoundedIcon from '@mui/icons-material/BookmarkAddRounded';
 import FilterListRoundedIcon from '@mui/icons-material/FilterListRounded';
 import KeyboardArrowDownRoundedIcon from '@mui/icons-material/KeyboardArrowDownRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
-import { AppRecord, AppRuntimeTree, SysColumn, SysModule, SysTable, SysSavedView } from '@/lib/types';
+import { AppRecord, AppRuntimeTree, StructuredQueryFilter, SysColumn, SysModule, SysTable, SysSavedView } from '@/lib/types';
+import {
+  buildEffectiveFiltersPayload,
+  describeCondition,
+  EMPTY_STRUCTURED_FILTER,
+  normalizeSavedViewFilters,
+} from '@/lib/query-filter';
 
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import DesignServicesRoundedIcon from '@mui/icons-material/DesignServicesRounded';
@@ -53,9 +61,20 @@ import ShieldRoundedIcon from '@mui/icons-material/ShieldRounded';
 import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
 import AdminPanelSettingsRoundedIcon from '@mui/icons-material/AdminPanelSettingsRounded';
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded';
+import EditRoundedIcon from '@mui/icons-material/EditRounded';
+import PrintRoundedIcon from '@mui/icons-material/PrintRounded';
+import DynamicFieldInput from '@/app/components/ui/DynamicFieldInput';
 import { useEscapeKey } from '@/lib/ui-hooks';
 
 const ExcelImportDialog = dynamic(() => import('@/app/components/import/ExcelImportDialog'), { ssr: false });
+const Record360Drawer = dynamic(() => import('@/app/components/ui/Record360Drawer'), { ssr: false });
+const AppActivityDrawer = dynamic(() => import('@/app/components/ui/AppActivityDrawer'), { ssr: false });
+const PrintableRecordModal = dynamic(() => import('@/app/components/ui/PrintableRecordModal'), { ssr: false });
+const RecordEditorModal = dynamic(
+  () => import('@/app/studio/StudioModals').then((m) => m.RecordEditorModal),
+  { ssr: false }
+);
+const AppPermissionsModal = dynamic(() => import('@/app/studio/AppPermissionsModal'), { ssr: false });
 
 export default function DynamicAppRuntimePage() {
   const params = useParams();
@@ -82,7 +101,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
   const [appSection, setAppSection] = useState<'dashboard' | 'data'>(() =>
     searchParams?.get('tab') === 'dashboard' ? 'dashboard' : 'data'
   );
-  const [appViewMode, setAppViewMode] = useState<'admin' | 'personal'>('admin');
+  const [appViewModes, setAppViewModes] = useState<Record<string, 'admin' | 'personal'>>({});
   const [showAppPermModal, setShowAppPermModal] = useState(false);
   const [showActivityDrawer, setShowActivityDrawer] = useState(false);
   const [tree, setTree] = useState<AppRuntimeTree | null>(null);
@@ -108,28 +127,50 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
   const [saving, setSaving] = useState(false);
   const [validating, setValidating] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [inDesktop, setInDesktop] = useState(false);
+  const inDesktop = useIsTauriDesktop();
   const [showTrash, setShowTrash] = useState(false);
   const [trashRecords, setTrashRecords] = useState<AppRecord[]>([]);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showUtilityMenu, setShowUtilityMenu] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
   const [showSaveViewModal, setShowSaveViewModal] = useState(false);
   const [saveViewName, setSaveViewName] = useState('');
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [bulkField, setBulkField] = useState('');
+  const [bulkValue, setBulkValue] = useState<string>('');
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [showPrintList, setShowPrintList] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<AppRecord | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   useEscapeKey(showTrash, () => setShowTrash(false));
+  useEscapeKey(showExportMenu, () => setShowExportMenu(false));
   useEscapeKey(showSaveViewModal, () => setShowSaveViewModal(false));
+  useEscapeKey(showBulkEdit, () => !bulkSaving && setShowBulkEdit(false));
+  useEscapeKey(showPrintList, () => setShowPrintList(false));
   useEscapeKey(Boolean(rejectTarget), () => setRejectTarget(null));
   const [refFilterVersion, setRefFilterVersion] = useState(0);
   const [savedViews, setSavedViews] = useState<SysSavedView[]>([]);
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const [structuredFilter, setStructuredFilter] = useState<StructuredQueryFilter>(EMPTY_STRUCTURED_FILTER);
+  const [filterBuilderKey, setFilterBuilderKey] = useState(0);
+  const [previewDraft, setPreviewDraft] = useState(false);
+  const [conflictState, setConflictState] = useState<{
+    recordId: string;
+    recordKey?: string | null;
+    field: string;
+    fieldLabel: string;
+    attemptedValue: unknown;
+    serverMessage: string;
+  } | null>(null);
+  const [resolvingConflict, setResolvingConflict] = useState(false);
   const [sortField, setSortField] = useState('');
   const [sortDir, setSortDir] = useState<'ASC' | 'DESC'>('DESC');
   const [filterCol, setFilterCol] = useState('');
   const [filterVal, setFilterVal] = useState('');
 
   const utilityRef = useRef<HTMLDivElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
   const [confirm, setConfirm] = useState<{ open: boolean; title: string; message: string; onConfirm: () => void }>({
     open: false,
@@ -137,19 +178,30 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
     message: '',
     onConfirm: () => {},
   });
-  const [snack, setSnack] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' }>({
+  const [snack, setSnack] = useState<{
+    open: boolean;
+    message: string;
+    severity: 'success' | 'error' | 'info';
+    actionLabel?: string;
+    onAction?: () => void;
+  }>({
     open: false,
     message: '',
     severity: 'info',
   });
-  const toast = (message: string, severity: 'success' | 'error' | 'info' = 'success') =>
-    setSnack({ open: true, message, severity });
+  const toast = (
+    message: string,
+    severity: 'success' | 'error' | 'info' = 'success',
+    options?: { actionLabel?: string; onAction?: () => void }
+  ) => setSnack({ open: true, message, severity, actionLabel: options?.actionLabel, onAction: options?.onAction });
 
   useEffect(() => {
-    setInDesktop(isTauriDesktop());
     const onDocDown = (e: MouseEvent) => {
       if (utilityRef.current && !utilityRef.current.contains(e.target as Node)) {
         setShowUtilityMenu(false);
+      }
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setShowExportMenu(false);
       }
     };
     document.addEventListener('mousedown', onDocDown);
@@ -160,7 +212,8 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
     if (!appCode) return;
     setLoadingTree(true);
     try {
-      const res = await fetch(`/api/apps/${encodeURIComponent(appCode)}`).then((r) => r.json());
+      const qs = previewDraft ? '?previewDraft=true' : '';
+      const res = await fetch(`/api/apps/${encodeURIComponent(appCode)}${qs}`).then((r) => r.json());
       if (res.success && res.data) {
         const data: AppRuntimeTree = res.data;
         setTree(data);
@@ -184,13 +237,31 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
       } else {
         setTree(null);
       }
+    } catch {
+      const snap = await loadOfflineSnapshot<{ tree: AppRuntimeTree; records: AppRecord[] }>(appCode, user?.username);
+      if (snap?.tree) {
+        setTree(snap.tree);
+        if (Array.isArray(snap.records)) setRecords(snap.records);
+        const firstMod = snap.tree.modules[0]?.module;
+        const firstTbl = snap.tree.modules[0]?.tables[0]?.table;
+        if (firstMod) setActiveModId((prev) => prev || firstMod.id);
+        if (firstTbl) setActiveTableId((prev) => prev || firstTbl.id);
+      } else {
+        setTree(null);
+      }
     } finally {
       setLoadingTree(false);
     }
-  }, [appCode]);
+  }, [appCode, previewDraft, searchParams, user?.username]);
 
   useEffect(() => {
-    loadAppTree();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadAppTree();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadAppTree]);
 
   const currentModNode = tree?.modules.find((m) => m.module.id === activeModId) || tree?.modules[0];
@@ -211,6 +282,15 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
   }, [activeColumns]);
 
   const kanbanColumn = useMemo(() => activeColumns.find((c) => Boolean(c.refCategoryCode)), [activeColumns]);
+  const kanbanGroupableColumns = useMemo(
+    () => activeColumns.filter((c) => Boolean(c.refCategoryCode) || c.dataType.toUpperCase() === 'SELECT'),
+    [activeColumns],
+  );
+  const canKanban = kanbanGroupableColumns.length > 0 || Boolean(activeTable?.approvalEnabled);
+  const effectiveFilters = useMemo(
+    () => buildEffectiveFiltersPayload(columnFilters, structuredFilter),
+    [columnFilters, structuredFilter],
+  );
   const calendarColumn = useMemo(
     () => activeColumns.find((c) => c.dataType.toUpperCase() === 'DATE'),
     [activeColumns]
@@ -218,11 +298,11 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
 
   const resolvedAppCode = tree?.app?.code || appCode;
   const userIsAppAdmin = isAppAdmin(resolvedAppCode);
+  const viewKey = `${user?.username || ''}:${resolvedAppCode}`;
+  const appViewMode: 'admin' | 'personal' = !userIsAppAdmin ? 'personal' : (appViewModes[viewKey] ?? 'admin');
+  const setAppViewMode = (mode: 'admin' | 'personal') =>
+    setAppViewModes((prev) => ({ ...prev, [viewKey]: mode }));
   const effectivePersonalMode = !userIsAppAdmin || appViewMode === 'personal';
-
-  useEffect(() => {
-    setAppViewMode(userIsAppAdmin ? 'admin' : 'personal');
-  }, [userIsAppAdmin, user?.username, resolvedAppCode]);
 
   const loadRecords = useCallback(async () => {
     if (!tree?.app || !activeTable) {
@@ -241,7 +321,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
       });
       if (effectivePersonalMode) qs.set('personalMode', 'true');
       if (search.trim()) qs.set('search', search.trim());
-      if (Object.keys(columnFilters).length > 0) qs.set('filters', JSON.stringify(columnFilters));
+      if (effectiveFilters) qs.set('filters', JSON.stringify(effectiveFilters));
       if (sortField) {
         qs.set('sortField', sortField);
         qs.set('sortDir', sortDir);
@@ -255,7 +335,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
     } finally {
       setLoadingRecords(false);
     }
-  }, [tree, activeTable, page, pageSize, search, statusFilter, columnFilters, sortField, sortDir, effectivePersonalMode]);
+  }, [tree, activeTable, page, pageSize, search, statusFilter, effectiveFilters, sortField, sortDir, effectivePersonalMode]);
 
   const loadSavedViews = useCallback(async () => {
     if (!activeTable) {
@@ -269,11 +349,23 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
   }, [activeTable]);
 
   useEffect(() => {
-    loadSavedViews();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadSavedViews();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadSavedViews]);
 
   useEffect(() => {
-    loadRecords();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadRecords();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadRecords]);
 
   useEffect(() => {
@@ -288,10 +380,11 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
     return () => window.removeEventListener('smartapps_realtime', onRt);
   }, [activeTable?.id, appCode, loadRecords]);
 
+  const employeeCode = user?.employeeCode;
   const personalFormDefaults = useMemo(() => {
-    const defaults: Record<string, any> = {};
+    const defaults: Record<string, unknown> = {};
     const locked: string[] = [];
-    if (!effectivePersonalMode || !user?.employeeCode) {
+    if (!effectivePersonalMode || !employeeCode) {
       return { defaults, locked };
     }
     for (const c of activeColumns) {
@@ -299,12 +392,12 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
         c.refTableId === 'tbl_hrm_nhanvien' ||
         ['ho_ten_nv', 'nhan_vien', 'nguoi_tao', 'nguoi_nhan'].includes(c.columnCode)
       ) {
-        defaults[c.columnCode] = user.employeeCode;
+        defaults[c.columnCode] = employeeCode;
         locked.push(c.columnCode);
       }
     }
     return { defaults, locked };
-  }, [effectivePersonalMode, user?.employeeCode, activeColumns]);
+  }, [effectivePersonalMode, employeeCode, activeColumns]);
 
   if (!canAccessApp(appCode)) {
     return (
@@ -331,7 +424,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
   const canManageWidgets = hasAppPermission(resolvedAppCode, 'widget.manage');
   const canStudio = hasPermission('studio.manage');
 
-  const saveRecord = async (data: Record<string, any>, childMutations: ChildRelationMutation[] = []) => {
+  const saveRecord = async (data: Record<string, unknown>, childMutations: ChildRelationMutation[] = []) => {
     if (!tree?.app || !activeModule || !activeTable) return;
     setSaving(true);
     const hasChildMutations = childMutations.length > 0;
@@ -488,16 +581,18 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
     }
   };
 
-  const handleExportExcel = async () => {
+  const handleExportExcel = async (ignoreFilters = false) => {
     if (!activeTable || exporting) return;
     const table = activeTable;
-    const qs = new URLSearchParams({ tableId: table.id, status: statusFilter });
+    const qs = new URLSearchParams({ tableId: table.id, status: ignoreFilters ? 'ALL' : statusFilter });
     if (effectivePersonalMode) qs.set('personalMode', 'true');
-    if (search.trim()) qs.set('search', search.trim());
-    if (Object.keys(columnFilters).length > 0) qs.set('filters', JSON.stringify(columnFilters));
-    if (sortField) { qs.set('sortField', sortField); qs.set('sortDir', sortDir); }
+    if (!ignoreFilters) {
+      if (search.trim()) qs.set('search', search.trim());
+      if (effectiveFilters) qs.set('filters', JSON.stringify(effectiveFilters));
+      if (sortField) { qs.set('sortField', sortField); qs.set('sortDir', sortDir); }
+    }
     setExporting(true);
-    toast('Đang xuất toàn bộ kết quả theo bộ lọc hiện tại...', 'info');
+    toast(ignoreFilters ? 'Đang xuất toàn bộ dữ liệu bảng ra Excel...' : 'Đang xuất toàn bộ kết quả theo bộ lọc hiện tại...', 'info');
     try {
       const response = await fetch(`/api/records/export?${qs}`, { credentials: 'include' });
       if (!response.ok) {
@@ -508,12 +603,12 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${table.tableName}.xlsx`;
+      link.download = `${table.tableName}${ignoreFilters ? '_all' : ''}.xlsx`;
       document.body.appendChild(link);
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      toast('Đã xuất toàn bộ kết quả lọc ra Excel.');
+      toast(ignoreFilters ? 'Đã xuất toàn bộ bảng ra Excel.' : 'Đã xuất toàn bộ kết quả lọc ra Excel.');
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Lỗi kết nối khi xuất Excel.', 'error');
     } finally {
@@ -521,8 +616,99 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
     }
   };
 
+  /** Patches a single cell with optimistic locking (version) and surfaces a 409 Conflict modal if stale. */
+  const patchCellWithConflict = async (
+    recordId: string,
+    field: string,
+    nextVal: unknown,
+    expectedVersionOverride?: number,
+  ): Promise<boolean> => {
+    const rec = records.find((r) => r.id === recordId);
+    const expectedVersion = expectedVersionOverride !== undefined ? expectedVersionOverride : rec?.version;
+    const response = await fetch(`/api/records/${recordId}/cell`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ field, value: nextVal, expectedVersion }),
+    });
+    const res = await response.json().catch(() => null);
+    if (response.status === 409) {
+      const colObj = activeColumns.find((c) => c.columnCode === field);
+      setConflictState({
+        recordId,
+        recordKey: rec?.recordKey || null,
+        field,
+        fieldLabel: colObj?.columnName || field,
+        attemptedValue: nextVal,
+        serverMessage: res?.message || res?.error || 'Bản ghi vừa được cập nhật bởi người dùng khác.',
+      });
+      await loadRecords();
+      return false;
+    }
+    if (res?.success) {
+      await loadRecords();
+      const autoList: string[] = res.triggeredAutomations || [];
+      toast(autoList.length > 0 ? `Đã lưu & chạy tự động: ${autoList.join(', ')}` : 'Đã lưu thay đổi');
+      return true;
+    }
+    toast(res?.message || res?.error || 'Không thể lưu thay đổi', 'error');
+    return false;
+  };
+
+  const handleDownloadExcelTemplate = async () => {
+    if (!activeTable) return;
+    try {
+      const XLSX = await import('xlsx');
+      const templateCols = activeColumns.filter((c) => c.dataType !== 'AUTO_NUMBER' && !c.formula);
+      const headers = templateCols.map((c) => c.excelHeader || c.columnName || c.columnCode);
+      const ws = XLSX.utils.aoa_to_sheet([headers]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, activeTable.displayName.slice(0, 31) || 'MauNhap');
+      XLSX.writeFile(wb, `${activeTable.tableName}_template.xlsx`);
+      toast('Đã tải xuống file mẫu nhập Excel.');
+    } catch {
+      toast('Không thể tạo file mẫu Excel.', 'error');
+    }
+  };
+
   if (loadingTree) {
-    return <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>Đang nạp cấu trúc App...</div>;
+    return (
+      <div className="page-content" aria-busy="true" aria-label="Đang nạp cấu trúc ứng dụng">
+        <div className="card" style={{ padding: 20, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div className="skeleton-box" style={{ width: 44, height: 44, borderRadius: 12 }} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className="skeleton-box" style={{ height: 18, width: 220 }} />
+              <div className="skeleton-box" style={{ height: 12, width: 320 }} />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div className="skeleton-box" style={{ height: 34, width: 110 }} />
+            <div className="skeleton-box" style={{ height: 34, width: 120 }} />
+          </div>
+        </div>
+        <div className="app-workspace-grid">
+          <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="skeleton-box" style={{ height: 14, width: '60%', marginBottom: 6 }} />
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={`rail-sk-${i}`} className="skeleton-box" style={{ height: 34, width: '100%' }} />
+            ))}
+          </div>
+          <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div className="skeleton-box" style={{ height: 20, width: 200 }} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div className="skeleton-box" style={{ height: 32, width: 110 }} />
+                <div className="skeleton-box" style={{ height: 32, width: 130 }} />
+              </div>
+            </div>
+            {Array.from({ length: 6 }).map((_, r) => (
+              <div key={`tbl-sk-${r}`} className="skeleton-box" style={{ height: 38, width: '100%' }} />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (!tree) {
@@ -543,6 +729,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
 
   const validRows = records.filter((r) => r.status !== 'ERROR').length;
   const errorRows = records.filter((r) => r.status === 'ERROR').length;
+  const activeFilterCount = Object.keys(columnFilters).length + structuredFilter.conditions.length;
 
   return (
     <div>
@@ -576,10 +763,21 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
               </button>
             )}
             {canStudio && (
-              <Link href={`/studio?appId=${encodeURIComponent(tree.app.id)}`} className="btn btn-outline btn-sm">
-                <DesignServicesRoundedIcon sx={{ fontSize: 16 }} />
-                Cấu trúc App
-              </Link>
+              <>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${previewDraft ? 'btn-primary' : 'btn-outline'}`}
+                  style={previewDraft ? { backgroundColor: '#b06000', borderColor: '#b06000', color: '#ffffff' } : undefined}
+                  onClick={() => setPreviewDraft((prev) => !prev)}
+                  title={previewDraft ? 'Quay lại xem Bản Phát hành chính thức' : 'Xem thử Bản Nháp đang thiết kế trong Studio (chưa Publish)'}
+                >
+                  {previewDraft ? 'Đang xem: Bản Nháp' : 'Xem Bản Nháp'}
+                </button>
+                <Link href={`/studio?appId=${encodeURIComponent(tree.app.id)}`} className="btn btn-outline btn-sm">
+                  <DesignServicesRoundedIcon sx={{ fontSize: 16 }} />
+                  Cấu trúc App
+                </Link>
+              </>
             )}
 
             {(activeTable || inDesktop) && (
@@ -789,8 +987,8 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                           type="button"
                           onClick={async () => {
                             setShowUtilityMenu(false);
-                            const p = await saveOfflineSnapshot(tree.app.code, { tree, records });
-                            if (p) toast(`Đã lưu offline snapshot: ${p}`);
+                            const p = await saveOfflineSnapshot(tree.app.code, { tree, records }, user?.username);
+                            if (p) toast(`Đã lưu offline snapshot (${p})`);
                           }}
                           style={{
                             display: 'flex',
@@ -829,7 +1027,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                 }}
               >
                 <AddRoundedIcon sx={{ fontSize: 17 }} />
-                {tree.app.settings?.primaryActionLabel || `Thêm ${activeTable.displayName}`}
+                {String(tree.app.settings?.primaryActionLabel || '') || `Thêm ${activeTable.displayName}`}
               </button>
             )}
           </div>
@@ -837,6 +1035,36 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
       />
 
       <div className="page-content">
+        {previewDraft && (
+          <div
+            style={{
+              padding: '10px 14px',
+              borderRadius: 10,
+              backgroundColor: 'var(--warning-bg)',
+              border: '1px solid var(--warning-border)',
+              color: 'var(--warning-text)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 10,
+              fontSize: 12.5,
+            }}
+          >
+            <div>
+              <strong>Chế độ xem thử Bản Nháp (Draft Preview):</strong> Bạn đang xem trực tiếp cấu trúc chưa phát hành trong Studio
+              {tree.app.publishStatus ? ` (Trạng thái hiện tại: ${tree.app.publishStatus})` : ''}. Người dùng thường vẫn chạy Bản Phát hành ổn định.
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Link href={`/studio?appId=${encodeURIComponent(tree.app.id)}`} className="btn btn-outline btn-xs">
+                Mở Studio để Phát hành
+              </Link>
+              <button type="button" className="btn btn-primary btn-xs" onClick={() => setPreviewDraft(false)}>
+                Về Bản Phát hành
+              </button>
+            </div>
+          </div>
+        )}
         {/* App Top Mode Bar + Compact Status Strip */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -1058,7 +1286,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                 >
                   <TableViewRoundedIcon sx={{ fontSize: 14 }} /> Bảng động
                 </button>
-                {kanbanColumn && (
+                {canKanban && (
                   <button
                     type="button"
                     className={`btn btn-xs ${viewMode === 'kanban' ? 'btn-primary' : 'btn-outline'}`}
@@ -1086,19 +1314,19 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                 {viewMode !== 'analytics' && (
                   <button
                     type="button"
-                    className={`btn btn-xs ${showAdvancedFilter || Object.keys(columnFilters).length > 0 ? 'btn-secondary' : 'btn-outline'}`}
+                    className={`btn btn-xs ${showAdvancedFilter || activeFilterCount > 0 ? 'btn-secondary' : 'btn-outline'}`}
                     onClick={() => setShowAdvancedFilter((v) => !v)}
-                    title="Mở bộ lọc theo cột, sắp xếp và chế độ xem đã lưu"
+                    title="Mở bộ lọc nhanh, truy vấn nâng cao AND/OR và chế độ xem đã lưu"
                   >
                     <FilterListRoundedIcon sx={{ fontSize: 14 }} />
-                    Lọc &amp; Xem{Object.keys(columnFilters).length > 0 ? ` (${Object.keys(columnFilters).length})` : ''}
+                    Lọc &amp; Xem{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
                   </button>
                 )}
               </div>
             )}
           </div>
 
-          {activeTable && viewMode !== 'analytics' && (showAdvancedFilter || Object.keys(columnFilters).length > 0 || savedViews.length > 0) && (
+          {activeTable && viewMode !== 'analytics' && (showAdvancedFilter || activeFilterCount > 0 || savedViews.length > 0) && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 10, borderTop: '1px solid var(--border-light)' }}>
               {showAdvancedFilter && (() => {
                 const selectedFilterColumn = activeColumns.find((c) => c.columnCode === filterCol);
@@ -1205,28 +1433,26 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                         Áp dụng
                       </button>
 
-                      <select
-                        className="form-select"
-                        style={{ width: 160, height: 32, fontSize: 12.5, padding: '2px 8px' }}
-                        value={sortField}
-                        onChange={(e) => {
-                          setSortField(e.target.value);
-                          setPage(1);
-                        }}
-                      >
-                        <option value="">Sắp xếp: Mới nhất</option>
-                        {activeColumns.filter((c) => c.dataType !== 'SUB_TABLE').map((c) => (
-                          <option key={c.id} value={c.columnCode}>Xếp theo: {c.columnName}</option>
-                        ))}
-                      </select>
                       {sortField && (
-                        <button
-                          type="button"
-                          className="btn btn-outline btn-xs"
-                          onClick={() => setSortDir((d) => (d === 'ASC' ? 'DESC' : 'ASC'))}
+                        <span
+                          className="badge badge-info"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5 }}
+                          title="Nhấp vào tiêu đề cột trên bảng để đổi thứ tự sắp xếp"
                         >
-                          {sortDir === 'ASC' ? 'Tăng dần ↑' : 'Giảm dần ↓'}
-                        </button>
+                          Sắp xếp: {activeColumns.find((c) => c.columnCode === sortField)?.columnName || sortField} ({sortDir === 'ASC' ? '↑' : '↓'})
+                          <button
+                            type="button"
+                            style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, color: 'inherit', fontWeight: 700 }}
+                            onClick={() => {
+                              setSortField('');
+                              setSortDir('DESC');
+                              setPage(1);
+                            }}
+                            title="Khôi phục sắp xếp mặc định (Mới nhất)"
+                          >
+                            ×
+                          </button>
+                        </span>
                       )}
                     </div>
 
@@ -1244,7 +1470,24 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                 );
               })()}
 
-              {(Object.keys(columnFilters).length > 0 || savedViews.length > 0) && (
+              {showAdvancedFilter && (
+                <StructuredFilterBuilder
+                  key={`${activeTable.id}_${filterBuilderKey}`}
+                  columns={activeColumns}
+                  approvalEnabled={Boolean(activeTable.approvalEnabled)}
+                  value={structuredFilter}
+                  onApply={(next) => {
+                    setStructuredFilter(next);
+                    setPage(1);
+                  }}
+                  onClear={() => {
+                    setStructuredFilter(EMPTY_STRUCTURED_FILTER);
+                    setPage(1);
+                  }}
+                />
+              )}
+
+              {(activeFilterCount > 0 || savedViews.length > 0) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   {savedViews.length > 0 && (
                     <span style={{ fontSize: 11.5, color: 'var(--text-muted)', fontWeight: 600 }}>Chế độ xem:</span>
@@ -1253,7 +1496,10 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                     <span key={sv.id} className="badge badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
                       <span
                         onClick={() => {
-                          setColumnFilters(sv.filters || {});
+                          const norm = normalizeSavedViewFilters(sv.filters);
+                          setColumnFilters(norm.flatFilters);
+                          setStructuredFilter(norm.structured);
+                          setFilterBuilderKey((k) => k + 1);
                           setSortField(sv.sortField || '');
                           setSortDir(sv.sortDir === 'ASC' ? 'ASC' : 'DESC');
                           setPage(1);
@@ -1269,6 +1515,30 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                           await loadSavedViews();
                         }}
                         title="Xóa chế độ xem"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  {structuredFilter.conditions.length > 0 && (
+                    <span className="badge" style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)', fontSize: 11 }}>
+                      Logic: <strong>{structuredFilter.logic}</strong>
+                    </span>
+                  )}
+                  {structuredFilter.conditions.map((cond, idx) => (
+                    <span key={`sc_${idx}`} className="badge badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      {describeCondition(cond, activeColumns)}
+                      <button
+                        type="button"
+                        style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, color: 'inherit', fontWeight: 700 }}
+                        onClick={() => {
+                          setStructuredFilter((prev) => ({
+                            ...prev,
+                            conditions: prev.conditions.filter((_, i) => i !== idx),
+                          }));
+                          setFilterBuilderKey((k) => k + 1);
+                          setPage(1);
+                        }}
                       >
                         ×
                       </button>
@@ -1369,11 +1639,14 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
 
         {/* Dynamic Views */}
         {activeTable ? (
-          viewMode === 'kanban' && kanbanColumn ? (
+          viewMode === 'kanban' && canKanban ? (
             <KanbanBoardView
               groupColumn={kanbanColumn}
+              groupableColumns={kanbanGroupableColumns}
+              approvalEnabled={Boolean(activeTable.approvalEnabled)}
               columns={activeColumns}
               records={records}
+              onInspectRelations={(rec) => setDrawerRecord(rec)}
               onEditRecord={(rec) => {
                 if (!canEdit) return;
                 setEditingRecord(rec);
@@ -1384,16 +1657,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                   toast('Vai trò của bạn chỉ có quyền xem, không được sửa.', 'error');
                   return;
                 }
-                const res = await fetch(`/api/records/${recordId}/cell`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ field, value: nextVal }),
-                }).then((r) => r.json());
-                if (res.success) {
-                  await loadRecords();
-                  const autoList: string[] = res.triggeredAutomations || [];
-                  toast(autoList.length > 0 ? `Đã cập nhật & chạy tự động: ${autoList.join(', ')}` : 'Đã chuyển trạng thái trên Kanban!');
-                }
+                await patchCellWithConflict(recordId, field, nextVal);
               }}
             />
           ) : viewMode === 'calendar' && calendarColumn ? (
@@ -1405,18 +1669,188 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
               onSelectRecord={(rec) => setDrawerRecord(rec)}
             />
           ) : viewMode === 'analytics' ? (
-            <AnalyticsPanel tableId={activeTable.id} />
+            <AnalyticsPanel key={activeTable.id} tableId={activeTable.id} />
           ) : (
             <DynamicDataTable
               title={activeTable.displayName}
               subtitle={activeTable.description || `Bảng động ${activeTable.tableName}`}
               badge={<span className="badge badge-info">{activeColumns.length} trường</span>}
+              headerActions={
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {canExport && (
+                    <div ref={exportMenuRef} style={{ position: 'relative', display: 'inline-flex' }}>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-sm"
+                        disabled={exporting}
+                        aria-busy={exporting}
+                        onClick={() => handleExportExcel(false)}
+                        title="Xuất Excel theo bộ lọc hiện tại"
+                        style={{
+                          borderTopRightRadius: 0,
+                          borderBottomRightRadius: 0,
+                          borderRight: 'none',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                        }}
+                      >
+                        <CloudDownloadRoundedIcon sx={{ fontSize: 16 }} />
+                        <span>{exporting ? 'Đang xuất...' : 'Xuất Excel'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-sm"
+                        disabled={exporting}
+                        aria-label="Tùy chọn xuất Excel"
+                        aria-expanded={showExportMenu}
+                        onClick={() => setShowExportMenu((v) => !v)}
+                        style={{
+                          borderTopLeftRadius: 0,
+                          borderBottomLeftRadius: 0,
+                          paddingLeft: 6,
+                          paddingRight: 6,
+                        }}
+                      >
+                        <KeyboardArrowDownRoundedIcon sx={{ fontSize: 16 }} />
+                      </button>
+                      {showExportMenu && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: 'calc(100% + 6px)',
+                            right: 0,
+                            minWidth: 230,
+                            backgroundColor: 'var(--bg-surface)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: 10,
+                            boxShadow: 'var(--shadow-lg)',
+                            padding: 6,
+                            zIndex: 40,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 2,
+                          }}
+                        >
+                          <button
+                            type="button"
+                            className="utility-menu-item"
+                            onClick={() => {
+                              setShowExportMenu(false);
+                              handleExportExcel(false);
+                            }}
+                            style={{
+                              width: '100%',
+                              textAlign: 'left',
+                              padding: '8px 10px',
+                              border: 'none',
+                              borderRadius: 6,
+                              background: 'transparent',
+                              cursor: 'pointer',
+                              fontSize: 13,
+                              fontWeight: 500,
+                              color: 'var(--text-primary)',
+                            }}
+                          >
+                            Xuất kết quả đang lọc (.xlsx)
+                          </button>
+                          <button
+                            type="button"
+                            className="utility-menu-item"
+                            onClick={() => {
+                              setShowExportMenu(false);
+                              handleExportExcel(true);
+                            }}
+                            style={{
+                              width: '100%',
+                              textAlign: 'left',
+                              padding: '8px 10px',
+                              border: 'none',
+                              borderRadius: 6,
+                              background: 'transparent',
+                              cursor: 'pointer',
+                              fontSize: 13,
+                              fontWeight: 500,
+                              color: 'var(--text-primary)',
+                            }}
+                          >
+                            Xuất toàn bộ bảng (.xlsx)
+                          </button>
+                          <button
+                            type="button"
+                            className="utility-menu-item"
+                            onClick={() => {
+                              setShowExportMenu(false);
+                              handleDownloadExcelTemplate();
+                            }}
+                            style={{
+                              width: '100%',
+                              textAlign: 'left',
+                              padding: '8px 10px',
+                              border: 'none',
+                              borderRadius: 6,
+                              background: 'transparent',
+                              cursor: 'pointer',
+                              fontSize: 13,
+                              fontWeight: 500,
+                              color: 'var(--text-primary)',
+                            }}
+                          >
+                            Tải file mẫu nhập (.xlsx)
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => setShowPrintList(true)}
+                    title={`In danh sách ${activeTable.displayName} (A4)`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <PrintRoundedIcon sx={{ fontSize: 16 }} />
+                    <span>In danh sách</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => setShowActivityDrawer(true)}
+                    title={`Lịch sử thao tác (${activeTable.displayName})`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <HistoryRoundedIcon sx={{ fontSize: 16 }} />
+                    <span>Lịch sử thao tác</span>
+                  </button>
+                </div>
+              }
               columns={activeColumns}
               records={records}
               loading={loadingRecords}
-              enableSelection={canDelete}
+              enableSelection={canDelete || canEdit}
               selectedIds={selectedIds}
               onSelectionChange={setSelectedIds}
+              batchActions={
+                canEdit && selectedIds.length > 0 ? (
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-xs"
+                    onClick={() => {
+                      const editable = activeColumns.filter(
+                        (c) =>
+                          !c.formula &&
+                          !c.isIdentityKey &&
+                          !['AUTO_NUMBER', 'SUB_TABLE', 'FILE', 'IMAGE'].includes((c.dataType || '').toUpperCase())
+                      );
+                      setBulkField(editable[0]?.columnCode || '');
+                      setBulkValue('');
+                      setShowBulkEdit(true);
+                    }}
+                  >
+                    <EditRoundedIcon sx={{ fontSize: 14 }} /> Cập nhật hàng loạt
+                  </button>
+                ) : undefined
+              }
               inlineEditEnabled={canEdit}
               searchValue={search}
               onSearchChange={(v) => {
@@ -1436,6 +1870,15 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                 ],
               }}
               storageKey={`${tree.app.code}_${activeTable.id}`}
+              serverSort={{
+                sortKey: sortField || 'updated_at',
+                direction: sortDir === 'ASC' ? 'asc' : 'desc',
+                onSortChange: (key, dir) => {
+                  setSortField(key);
+                  setSortDir(dir === 'asc' ? 'ASC' : 'DESC');
+                  setPage(1);
+                },
+              }}
               pagination={{
                 page,
                 pageSize,
@@ -1483,7 +1926,22 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                           await fetch(`/api/records/${id}`, { method: 'DELETE' });
                           await loadRecords();
                           await refreshApps();
-                          toast('Đã xóa bản ghi');
+                          toast('Đã chuyển bản ghi vào Thùng rác', 'success', {
+                            actionLabel: 'Hoàn tác',
+                            onAction: async () => {
+                              const r = await fetch(`/api/records/${id}/restore`, {
+                                method: 'POST',
+                                credentials: 'include',
+                              }).then((res) => res.json());
+                              if (r.success) {
+                                await loadRecords();
+                                await refreshApps();
+                                toast('Đã khôi phục bản ghi');
+                              } else {
+                                toast(r.error || 'Không thể khôi phục bản ghi', 'error');
+                              }
+                            },
+                          });
                         },
                       });
                     }
@@ -1506,7 +1964,26 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                           setSelectedIds([]);
                           await loadRecords();
                           await refreshApps();
-                          toast(`Đã xóa ${ids.length} bản ghi`);
+                          toast(`Đã chuyển ${ids.length} bản ghi vào Thùng rác`, 'success', {
+                            actionLabel: 'Hoàn tác',
+                            onAction: async () => {
+                              const results = await Promise.all(
+                                ids.map((id) =>
+                                  fetch(`/api/records/${id}/restore`, {
+                                    method: 'POST',
+                                    credentials: 'include',
+                                  }).then((res) => res.json())
+                                )
+                              );
+                              await loadRecords();
+                              await refreshApps();
+                              if (results.every((r) => r.success)) {
+                                toast(`Đã khôi phục ${ids.length} bản ghi`);
+                              } else {
+                                toast('Một số bản ghi không thể khôi phục', 'error');
+                              }
+                            },
+                          });
                         },
                       });
                     }
@@ -1514,21 +1991,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
               }
               onDirectSave={
                 canEdit
-                  ? async (rowId, field, newVal) => {
-                      const res = await fetch(`/api/records/${rowId}/cell`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ field, value: newVal }),
-                      }).then((r) => r.json());
-                      if (res.success) {
-                        await loadRecords();
-                        const autoList: string[] = res.triggeredAutomations || [];
-                        toast(autoList.length > 0 ? `Đã lưu & chạy tự động: ${autoList.join(', ')}` : 'Đã lưu thay đổi');
-                        return true;
-                      }
-                      toast(res.message || res.error || 'Không thể lưu thay đổi', 'error');
-                      return false;
-                    }
+                  ? async (rowId, field, newVal) => patchCellWithConflict(rowId, field, newVal)
                   : undefined
               }
               emptyAction={
@@ -1595,6 +2058,9 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
             record={drawerRecord}
             columns={activeColumns}
             tableDisplayName={activeTable.displayName}
+            appCode={tree.app.code}
+            canEdit={canEdit}
+            canApprove={canApproveInApp}
             onClose={() => setDrawerRecord(null)}
             onChanged={async () => {
               await loadRecords();
@@ -1680,8 +2146,188 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
         open={snack.open}
         message={snack.message}
         severity={snack.severity}
+        actionLabel={snack.actionLabel}
+        onAction={snack.onAction}
         onClose={() => setSnack((s) => ({ ...s, open: false }))}
       />
+
+      {showPrintList && activeTable && (() => {
+        const printCols = activeColumns.filter(
+          (c) => c.showInTable !== false && (c.dataType || '').toUpperCase() !== 'SUB_TABLE'
+        ).slice(0, 8);
+        return (
+          <div className="modal-overlay" onClick={() => setShowPrintList(false)}>
+            <div
+              className="modal-dialog"
+              style={{ maxWidth: 960, width: '95vw', maxHeight: '92vh', overflowY: 'auto' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid var(--border-light)' }}>
+                <span style={{ fontSize: 14, fontWeight: 700 }}>Xem trước bản in danh sách (A4)</span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowPrintList(false)}>
+                    Đóng
+                  </button>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => window.print()}>
+                    <PrintRoundedIcon sx={{ fontSize: 15 }} /> In báo cáo (A4)
+                  </button>
+                </div>
+              </div>
+              <div style={{ padding: '4px 2px', color: '#111827', background: '#fff' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#4b5563' }}>
+                      {tree.app.name} ({tree.app.code})
+                    </div>
+                    <h2 style={{ fontSize: 18, fontWeight: 700, margin: '2px 0' }}>
+                      DANH SÁCH {activeTable.displayName.toUpperCase()}
+                    </h2>
+                  </div>
+                  <div style={{ textAlign: 'right', fontSize: 11.5, color: '#4b5563' }}>
+                    <div>Ngày in: {new Date().toLocaleString('vi-VN')}</div>
+                    <div>Hiển thị: {records.length} / {total} bản ghi</div>
+                  </div>
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ backgroundColor: '#f3f4f6' }}>
+                      <th style={{ border: '1px solid #d1d5db', padding: '6px 8px', textAlign: 'center', width: 42 }}>STT</th>
+                      <th style={{ border: '1px solid #d1d5db', padding: '6px 8px', textAlign: 'left' }}>Mã</th>
+                      {printCols.map((c) => (
+                        <th key={c.id} style={{ border: '1px solid #d1d5db', padding: '6px 8px', textAlign: 'left' }}>
+                          {c.columnName}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {records.map((rec, idx) => (
+                      <tr key={rec.id}>
+                        <td style={{ border: '1px solid #d1d5db', padding: '5px 8px', textAlign: 'center' }}>{(page - 1) * pageSize + idx + 1}</td>
+                        <td style={{ border: '1px solid #d1d5db', padding: '5px 8px', fontWeight: 600 }}>{rec.recordKey || rec.id.slice(0, 8)}</td>
+                        {printCols.map((c) => {
+                          const raw = rec.data?.[c.columnCode];
+                          const dt = (c.dataType || '').toUpperCase();
+                          let disp = raw === null || raw === undefined ? '' : String(raw);
+                          if (dt === 'BOOLEAN') disp = raw ? 'Có' : 'Không';
+                          else if (c.refCategoryCode && raw) disp = getCategoryItemName(c.refCategoryCode, String(raw))?.name ?? String(raw);
+                          else if (c.refTableId && raw) disp = resolveLookupLabel(c, raw) ?? String(raw);
+                          return (
+                            <td key={c.id} style={{ border: '1px solid #d1d5db', padding: '5px 8px' }}>
+                              {disp}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {showBulkEdit && activeTable && (() => {
+        const editableCols = activeColumns.filter(
+          (c) =>
+            !c.formula &&
+            !c.isIdentityKey &&
+            !['AUTO_NUMBER', 'SUB_TABLE', 'FILE', 'IMAGE'].includes((c.dataType || '').toUpperCase())
+        );
+        const targetCol = editableCols.find((c) => c.columnCode === bulkField) || editableCols[0] || null;
+        return (
+          <div className="modal-overlay" onClick={() => !bulkSaving && setShowBulkEdit(false)}>
+            <div className="modal-dialog" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>
+                Cập nhật hàng loạt ({selectedIds.length} bản ghi)
+              </h3>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>
+                Chọn trường dữ liệu và giá trị mới để áp dụng cho tất cả bản ghi đang chọn trong {activeTable.displayName}.
+              </p>
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!targetCol || bulkSaving) return;
+                  setBulkSaving(true);
+                  let okCount = 0;
+                  let failCount = 0;
+                  try {
+                    const results = await Promise.all(
+                      selectedIds.map(async (id) => {
+                        try {
+                          const res = await fetch(`/api/records/${id}/cell`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'include',
+                            body: JSON.stringify({ field: targetCol.columnCode, value: bulkValue }),
+                          });
+                          const j = await res.json().catch(() => null);
+                          return Boolean(res.ok && j?.success);
+                        } catch {
+                          return false;
+                        }
+                      })
+                    );
+                    okCount = results.filter(Boolean).length;
+                    failCount = results.length - okCount;
+                    setShowBulkEdit(false);
+                    setSelectedIds([]);
+                    await loadRecords();
+                    await refreshApps();
+                    toast(
+                      failCount > 0
+                        ? `Đã cập nhật ${okCount}/${results.length} bản ghi (${failCount} lỗi).`
+                        : `Đã cập nhật "${targetCol.columnName}" cho ${okCount} bản ghi.`,
+                      failCount > 0 ? 'error' : 'success'
+                    );
+                  } finally {
+                    setBulkSaving(false);
+                  }
+                }}
+                style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+              >
+                <div className="form-group">
+                  <label className="form-label">Trường cần cập nhật</label>
+                  <select
+                    className="form-select"
+                    value={targetCol?.columnCode || ''}
+                    onChange={(e) => {
+                      setBulkField(e.target.value);
+                      setBulkValue('');
+                    }}
+                  >
+                    {editableCols.map((c) => (
+                      <option key={c.id} value={c.columnCode}>
+                        {c.columnName} ({c.columnCode})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {targetCol && (
+                  <div className="form-group">
+                    <label className="form-label">Giá trị mới</label>
+                    <DynamicFieldInput
+                      column={targetCol}
+                      value={bulkValue}
+                      formData={{ [targetCol.columnCode]: bulkValue }}
+                      onChange={(val) => setBulkValue(val === null || val === undefined ? '' : String(val))}
+                    />
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
+                  <button type="button" className="btn btn-outline btn-sm" disabled={bulkSaving} onClick={() => setShowBulkEdit(false)}>
+                    Hủy
+                  </button>
+                  <button type="submit" className="btn btn-primary btn-sm" disabled={bulkSaving || !targetCol}>
+                    {bulkSaving ? 'Đang cập nhật...' : `Áp dụng cho ${selectedIds.length} bản ghi`}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
 
       {showTrash && activeTable && (
         <div className="modal-overlay" onClick={() => setShowTrash(false)}>
@@ -1790,7 +2436,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                     appId: tree.app.id,
                     tableId: activeTable.id,
                     name: saveViewName.trim(),
-                    filters: columnFilters,
+                    filters: effectiveFilters || {},
                     sortField: sortField || null,
                     sortDir,
                   }),
@@ -1857,6 +2503,72 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                 }}
               >
                 Xác nhận từ chối
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {conflictState && (
+        <div className="modal-overlay" onClick={() => !resolvingConflict && setConflictState(null)}>
+          <div className="modal-dialog" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6, color: 'var(--warning-text)' }}>
+              Xung đột phiên bản dữ liệu (409 Conflict)
+            </h3>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
+              {conflictState.serverMessage}
+            </p>
+            <div
+              style={{
+                padding: '10px 12px',
+                borderRadius: 8,
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border-subtle)',
+                fontSize: 12.5,
+                marginBottom: 14,
+              }}
+            >
+              <div>
+                Bản ghi: <strong>{conflictState.recordKey || conflictState.recordId}</strong>
+              </div>
+              <div>
+                Trường đang sửa: <strong>{conflictState.fieldLabel}</strong> → Giá trị của bạn:{' '}
+                <code>{String(conflictState.attemptedValue ?? '(trống)')}</code>
+              </div>
+              <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 11.5 }}>
+                Bảng dữ liệu đã được làm mới theo phiên bản mới nhất trên máy chủ.
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                disabled={resolvingConflict}
+                onClick={() => setConflictState(null)}
+              >
+                Giữ dữ liệu mới từ Server
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                style={{ backgroundColor: '#b06000', borderColor: '#b06000' }}
+                disabled={resolvingConflict}
+                onClick={async () => {
+                  const target = conflictState;
+                  setResolvingConflict(true);
+                  try {
+                    const latestRes = await fetch(`/api/records/${target.recordId}`, { credentials: 'include' })
+                      .then((r) => r.json())
+                      .catch(() => null);
+                    const latestVer = latestRes?.success ? latestRes.data?.version : undefined;
+                    setConflictState(null);
+                    await patchCellWithConflict(target.recordId, target.field, target.attemptedValue, latestVer);
+                  } finally {
+                    setResolvingConflict(false);
+                  }
+                }}
+              >
+                {resolvingConflict ? 'Đang ghi đè...' : 'Ghi đè giá trị của tôi'}
               </button>
             </div>
           </div>

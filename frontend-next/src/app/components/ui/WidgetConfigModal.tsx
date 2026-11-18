@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded';
 import { APP_COLOR_PRESETS } from '@/lib/design-tokens';
@@ -16,8 +16,13 @@ export interface WidgetConfigModalProps {
   onSaved: () => void;
 }
 
-export default function WidgetConfigModal({
-  open,
+export default function WidgetConfigModal(props: WidgetConfigModalProps) {
+  useEscapeKey(props.open, props.onClose);
+  if (!props.open) return null;
+  return <WidgetConfigModalBody key={props.editing?.id || '__new__'} {...props} />;
+}
+
+function WidgetConfigModalBody({
   appTree,
   editing,
   nextOrderIndex,
@@ -27,44 +32,16 @@ export default function WidgetConfigModal({
   const allTables = appTree.modules.flatMap((m) => m.tables);
   const defaultTableId = allTables[0]?.table.id || '';
 
-  const [title, setTitle] = useState('');
-  const [tableId, setTableId] = useState(defaultTableId);
-  const [widgetType, setWidgetType] = useState<string>('KPI_COUNT');
-  const [metricField, setMetricField] = useState('');
-  const [groupField, setGroupField] = useState('');
-  const [filterField, setFilterField] = useState('');
-  const [filterValue, setFilterValue] = useState('');
-  const [colSpan, setColSpan] = useState(1);
-  const [color, setColor] = useState(appTree.app.color || '#1a73e8');
+  const [title, setTitle] = useState(() => editing?.title || '');
+  const [tableId, setTableId] = useState(() => editing?.tableId || defaultTableId);
+  const [widgetType, setWidgetType] = useState<string>(() => editing?.widgetType || 'KPI_COUNT');
+  const [metricField, setMetricField] = useState(() => editing?.metricField || '');
+  const [groupField, setGroupField] = useState(() => editing?.groupField || '');
+  const [filterField, setFilterField] = useState(() => editing?.filterField || '');
+  const [filterValue, setFilterValue] = useState(() => editing?.filterValue || '');
+  const [colSpan, setColSpan] = useState(() => editing?.colSpan || 1);
+  const [color, setColor] = useState(() => editing?.color || appTree.app.color || '#1a73e8');
   const [saving, setSaving] = useState(false);
-  useEscapeKey(open, onClose);
-
-  useEffect(() => {
-    if (!open) return;
-    if (editing) {
-      setTitle(editing.title);
-      setTableId(editing.tableId);
-      setWidgetType(editing.widgetType);
-      setMetricField(editing.metricField || '');
-      setGroupField(editing.groupField || '');
-      setFilterField(editing.filterField || '');
-      setFilterValue(editing.filterValue || '');
-      setColSpan(editing.colSpan || 1);
-      setColor(editing.color || '#1a73e8');
-    } else {
-      setTitle('');
-      setTableId(defaultTableId);
-      setWidgetType('KPI_COUNT');
-      setMetricField('');
-      setGroupField('');
-      setFilterField('');
-      setFilterValue('');
-      setColSpan(1);
-      setColor(appTree.app.color || '#1a73e8');
-    }
-  }, [open, editing, defaultTableId, appTree.app.color]);
-
-  if (!open) return null;
 
   const selectedTableNode = allTables.find((t) => t.table.id === tableId);
   const cols: SysColumn[] = selectedTableNode?.columns || [];

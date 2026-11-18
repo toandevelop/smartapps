@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
@@ -12,16 +12,7 @@ import ArrowForwardRoundedIcon from '@mui/icons-material/ArrowForwardRounded';
 import { AppWorkflow, SysApp, SysRole, SysTable, SysUser, WorkflowStep } from '@/lib/types';
 import { useEscapeKey } from '@/lib/ui-hooks';
 
-export default function WorkflowFormModal({
-  open,
-  editing,
-  allApps,
-  allTables,
-  allRoles,
-  allUsers,
-  onClose,
-  onSaved,
-}: {
+interface WorkflowFormModalProps {
   open: boolean;
   editing: AppWorkflow | null;
   allApps: SysApp[];
@@ -30,56 +21,46 @@ export default function WorkflowFormModal({
   allUsers: SysUser[];
   onClose: () => void;
   onSaved: () => void;
-}) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [appId, setAppId] = useState('');
-  const [tableId, setTableId] = useState('');
-  const [conditionField, setConditionField] = useState('');
-  const [conditionOperator, setConditionOperator] = useState('EQUALS');
-  const [conditionValue, setConditionValue] = useState('');
-  const [steps, setSteps] = useState<WorkflowStep[]>([]);
-  const [isActive, setIsActive] = useState(true);
+}
+
+export default function WorkflowFormModal(props: WorkflowFormModalProps) {
+  useEscapeKey(props.open, props.onClose);
+  if (!props.open) return null;
+  return <WorkflowFormModalBody key={props.editing?.id || '__new__'} {...props} />;
+}
+
+function WorkflowFormModalBody({
+  editing,
+  allApps,
+  allTables,
+  allRoles,
+  allUsers,
+  onClose,
+  onSaved,
+}: WorkflowFormModalProps) {
+  const defaultAppId = editing?.appId || allApps[0]?.id || '';
+  const defaultTableId = editing?.tableId || allTables.find((t) => t.appId === defaultAppId)?.id || '';
+  const [name, setName] = useState(() => editing?.name || '');
+  const [description, setDescription] = useState(() => editing?.description || '');
+  const [appId, setAppId] = useState(() => defaultAppId);
+  const [tableId, setTableId] = useState(() => defaultTableId);
+  const [conditionField, setConditionField] = useState(() => editing?.conditionField || '');
+  const [conditionOperator, setConditionOperator] = useState(() => editing?.conditionOperator || 'EQUALS');
+  const [conditionValue, setConditionValue] = useState(() => editing?.conditionValue || '');
+  const [steps, setSteps] = useState<WorkflowStep[]>(() => {
+    if (editing) {
+      return editing.steps?.length
+        ? editing.steps.map((s, idx) => ({ ...s, stepOrder: idx + 1 }))
+        : [{ stepOrder: 1, name: 'Quản lý rà soát', approverRoles: ['HR_MANAGER'], approverUsers: [], slaHours: 24, requireCommentOnReject: true }];
+    }
+    return [
+      { stepOrder: 1, name: 'Bước 1: Trưởng bộ phận xác nhận', approverRoles: ['HR_MANAGER'], approverUsers: [], slaHours: 24, requireCommentOnReject: true },
+      { stepOrder: 2, name: 'Bước 2: Ban Quản trị phê duyệt', approverRoles: ['ADMIN'], approverUsers: [], slaHours: 48, requireCommentOnReject: true },
+    ];
+  });
+  const [isActive, setIsActive] = useState(() => (editing ? editing.isActive !== false : true));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  useEscapeKey(open, onClose);
-
-  useEffect(() => {
-    if (!open) return;
-    setError('');
-    if (editing) {
-      setName(editing.name);
-      setDescription(editing.description || '');
-      setAppId(editing.appId);
-      setTableId(editing.tableId);
-      setConditionField(editing.conditionField || '');
-      setConditionOperator(editing.conditionOperator || 'EQUALS');
-      setConditionValue(editing.conditionValue || '');
-      setSteps(
-        editing.steps?.length
-          ? editing.steps.map((s, idx) => ({ ...s, stepOrder: idx + 1 }))
-          : [{ stepOrder: 1, name: 'Quản lý rà soát', approverRoles: ['HR_MANAGER'], approverUsers: [], slaHours: 24, requireCommentOnReject: true }]
-      );
-      setIsActive(editing.isActive !== false);
-    } else {
-      const defApp = allApps[0]?.id || '';
-      const defTbl = allTables.find((t) => t.appId === defApp)?.id || '';
-      setName('');
-      setDescription('');
-      setAppId(defApp);
-      setTableId(defTbl);
-      setConditionField('');
-      setConditionOperator('EQUALS');
-      setConditionValue('');
-      setSteps([
-        { stepOrder: 1, name: 'Bước 1: Trưởng bộ phận xác nhận', approverRoles: ['HR_MANAGER'], approverUsers: [], slaHours: 24, requireCommentOnReject: true },
-        { stepOrder: 2, name: 'Bước 2: Ban Quản trị phê duyệt', approverRoles: ['ADMIN'], approverUsers: [], slaHours: 48, requireCommentOnReject: true },
-      ]);
-      setIsActive(true);
-    }
-  }, [open, editing, allApps, allTables]);
-
-  if (!open) return null;
 
   const filteredTables = allTables.filter((t) => !appId || t.appId === appId);
 
@@ -194,20 +175,20 @@ export default function WorkflowFormModal({
         </div>
 
         {/* Visual Live Flow Diagram */}
-        <div style={{ padding: '10px 14px', borderRadius: 12, backgroundColor: '#f8fafc', border: '1px solid var(--border-light)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span className="badge" style={{ backgroundColor: '#e8eaed', color: '#3c4043' }}>Nhân sự trình duyệt</span>
+        <div style={{ padding: '10px 14px', borderRadius: 12, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-light)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span className="badge" style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)' }}>Nhân sự trình duyệt</span>
           {steps.map((st, idx) => (
             <React.Fragment key={idx}>
-              <ArrowForwardRoundedIcon sx={{ fontSize: 16, color: '#94a3b8' }} />
-              <div style={{ padding: '4px 10px', borderRadius: 8, backgroundColor: '#ffffff', border: '1px solid #bfdbfe', fontSize: 12 }}>
+              <ArrowForwardRoundedIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} />
+              <div style={{ padding: '4px 10px', borderRadius: 8, backgroundColor: 'var(--bg-surface)', border: '1px solid var(--info-border)', fontSize: 12 }}>
                 <strong style={{ color: '#1a73e8' }}>B{idx + 1}:</strong> {st.name || `Bước ${idx + 1}`}
                 <span style={{ color: 'var(--text-muted)', marginLeft: 6, fontSize: 11 }}>
-                  ({[...st.approverRoles, ...st.approverUsers].join(', ') || '?'})
+                  ({[...st.approverRoles, ...st.approverUsers].join(', ') || '?'}{st.approvalMode && st.approvalMode !== 'ANY' ? ` • ${st.approvalMode === 'ALL' ? 'Tất cả' : `${st.quorumCount || 1} phiếu`}` : ''})
                 </span>
               </div>
             </React.Fragment>
           ))}
-          <ArrowForwardRoundedIcon sx={{ fontSize: 16, color: '#94a3b8' }} />
+          <ArrowForwardRoundedIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} />
           <span className="badge badge-success">Hoàn tất &amp; Automation</span>
         </div>
 
@@ -293,7 +274,7 @@ export default function WorkflowFormModal({
                     padding: 12,
                     borderRadius: 12,
                     border: '1px solid var(--border-subtle)',
-                    backgroundColor: '#ffffff',
+                    backgroundColor: 'var(--bg-surface)',
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -330,6 +311,43 @@ export default function WorkflowFormModal({
                     </div>
                   </div>
 
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8, fontSize: 12 }}>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Cơ chế duyệt:</span>
+                      <select
+                        className="form-select"
+                        style={{ height: 28, fontSize: 12, width: 195, padding: '2px 8px' }}
+                        value={step.approvalMode || 'ANY'}
+                        onChange={(e) => updateStep(idx, { approvalMode: e.target.value })}
+                      >
+                        <option value="ANY">Bất kỳ 1 người duyệt (ANY)</option>
+                        <option value="ALL">Tất cả cùng duyệt (ALL)</option>
+                        <option value="QUORUM">Đạt số phiếu tối thiểu (QUORUM)</option>
+                      </select>
+                    </div>
+                    {step.approvalMode === 'QUORUM' && (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Số phiếu:</span>
+                        <input
+                          type="number"
+                          min={1}
+                          className="form-input"
+                          style={{ width: 64, height: 28, fontSize: 12 }}
+                          value={step.quorumCount || 1}
+                          onChange={(e) => updateStep(idx, { quorumCount: Math.max(1, Number(e.target.value) || 1) })}
+                        />
+                      </div>
+                    )}
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(step.allowReturnToPrevious)}
+                        onChange={(e) => updateStep(idx, { allowReturnToPrevious: e.target.checked })}
+                      />
+                      Cho phép trả lại bước trước / về Nháp
+                    </label>
+                  </div>
+
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-muted)' }}>Vai trò được duyệt:</span>
@@ -347,7 +365,7 @@ export default function WorkflowFormModal({
                               fontWeight: 600,
                               cursor: 'pointer',
                               border: `1px solid ${checked ? r.color : 'var(--border-subtle)'}`,
-                              backgroundColor: checked ? `${r.color}18` : '#f8f9fa',
+                              backgroundColor: checked ? `${r.color}18` : 'var(--bg-secondary)',
                               color: checked ? r.color : 'var(--text-secondary)',
                             }}
                           >
@@ -372,8 +390,8 @@ export default function WorkflowFormModal({
                               fontSize: 11,
                               cursor: 'pointer',
                               border: `1px solid ${checked ? '#1a73e8' : 'var(--border-light)'}`,
-                              backgroundColor: checked ? '#e8f0fe' : '#ffffff',
-                              color: checked ? '#174ea6' : 'var(--text-muted)',
+                              backgroundColor: checked ? 'var(--info-bg)' : 'var(--bg-surface)',
+                              color: checked ? 'var(--info-text)' : 'var(--text-muted)',
                             }}
                           >
                             {checked ? '✓ ' : ''}@{u.username}

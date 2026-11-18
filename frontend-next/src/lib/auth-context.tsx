@@ -86,7 +86,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    refreshAuth();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void refreshAuth();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [refreshAuth]);
 
   useEffect(() => {

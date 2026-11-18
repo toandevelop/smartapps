@@ -54,6 +54,9 @@ const DEFAULT_AI_SYS: AiSystemSettings = {
   isEnabled: true,
   defaultProviderId: 'ai_gemini',
   fallbackToRuleEngine: true,
+  maskPiiBeforeCloudLlm: true,
+  monthlyTokenBudget: 0,
+  preferLocalForSensitive: false,
   temperature: 0.2,
   maxTokens: 2048,
   timeoutSeconds: 45,
@@ -103,7 +106,13 @@ export default function AiConfigPanel({
   }, []);
 
   useEffect(() => {
-    loadAll();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadAll();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadAll]);
 
   const refreshLogs = async () => {
@@ -396,6 +405,26 @@ export default function AiConfigPanel({
               />
               <span>Fallback Rule Engine khi API lỗi</span>
             </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer' }}>
+              <BooleanSwitch
+                checked={sysSettings.maskPiiBeforeCloudLlm !== false}
+                onChange={(v) => setSysSettings((s) => ({ ...s, maskPiiBeforeCloudLlm: v }))}
+                size="sm"
+                trueLabel="Bật"
+                falseLabel="Tắt"
+              />
+              <span>Che PII (CCCD, SĐT, Email, STK) trước Cloud LLM</span>
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer' }}>
+              <BooleanSwitch
+                checked={Boolean(sysSettings.preferLocalForSensitive)}
+                onChange={(v) => setSysSettings((s) => ({ ...s, preferLocalForSensitive: v }))}
+                size="sm"
+                trueLabel="Bật"
+                falseLabel="Tắt"
+              />
+              <span>Ưu tiên Local LLM cho tác vụ nhạy cảm</span>
+            </label>
           </div>
         </div>
 
@@ -446,6 +475,17 @@ export default function AiConfigPanel({
               className="form-input"
               value={sysSettings.timeoutSeconds}
               onChange={(e) => setSysSettings((s) => ({ ...s, timeoutSeconds: Number(e.target.value) || 45 }))}
+            />
+          </div>
+          <div>
+            <label className="form-label" style={{ fontSize: 11.5 }}>Hạn mức Token/tháng (0 = không GH)</label>
+            <input
+              type="number"
+              min={0}
+              step={10000}
+              className="form-input"
+              value={sysSettings.monthlyTokenBudget ?? 0}
+              onChange={(e) => setSysSettings((s) => ({ ...s, monthlyTokenBudget: Math.max(0, Number(e.target.value) || 0) }))}
             />
           </div>
         </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded';
 import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
@@ -61,7 +61,8 @@ function SettingsPageInner() {
     user?.roleCode === 'ADMIN' ||
     Boolean(user?.roleCodes?.includes('ADMIN'));
   const canManageSso = isAdmin || hasPermission('user.manage') || hasPermission('role.manage');
-  const [tab, setTab] = useState<SettingsTab>(initialTab || 'profile');
+  const [tabState, setTabState] = useState<{ base: SettingsTab | null | undefined; val: SettingsTab } | null>(null);
+  const tab: SettingsTab = (tabState && tabState.base === initialTab ? tabState.val : initialTab) || 'profile';
   const [roles, setRoles] = useState<SysRole[]>([]);
 
   useEffect(() => {
@@ -72,14 +73,48 @@ function SettingsPageInner() {
       .catch(() => {});
   }, [canManageSso]);
 
-  // Profile form
-  const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
-  const [department, setDepartment] = useState('');
+  // Profile form (keyed to current user snapshot so context refresh updates naturally)
+  const [profileDraft, setProfileDraft] = useState<{
+    baseKey: string;
+    fullName?: string;
+    email?: string;
+    department?: string;
+  } | null>(null);
+  const currentUserKey = `${user?.id || ''}:${user?.fullName || ''}:${user?.email || ''}:${user?.department || ''}`;
+  const activeProfileDraft = profileDraft?.baseKey === currentUserKey ? profileDraft : null;
+  const fullName = activeProfileDraft?.fullName ?? user?.fullName ?? '';
+  const email = activeProfileDraft?.email ?? user?.email ?? '';
+  const department = activeProfileDraft?.department ?? user?.department ?? 'Toàn công ty';
+  const setFullName = (val: string) => setProfileDraft({ ...activeProfileDraft, baseKey: currentUserKey, fullName: val });
+  const setEmail = (val: string) => setProfileDraft({ ...activeProfileDraft, baseKey: currentUserKey, email: val });
+  const setDepartment = (val: string) => setProfileDraft({ ...activeProfileDraft, baseKey: currentUserKey, department: val });
 
-  // Preferences draft
-  const [prefs, setPrefs] = useState<UserSettings>(userSettings);
-  const [sysCfg, setSysCfg] = useState<SystemSettings>(systemSettings);
+  // Preferences draft (reset automatically whenever context settings object refreshes)
+  const [prefsDraft, setPrefsDraft] = useState<{ base: UserSettings; val: UserSettings } | null>(null);
+  const prefs = prefsDraft && prefsDraft.base === userSettings ? prefsDraft.val : userSettings;
+  const setPrefs: React.Dispatch<React.SetStateAction<UserSettings>> = useCallback(
+    (updater) => {
+      setPrefsDraft((prev) => {
+        const cur = prev && prev.base === userSettings ? prev.val : userSettings;
+        const next = typeof updater === 'function' ? updater(cur) : updater;
+        return { base: userSettings, val: next };
+      });
+    },
+    [userSettings]
+  );
+
+  const [sysCfgDraft, setSysCfgDraft] = useState<{ base: SystemSettings; val: SystemSettings } | null>(null);
+  const sysCfg = sysCfgDraft && sysCfgDraft.base === systemSettings ? sysCfgDraft.val : systemSettings;
+  const setSysCfg: React.Dispatch<React.SetStateAction<SystemSettings>> = useCallback(
+    (updater) => {
+      setSysCfgDraft((prev) => {
+        const cur = prev && prev.base === systemSettings ? prev.val : systemSettings;
+        const next = typeof updater === 'function' ? updater(cur) : updater;
+        return { base: systemSettings, val: next };
+      });
+    },
+    [systemSettings]
+  );
 
   // Password form
   const [curPw, setCurPw] = useState('');
@@ -93,30 +128,10 @@ function SettingsPageInner() {
     severity: 'success',
   });
 
-  useEffect(() => {
-    if (initialTab) setTab(initialTab);
-  }, [initialTab]);
-
   const switchTab = (next: SettingsTab) => {
-    setTab(next);
+    setTabState({ base: initialTab, val: next });
     router.replace(`/settings?tab=${next}`, { scroll: false });
   };
-
-  useEffect(() => {
-    if (user) {
-      setFullName(user.fullName || '');
-      setEmail(user.email || '');
-      setDepartment(user.department || 'Toàn công ty');
-    }
-  }, [user]);
-
-  useEffect(() => {
-    setPrefs(userSettings);
-  }, [userSettings]);
-
-  useEffect(() => {
-    setSysCfg(systemSettings);
-  }, [systemSettings]);
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -498,6 +513,36 @@ function SettingsPageInner() {
                   <p style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 4 }}>
                     Cá nhân hóa chế độ Sáng/Tối, màu nhấn chủ đạo, mật độ hiển thị và thao tác Chat nội bộ.
                   </p>
+                </div>
+
+                <div>
+                  <div className="form-label">Ngôn ngữ giao diện (Language)</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginBottom: 16 }}>
+                    {(
+                      [
+                        ['vi', 'Tiếng Việt (VI)'],
+                        ['en', 'English (EN)'],
+                      ] as const
+                    ).map(([langCode, label]) => (
+                      <button
+                        key={langCode}
+                        type="button"
+                        onClick={() => setPrefs((p) => ({ ...p, language: langCode }))}
+                        style={{
+                          padding: '12px 14px',
+                          borderRadius: 12,
+                          border: `2px solid ${(prefs.language || 'vi') === langCode ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
+                          backgroundColor: (prefs.language || 'vi') === langCode ? 'var(--accent-primary-container)' : 'var(--bg-primary)',
+                          color: 'var(--text-primary)',
+                          fontWeight: 700,
+                          fontSize: 13,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div>

@@ -18,18 +18,27 @@ import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded';
 import AssignmentTurnedInRoundedIcon from '@mui/icons-material/AssignmentTurnedInRounded';
 import CampaignRoundedIcon from '@mui/icons-material/CampaignRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
+import DarkModeRoundedIcon from '@mui/icons-material/DarkModeRounded';
+import LightModeRoundedIcon from '@mui/icons-material/LightModeRounded';
+import ViewCompactRoundedIcon from '@mui/icons-material/ViewCompactRounded';
+import TableRowsRoundedIcon from '@mui/icons-material/TableRowsRounded';
+import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import AppSwitcherMenu from './AppSwitcherMenu';
 import NotificationSnackbar from './ui/NotificationSnackbar';
 import CommandPaletteModal from './CommandPaletteModal';
 import { useAuth } from '@/lib/auth-context';
 import { useSettings } from '@/lib/settings-context';
-import { useEscapeKey } from '@/lib/ui-hooks';
+import { useEscapeKey, useIsTauriDesktop, useSidebarCollapsed } from '@/lib/ui-hooks';
 import {
-  isTauriDesktop,
   listOfflineQueue,
+  discardOfflineMutation,
   syncAllOfflineMutations,
+  syncSingleOfflineMutation,
+  getOfflineConflictMap,
   getDesktopServerConfig,
   setDesktopServerConfig,
+  type OfflineMutationItem,
+  type OfflineSyncErrorMeta,
 } from '@/lib/tauri-bridge';
 import { SysNotification } from '@/lib/types';
 
@@ -50,25 +59,33 @@ export default function Navbar() {
     userSettings,
     systemSettings,
     unreadSummary,
+    language,
+    setLanguage,
+    t,
     refreshUnreadSummary,
+    saveUserSettings,
     playNotificationSound,
     showDesktopNotification,
   } = useSettings();
 
-  const [collapsed, setCollapsed] = useState(false);
-  const [inDesktop, setInDesktop] = useState(false);
+  const collapsed = useSidebarCollapsed();
+  const inDesktop = useIsTauriDesktop();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifFilter, setNotifFilter] = useState<'ALL' | 'UNREAD' | 'TASK' | 'CHAT' | 'APPROVAL'>('ALL');
   const [notifications, setNotifications] = useState<SysNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [offlineCount, setOfflineCount] = useState(0);
+  const [offlineItems, setOfflineItems] = useState<OfflineMutationItem[]>([]);
   const [showPwModal, setShowPwModal] = useState(false);
   const [curPw, setCurPw] = useState('');
   const [newPw, setNewPw] = useState('');
   const [pwMsg, setPwMsg] = useState('');
   const [showDesktopCfg, setShowDesktopCfg] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState<Array<{ username: string; fullName: string; roleCode: string; department: string }>>([]);
+  const [onlineOpen, setOnlineOpen] = useState(false);
+  const onlineRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -106,24 +123,91 @@ export default function Navbar() {
   }, [user]);
 
   useEffect(() => {
-    setInDesktop(isTauriDesktop());
-    const saved = localStorage.getItem('smartapps_sidebar_collapsed') === 'true';
-    setCollapsed(saved);
-    if (saved) document.body.classList.add('sidebar-collapsed');
-    listOfflineQueue().then((q) => setOfflineCount(q.length));
+    document.body.classList.toggle('sidebar-collapsed', collapsed);
+  }, [collapsed]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listOfflineQueue().then((q) => {
+      if (cancelled) return;
+      setOfflineCount(q.length);
+      setOfflineItems(q);
+    });
     getDesktopServerConfig().then((cfg) => {
+      if (cancelled) return;
       setSrvWebUrl(cfg.webUrl);
       setSrvApiUrl(cfg.apiUrl);
     });
+    const onOnline = async () => {
+      const queued = await listOfflineQueue();
+      if (queued.length === 0) return;
+      const res = await syncAllOfflineMutations();
+      const left = await listOfflineQueue();
+      setOfflineItems(left);
+      setOfflineCount(left.length);
+      if (res.synced > 0 || res.conflicts > 0) {
+        setNavSnack({
+          open: true,
+          message: `Tự đồng bộ khi có mạng: ${res.synced} thành công${res.conflicts > 0 ? `, ${res.conflicts} xung đột 409 cần xử lý` : ''}.`,
+          severity: res.failed > 0 ? 'error' : 'success',
+        });
+      }
+    };
+    window.addEventListener('online', onOnline);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('online', onOnline);
+    };
   }, []);
 
-  useEffect(() => {
-    if (!user) {
-      setNotifications([]);
-      setUnreadCount(0);
-      return;
+  const loadOnlineUsers = useCallback(async () => {
+    if (!user) return;
+    try {
+      const res = await fetch('/api/notifications/online-users', { credentials: 'include' }).then((r) => r.json());
+      if (res.success && Array.isArray(res.data)) {
+        setOnlineUsers(res.data);
+      }
+    } catch {
+      // ignore
     }
-    loadNotifications();
+  }, [user]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!user) {
+      Promise.resolve().then(() => {
+        if (!cancelled) setOnlineUsers([]);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadOnlineUsers();
+    });
+    const presenceTimer = setInterval(loadOnlineUsers, 45000);
+    return () => {
+      cancelled = true;
+      clearInterval(presenceTimer);
+    };
+  }, [user, loadOnlineUsers]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!user) {
+      Promise.resolve().then(() => {
+        if (!cancelled) {
+          setNotifications([]);
+          setUnreadCount(0);
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadNotifications();
+    });
 
     let es: EventSource | null = null;
     try {
@@ -131,7 +215,9 @@ export default function Navbar() {
       es.addEventListener('platform', (evt) => {
         try {
           const detail = JSON.parse((evt as MessageEvent).data);
-          if (detail.type === 'notification') {
+          if (detail.type === 'PRESENCE_CHANGED') {
+            loadOnlineUsers();
+          } else if (detail.type === 'notification') {
             loadNotifications();
             refreshUnreadSummary();
             const payload = detail.data || {};
@@ -163,30 +249,35 @@ export default function Navbar() {
       clearInterval(timer);
       if (es) es.close();
     };
-  }, [user, loadNotifications, refreshUnreadSummary, playNotificationSound, showDesktopNotification, userSettings.notifyInApp, userSettings.notifyChat]);
+  }, [user, loadNotifications, loadOnlineUsers, refreshUnreadSummary, playNotificationSound, showDesktopNotification, userSettings.notifyInApp, userSettings.notifyChat]);
 
   useEffect(() => {
-    if (!userMenuOpen && !notifOpen) return;
+    if (!userMenuOpen && !notifOpen && !onlineOpen) return;
     const onOut = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setUserMenuOpen(false);
       if (notifRef.current && !notifRef.current.contains(e.target as Node)) setNotifOpen(false);
+      if (onlineRef.current && !onlineRef.current.contains(e.target as Node)) setOnlineOpen(false);
     };
     document.addEventListener('mousedown', onOut);
     return () => document.removeEventListener('mousedown', onOut);
-  }, [userMenuOpen, notifOpen]);
+  }, [userMenuOpen, notifOpen, onlineOpen]);
 
   useEscapeKey(showPwModal, () => setShowPwModal(false));
   useEscapeKey(showDesktopCfg, () => setShowDesktopCfg(false));
-  useEscapeKey(userMenuOpen || notifOpen, () => {
+  useEscapeKey(userMenuOpen || notifOpen || onlineOpen, () => {
     setUserMenuOpen(false);
     setNotifOpen(false);
+    setOnlineOpen(false);
   });
 
   if (pathname === '/login' || pathname.startsWith('/forms/')) return null;
 
   const toggleSidebar = () => {
+    if (typeof window !== 'undefined' && window.innerWidth <= 768) {
+      window.dispatchEvent(new CustomEvent('smartapps_mobile_sidebar_toggle'));
+      return;
+    }
     const next = !collapsed;
-    setCollapsed(next);
     localStorage.setItem('smartapps_sidebar_collapsed', String(next));
     if (next) document.body.classList.add('sidebar-collapsed');
     else document.body.classList.remove('sidebar-collapsed');
@@ -222,6 +313,13 @@ export default function Navbar() {
     if (notifFilter === 'APPROVAL') return n.category === 'APPROVAL';
     return true;
   });
+
+  const displayOnlineUsers =
+    onlineUsers.length > 0
+      ? onlineUsers
+      : user
+      ? [{ username: user.username, fullName: user.fullName || user.username, roleCode: user.roleCode || 'USER', department: user.department || '' }]
+      : [];
 
   return (
     <div
@@ -262,18 +360,194 @@ export default function Navbar() {
           <MenuRoundedIcon sx={{ fontSize: 22 }} />
         </button>
 
-        <span
-          style={{
-            fontSize: 13.5,
-            fontWeight: 600,
-            color: 'var(--text-secondary)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
-          {systemSettings.workspaceTitle || 'SmartApps Enterprise — Không gian làm việc Đa ứng dụng'}
-        </span>
+        {displayOnlineUsers.length > 0 && (
+          <div ref={onlineRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => {
+                setOnlineOpen((v) => !v);
+                setNotifOpen(false);
+                setUserMenuOpen(false);
+              }}
+              aria-label={t('navbar.onlineUsers', { count: displayOnlineUsers.length })}
+              title={t('navbar.onlineUsers', { count: displayOnlineUsers.length })}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                padding: '2px 4px',
+                borderRadius: 999,
+                border: '1px solid var(--border-light)',
+                backgroundColor: 'var(--bg-primary)',
+                cursor: 'pointer',
+              }}
+            >
+              {displayOnlineUsers.slice(0, 3).map((ou, idx) => {
+                const palette = ['#1a73e8', '#1e8e3e', '#9334e6', '#ea8600', '#0284c7', '#d93025'];
+                const color = palette[(ou.username.charCodeAt(0) + idx) % palette.length];
+                const parts = (ou.fullName || ou.username).trim().split(/\s+/);
+                const initials = parts.length >= 2
+                  ? `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase()
+                  : (ou.fullName || ou.username).slice(0, 2).toUpperCase();
+                return (
+                  <span
+                    key={ou.username}
+                    title={`${ou.fullName || ou.username} (${ou.roleCode})`}
+                    style={{
+                      width: 26,
+                      height: 26,
+                      borderRadius: '50%',
+                      backgroundColor: color,
+                      color: '#ffffff',
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      border: '2px solid var(--bg-surface)',
+                      marginLeft: idx === 0 ? 0 : -8,
+                      position: 'relative',
+                    }}
+                  >
+                    {initials}
+                    <span
+                      style={{
+                        position: 'absolute',
+                        bottom: -1,
+                        right: -1,
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        backgroundColor: '#1e8e3e',
+                        border: '1.5px solid var(--bg-surface)',
+                      }}
+                    />
+                  </span>
+                );
+              })}
+              <span
+                style={{
+                  width: 26,
+                  height: 26,
+                  borderRadius: '50%',
+                  backgroundColor: 'var(--accent-primary-container)',
+                  color: 'var(--accent-primary)',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  border: '2px solid var(--bg-surface)',
+                  marginLeft: -6,
+                }}
+              >
+                {displayOnlineUsers.length > 3 ? `+${displayOnlineUsers.length - 3}` : displayOnlineUsers.length}
+              </span>
+            </button>
+
+            {onlineOpen && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 8px)',
+                  left: 0,
+                  width: 310,
+                  backgroundColor: 'var(--bg-surface)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 14,
+                  boxShadow: 'var(--shadow-lg)',
+                  zIndex: 60,
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    padding: '10px 14px',
+                    borderBottom: '1px solid var(--border-light)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <strong style={{ fontSize: 13 }}>{t('navbar.onlineUsersTitle')}</strong>
+                  <span className="badge badge-success" style={{ fontSize: 11 }}>
+                    {displayOnlineUsers.length} online
+                  </span>
+                </div>
+                <div style={{ maxHeight: 280, overflowY: 'auto', padding: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {displayOnlineUsers.map((ou) => {
+                    const isMe = ou.username.toLowerCase() === user?.username?.toLowerCase();
+                    const parts = (ou.fullName || ou.username).trim().split(/\s+/);
+                    const initials = parts.length >= 2
+                      ? `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase()
+                      : (ou.fullName || ou.username).slice(0, 2).toUpperCase();
+                    return (
+                      <div
+                        key={ou.username}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: '7px 8px',
+                          borderRadius: 8,
+                          backgroundColor: isMe ? 'var(--bg-primary)' : 'transparent',
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: 30,
+                            height: 30,
+                            borderRadius: '50%',
+                            backgroundColor: 'var(--accent-primary)',
+                            color: '#fff',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                            position: 'relative',
+                          }}
+                        >
+                          {initials}
+                          <span
+                            style={{
+                              position: 'absolute',
+                              bottom: 0,
+                              right: 0,
+                              width: 8,
+                              height: 8,
+                              borderRadius: '50%',
+                              backgroundColor: '#1e8e3e',
+                              border: '1.5px solid var(--bg-surface)',
+                            }}
+                          />
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {ou.fullName || ou.username} {isMe && <span style={{ color: 'var(--accent-primary)', fontSize: 11 }}>(Bạn)</span>}
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            @{ou.username} • {ou.department || ou.roleCode}
+                          </div>
+                        </div>
+                        {!isMe && (
+                          <Link
+                            href="/chat"
+                            onClick={() => setOnlineOpen(false)}
+                            className="btn btn-outline btn-xs"
+                            style={{ flexShrink: 0 }}
+                          >
+                            Chat
+                          </Link>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {systemSettings.announcementBanner && (
           <span
@@ -305,10 +579,10 @@ export default function Navbar() {
             whiteSpace: 'nowrap',
             flexShrink: 0,
           }}
-          title="Tìm nhanh Ứng dụng, Hồ sơ hoặc Trang (Ctrl+K)"
+          title={t('navbar.searchPlaceholder')}
         >
           <SearchRoundedIcon sx={{ fontSize: 15 }} />
-          <span>Tìm nhanh...</span>
+          <span>{language === 'en' ? 'Quick search...' : 'Tìm nhanh...'}</span>
           <kbd style={{ fontSize: 10.5, padding: '1px 5px', borderRadius: 4, border: '1px solid var(--border-light)' }}>Ctrl+K</kbd>
         </button>
 
@@ -323,7 +597,7 @@ export default function Navbar() {
               setOfflineCount(left.length);
               setNavSnack({
                 open: true,
-                message: `Đã đồng bộ ${res.synced} bản ghi offline${res.failed > 0 ? ` (${res.failed} lỗi)` : ''}.`,
+                message: `Đã đồng bộ ${res.synced} bản ghi offline${res.conflicts > 0 ? ` (${res.conflicts} xung đột phiên bản — bản ghi trên máy chủ đã thay đổi)` : res.failed > 0 ? ` (${res.failed} lỗi)` : ''}.`,
                 severity: res.failed > 0 ? 'error' : 'success',
               });
             }}
@@ -336,7 +610,12 @@ export default function Navbar() {
 
         <button
           type="button"
-          onClick={() => setShowDesktopCfg(true)}
+          onClick={async () => {
+            const q = await listOfflineQueue();
+            setOfflineItems(q);
+            setOfflineCount(q.length);
+            setShowDesktopCfg(true);
+          }}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -361,9 +640,109 @@ export default function Navbar() {
         {hasPermission('studio.manage') && (
           <Link href="/studio" className="btn btn-outline btn-sm" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
             <DesignServicesRoundedIcon sx={{ fontSize: 16 }} />
-            App Studio
+            {t('navbar.appStudio')}
           </Link>
         )}
+
+        <button
+          type="button"
+          onClick={async () => {
+            const nextLang = language === 'vi' ? 'en' : 'vi';
+            await setLanguage(nextLang);
+            setNavSnack({
+              open: true,
+              message: nextLang === 'en' ? 'Language switched to English' : 'Đã chuyển ngôn ngữ sang Tiếng Việt',
+              severity: 'info',
+            });
+          }}
+          aria-label={t('navbar.languageLabel')}
+          title={t('navbar.languageLabel')}
+          style={{
+            height: 32,
+            padding: '0 10px',
+            borderRadius: 999,
+            border: '1px solid var(--border-subtle)',
+            backgroundColor: 'var(--bg-surface)',
+            color: 'var(--text-primary)',
+            fontSize: 11.5,
+            fontWeight: 700,
+            cursor: 'pointer',
+            flexShrink: 0,
+            letterSpacing: '0.03em',
+          }}
+        >
+          {language.toUpperCase()}
+        </button>
+
+        <button
+          type="button"
+          onClick={async () => {
+            const currentlyDark =
+              userSettings.themeMode === 'dark' ||
+              (userSettings.themeMode === 'auto' &&
+                typeof document !== 'undefined' &&
+                document.body.classList.contains('theme-dark'));
+            const nextMode = currentlyDark ? 'light' : 'dark';
+            await saveUserSettings({ ...userSettings, themeMode: nextMode });
+          }}
+          aria-label="Chuyển chế độ Sáng / Tối"
+          title={userSettings.themeMode === 'dark' ? 'Chuyển sang Giao diện Sáng' : 'Chuyển sang Giao diện Tối (Dark Mode)'}
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: '50%',
+            border: '1px solid var(--border-subtle)',
+            backgroundColor: 'var(--bg-surface)',
+            color: 'var(--text-secondary)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexShrink: 0,
+          }}
+        >
+          {userSettings.themeMode === 'dark' ? (
+            <LightModeRoundedIcon sx={{ fontSize: 18, color: '#f59e0b' }} />
+          ) : (
+            <DarkModeRoundedIcon sx={{ fontSize: 18 }} />
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={async () => {
+            const nextCompact = !userSettings.compactMode;
+            const ok = await saveUserSettings({ ...userSettings, compactMode: nextCompact });
+            if (ok) {
+              setNavSnack({
+                open: true,
+                message: nextCompact ? 'Đã bật chế độ hiển thị Gọn (Compact)' : 'Đã chuyển sang chế độ Thoải mái',
+                severity: 'info',
+              });
+            }
+          }}
+          aria-label="Chuyển mật độ hiển thị Gọn / Thoải mái"
+          title={userSettings.compactMode ? 'Đang bật chế độ Gọn (Compact) — Bấm để chuyển Thoải mái' : 'Bật chế độ hiển thị Gọn (Compact)'}
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: '50%',
+            border: '1px solid var(--border-subtle)',
+            backgroundColor: userSettings.compactMode ? 'var(--accent-primary-container)' : 'var(--bg-surface)',
+            color: userSettings.compactMode ? 'var(--accent-primary)' : 'var(--text-secondary)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexShrink: 0,
+          }}
+        >
+          {userSettings.compactMode ? (
+            <ViewCompactRoundedIcon sx={{ fontSize: 18 }} />
+          ) : (
+            <TableRowsRoundedIcon sx={{ fontSize: 18 }} />
+          )}
+        </button>
 
         <AppSwitcherMenu />
 
@@ -862,6 +1241,134 @@ export default function Navbar() {
               <div>
                 <label className="form-label">Địa chỉ Máy chủ Dữ liệu (API URL)</label>
                 <input className="form-input" value={srvApiUrl} onChange={(e) => setSrvApiUrl(e.target.value)} />
+              </div>
+              <div style={{ marginTop: 4, padding: 10, borderRadius: 10, border: '1px solid var(--border-light)', background: 'var(--bg-secondary)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700 }}>Hàng đợi đồng bộ Offline ({offlineItems.length})</span>
+                  {offlineItems.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-xs"
+                      onClick={async () => {
+                        const res = await syncAllOfflineMutations();
+                        const left = await listOfflineQueue();
+                        setOfflineItems(left);
+                        setOfflineCount(left.length);
+                        setNavSnack({
+                          open: true,
+                          message: `Đã đồng bộ ${res.synced} bản ghi offline${res.conflicts > 0 ? ` (${res.conflicts} xung đột phiên bản)` : res.failed > 0 ? ` (${res.failed} lỗi)` : ''}.`,
+                          severity: res.failed > 0 ? 'error' : 'success',
+                        });
+                      }}
+                    >
+                      <SyncRoundedIcon sx={{ fontSize: 13 }} /> Đồng bộ ngay
+                    </button>
+                  )}
+                </div>
+                {offlineItems.length === 0 ? (
+                  <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Không có thay đổi nào đang chờ đồng bộ.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 160, overflowY: 'auto' }}>
+                    {(() => {
+                      const conflictMap: Record<string, OfflineSyncErrorMeta> = getOfflineConflictMap();
+                      return offlineItems.map((item) => {
+                        const errMeta = conflictMap[item.id];
+                        return (
+                      <div
+                        key={item.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 8,
+                          padding: '6px 8px',
+                          borderRadius: 6,
+                          background: 'var(--bg-surface)',
+                          border: errMeta?.status === 'conflict' ? '1px solid var(--danger)' : '1px solid var(--border-light)',
+                          fontSize: 11.5,
+                        }}
+                      >
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {item.method || 'POST'} • {item.appCode}
+                            {errMeta && (
+                              <span
+                                style={{
+                                  marginLeft: 6,
+                                  fontSize: 10,
+                                  padding: '1px 5px',
+                                  borderRadius: 4,
+                                  backgroundColor: errMeta.status === 'conflict' ? 'var(--danger-bg)' : 'var(--warning-bg)',
+                                  color: errMeta.status === 'conflict' ? 'var(--danger-text)' : 'var(--warning-text)',
+                                }}
+                              >
+                                {errMeta.status === 'conflict' ? 'Xung đột 409' : 'Chờ thử lại'}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 10.5, color: errMeta ? 'var(--danger-text)' : 'var(--text-muted)' }}>
+                            {errMeta ? errMeta.message : new Date(item.createdAt).toLocaleString('vi-VN')}
+                          </div>
+                        </div>
+                        <div style={{ display: 'inline-flex', gap: 4, flexShrink: 0 }}>
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-xs"
+                            title="Thử đồng bộ lại mục này"
+                            onClick={async () => {
+                              const r = await syncSingleOfflineMutation(item.id);
+                              const left = await listOfflineQueue();
+                              setOfflineItems(left);
+                              setOfflineCount(left.length);
+                              setNavSnack({
+                                open: true,
+                                message: r.status === 'synced' ? 'Đã đồng bộ mục offline.' : (r.message || 'Đồng bộ lại chưa thành công.'),
+                                severity: r.status === 'synced' ? 'success' : 'error',
+                              });
+                            }}
+                          >
+                            <SyncRoundedIcon sx={{ fontSize: 13 }} />
+                          </button>
+                          {errMeta?.status === 'conflict' && (
+                            <button
+                              type="button"
+                              className="btn btn-outline btn-xs"
+                              style={{ color: 'var(--warning-text)', borderColor: 'var(--warning-border)' }}
+                              title="Ép ghi đè thay đổi mới nhất lên máy chủ (bỏ kiểm tra expectedVersion)"
+                              onClick={async () => {
+                                const r = await syncSingleOfflineMutation(item.id, { forceOverwrite: true });
+                                const left = await listOfflineQueue();
+                                setOfflineItems(left);
+                                setOfflineCount(left.length);
+                                setNavSnack({
+                                  open: true,
+                                  message: r.status === 'synced' ? 'Đã ép ghi đè thay đổi lên máy chủ.' : (r.message || 'Ghi đè thất bại.'),
+                                  severity: r.status === 'synced' ? 'success' : 'error',
+                                });
+                              }}
+                            >
+                              Ghi đè
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-xs"
+                            aria-label="Xóa mục khỏi hàng đợi"
+                            onClick={async () => {
+                              const left = await discardOfflineMutation(item.id);
+                              setOfflineItems(left);
+                              setOfflineCount(left.length);
+                            }}
+                          >
+                            <DeleteOutlineRoundedIcon sx={{ fontSize: 14, color: 'var(--danger)' }} />
+                          </button>
+                        </div>
+                      </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
                 <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowDesktopCfg(false)}>Đóng</button>

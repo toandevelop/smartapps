@@ -6,17 +6,23 @@ import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import AppsRoundedIcon from '@mui/icons-material/AppsRounded';
 import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
 import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
+import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineRounded';
+import AttachFileRoundedIcon from '@mui/icons-material/AttachFileRounded';
 import { usePlatform } from '@/lib/app-context';
 import { useAuth } from '@/lib/auth-context';
+import { useSettings } from '@/lib/settings-context';
 import { useEscapeKey } from '@/lib/ui-hooks';
+import type { GlobalSearchResult } from '@/lib/types';
 
 interface PaletteItem {
   id: string;
   group: string;
   title: string;
   subtitle?: string;
-  href: string;
-  kind: 'app' | 'nav' | 'record';
+  href?: string;
+  externalHref?: string;
+  onAction?: () => void;
+  kind: 'app' | 'nav' | 'record' | 'chat' | 'attachment' | 'action';
 }
 
 export default function CommandPaletteModal({
@@ -26,59 +32,81 @@ export default function CommandPaletteModal({
   open: boolean;
   onClose: () => void;
 }) {
+  useEscapeKey(open, onClose);
+  if (!open) return null;
+  return <CommandPaletteBody key="open" onClose={onClose} />;
+}
+
+function CommandPaletteBody({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const { apps } = usePlatform();
   const { canAccessApp, hasPermission } = useAuth();
+  const { userSettings, saveUserSettings, t } = useSettings();
   const [query, setQuery] = useState('');
   const [activeIdx, setActiveIdx] = useState(0);
   const [recordHits, setRecordHits] = useState<PaletteItem[]>([]);
   const [searching, setSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEscapeKey(open, onClose);
-
   useEffect(() => {
-    if (open) {
-      setQuery('');
-      setActiveIdx(0);
-      setRecordHits([]);
-      setTimeout(() => inputRef.current?.focus(), 30);
-    }
-  }, [open]);
+    const timer = setTimeout(() => inputRef.current?.focus(), 30);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     const q = query.trim();
-    if (!open || q.length < 2) {
-      setRecordHits([]);
-      return;
-    }
+    if (q.length < 2) return;
+    let cancelled = false;
     const timer = setTimeout(async () => {
       setSearching(true);
       try {
-        const res = await fetch(`/api/records?search=${encodeURIComponent(q)}&limit=8`, { credentials: 'include' }).then((r) => r.json());
-        if (res.success && Array.isArray(res.data?.items)) {
-          setRecordHits(
-            res.data.items.map((r: any) => ({
+        const res = await fetch(`/api/records/global-search?q=${encodeURIComponent(q)}&limit=6`, { credentials: 'include' }).then((r) => r.json());
+        if (cancelled) return;
+        if (res.success && res.data) {
+          const d = res.data as GlobalSearchResult;
+          const mapped: PaletteItem[] = [
+            ...(d.records || []).map((r) => ({
               id: `rec_${r.id}`,
               group: 'Hồ sơ khớp từ khóa',
-              title: r.recordKey || r.id,
-              subtitle: Object.values(r.data || {}).filter((v) => v !== null && v !== undefined && typeof v !== 'object').slice(0, 3).join(' • '),
-              href: `/apps/${encodeURIComponent(r.appId)}/records/${encodeURIComponent(r.id)}`,
+              title: r.title,
+              subtitle: r.subtitle,
+              href: r.url,
               kind: 'record' as const,
             })),
-          );
+            ...(d.chats || []).map((c) => ({
+              id: `chat_${c.id}`,
+              group: 'Tin nhắn Chat',
+              title: c.title,
+              subtitle: c.subtitle,
+              href: c.url,
+              kind: 'chat' as const,
+            })),
+            ...(d.attachments || []).map((a) => ({
+              id: `att_${a.id}`,
+              group: 'Tệp đính kèm',
+              title: a.title,
+              subtitle: a.subtitle,
+              externalHref: a.url,
+              kind: 'attachment' as const,
+            })),
+          ];
+          if (!cancelled) setRecordHits(mapped);
         }
       } catch {
-        setRecordHits([]);
+        if (!cancelled) setRecordHits([]);
       } finally {
-        setSearching(false);
+        if (!cancelled) setSearching(false);
       }
     }, 220);
-    return () => clearTimeout(timer);
-  }, [open, query]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
 
   const items = useMemo<PaletteItem[]>(() => {
     const q = query.trim().toLowerCase();
+    const activeRecordHits = q.length < 2 ? [] : recordHits;
     const appItems: PaletteItem[] = apps
       .filter((a) => canAccessApp(a.code))
       .map((a) => ({
@@ -99,23 +127,56 @@ export default function CommandPaletteModal({
       ...(hasPermission('studio.manage')
         ? [{ id: 'nav_studio', group: 'Điều hướng nhanh', title: 'App Builder Studio', subtitle: '/studio', href: '/studio', kind: 'nav' as const }]
         : []),
+      ...(hasPermission('user.manage') || hasPermission('role.manage') || hasPermission('workflow.manage')
+        ? [{ id: 'nav_admin', group: 'Điều hướng nhanh', title: 'Quản trị & Quy trình', subtitle: '/admin', href: '/admin', kind: 'nav' as const }]
+        : []),
     ];
 
-    const staticFiltered = [...appItems, ...navItems].filter(
+    const actionItems: PaletteItem[] = [
+      {
+        id: 'act_theme',
+        group: 'Hành động nhanh',
+        title: userSettings.themeMode === 'dark' ? 'Chuyển sang Giao diện Sáng (Light Mode)' : 'Chuyển sang Giao diện Tối (Dark Mode)',
+        subtitle: 'theme dark light sáng tối',
+        kind: 'action',
+        onAction: () => {
+          const nextMode = userSettings.themeMode === 'dark' ? 'light' : 'dark';
+          void saveUserSettings({ ...userSettings, themeMode: nextMode });
+        },
+      },
+      {
+        id: 'act_density',
+        group: 'Hành động nhanh',
+        title: userSettings.compactMode ? 'Chuyển mật độ hiển thị Thoải mái' : 'Bật mật độ hiển thị Gọn (Compact)',
+        subtitle: 'compact density gọn thoải mái',
+        kind: 'action',
+        onAction: () => {
+          void saveUserSettings({ ...userSettings, compactMode: !userSettings.compactMode });
+        },
+      },
+    ];
+
+    const staticFiltered = [...appItems, ...actionItems, ...navItems].filter(
       (it) => !q || it.title.toLowerCase().includes(q) || (it.subtitle || '').toLowerCase().includes(q),
     );
-    return [...recordHits, ...staticFiltered].slice(0, 16);
-  }, [apps, canAccessApp, hasPermission, query, recordHits]);
+    return [...activeRecordHits, ...staticFiltered].slice(0, 20);
+  }, [apps, canAccessApp, hasPermission, query, recordHits, userSettings, saveUserSettings]);
 
-  useEffect(() => {
-    setActiveIdx(0);
-  }, [items.length]);
+  const safeIdx = items.length > 0 ? Math.min(activeIdx, items.length - 1) : 0;
 
-  if (!open) return null;
-
-  const navigateTo = (href: string) => {
+  const executeItem = (item: PaletteItem) => {
     onClose();
-    router.push(href);
+    if (item.onAction) {
+      item.onAction();
+      return;
+    }
+    if (item.externalHref) {
+      window.open(item.externalHref, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (item.href) {
+      router.push(item.href);
+    }
   };
 
   return (
@@ -138,12 +199,12 @@ export default function CommandPaletteModal({
               } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
                 setActiveIdx((i) => (items.length ? (i - 1 + items.length) % items.length : 0));
-              } else if (e.key === 'Enter' && items[activeIdx]) {
+              } else if (e.key === 'Enter' && items[safeIdx]) {
                 e.preventDefault();
-                navigateTo(items[activeIdx].href);
+                executeItem(items[safeIdx]);
               }
             }}
-            placeholder="Tìm nhanh Ứng dụng, Hồ sơ (mã/từ khóa), hoặc Trang..."
+            placeholder={t('cmd.placeholder')}
             style={{
               flex: 1,
               border: 'none',
@@ -153,24 +214,24 @@ export default function CommandPaletteModal({
               color: 'var(--text-primary)',
             }}
           />
-          {searching && <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Đang tìm...</span>}
+          {searching && <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{t('cmd.searching')}</span>}
           <kbd style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>ESC</kbd>
         </div>
 
         <div style={{ maxHeight: 400, overflowY: 'auto', padding: 8 }}>
           {items.length === 0 ? (
             <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text-muted)' }}>
-              Không tìm thấy kết quả phù hợp.
+              {t('cmd.empty')}
             </div>
           ) : (
             items.map((item, idx) => {
-              const selected = idx === activeIdx;
+              const selected = idx === safeIdx;
               return (
                 <button
                   key={item.id}
                   type="button"
                   onMouseEnter={() => setActiveIdx(idx)}
-                  onClick={() => navigateTo(item.href)}
+                  onClick={() => executeItem(item)}
                   style={{
                     width: '100%',
                     display: 'flex',
@@ -189,6 +250,10 @@ export default function CommandPaletteModal({
                     <AppsRoundedIcon sx={{ fontSize: 18, color: 'var(--accent-primary)' }} />
                   ) : item.kind === 'record' ? (
                     <DescriptionRoundedIcon sx={{ fontSize: 18, color: '#137333' }} />
+                  ) : item.kind === 'chat' ? (
+                    <ChatBubbleOutlineRoundedIcon sx={{ fontSize: 18, color: '#1a73e8' }} />
+                  ) : item.kind === 'attachment' ? (
+                    <AttachFileRoundedIcon sx={{ fontSize: 18, color: '#b06000' }} />
                   ) : (
                     <BoltRoundedIcon sx={{ fontSize: 18, color: 'var(--text-muted)' }} />
                   )}

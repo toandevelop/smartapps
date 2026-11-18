@@ -13,24 +13,24 @@ import ClusterIcon from './ui/ClusterIcon';
 import { usePlatform } from '@/lib/app-context';
 import { useAuth } from '@/lib/auth-context';
 import { useSettings } from '@/lib/settings-context';
+import { useSidebarCollapsed } from '@/lib/ui-hooks';
 
 export default function Sidebar() {
   const pathname = usePathname() || '/';
   const { apps } = usePlatform();
   const { canAccessApp, hasPermission } = useAuth();
-  const { unreadSummary, systemSettings } = useSettings();
-  const [collapsed, setCollapsed] = useState(false);
+  const { unreadSummary, systemSettings, t } = useSettings();
+  const collapsed = useSidebarCollapsed();
+  const [openMobilePath, setOpenMobilePath] = useState<string | null>(null);
+  const mobileOpen = openMobilePath === pathname;
 
   useEffect(() => {
-    const saved = localStorage.getItem('smartapps_sidebar_collapsed') === 'true';
-    setCollapsed(saved);
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ collapsed: boolean }>).detail;
-      if (detail) setCollapsed(detail.collapsed);
+    const mobileHandler = () => setOpenMobilePath((prev) => (prev === pathname ? null : pathname));
+    window.addEventListener('smartapps_mobile_sidebar_toggle', mobileHandler);
+    return () => {
+      window.removeEventListener('smartapps_mobile_sidebar_toggle', mobileHandler);
     };
-    window.addEventListener('smartapps_sidebar_toggle', handler);
-    return () => window.removeEventListener('smartapps_sidebar_toggle', handler);
-  }, []);
+  }, [pathname]);
 
   if (pathname === '/login' || pathname.startsWith('/forms/')) return null;
 
@@ -59,7 +59,15 @@ export default function Sidebar() {
     ) : null;
 
   return (
-    <aside className={`app-sidebar ${collapsed ? 'collapsed' : ''}`}>
+    <>
+      {mobileOpen && (
+        <div
+          className="sidebar-mobile-backdrop"
+          onClick={() => setOpenMobilePath(null)}
+          aria-hidden="true"
+        />
+      )}
+      <aside className={`app-sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
       <div className="sidebar-header">
         <div className="brand-logo" style={{ overflow: 'hidden' }}>
           {systemSettings.logoUrl ? (
@@ -82,41 +90,41 @@ export default function Sidebar() {
       </div>
 
       <nav className="sidebar-nav">
-        <div className="nav-section-label">Nền tảng</div>
+        <div className="nav-section-label">{t('nav.section.platform')}</div>
         <Link href="/" className={`nav-link ${pathname === '/' ? 'active' : ''}`}>
           <DashboardRoundedIcon sx={{ fontSize: 20 }} />
-          <span>Cổng Ứng dụng</span>
+          <span>{t('nav.portal')}</span>
         </Link>
         {(hasPermission('studio.manage') || hasPermission('user.manage') || hasPermission('role.manage')) && (
           <Link href="/studio" className={`nav-link ${pathname.startsWith('/studio') ? 'active' : ''}`}>
             <DesignServicesRoundedIcon sx={{ fontSize: 20 }} />
-            <span>App Builder Studio</span>
+            <span>{t('nav.studio')}</span>
           </Link>
         )}
         {(hasPermission('user.manage') || hasPermission('role.manage') || hasPermission('workflow.manage') || hasPermission('automation.manage') || hasPermission('studio.manage')) && (
           <Link href="/admin" className={`nav-link ${pathname.startsWith('/admin') ? 'active' : ''}`}>
             <AdminPanelSettingsRoundedIcon sx={{ fontSize: 20 }} />
-            <span>Quản trị &amp; Quy trình</span>
+            <span>{t('nav.admin')}</span>
           </Link>
         )}
 
-        <div className="nav-section-label">Giao tiếp &amp; Hệ thống</div>
+        <div className="nav-section-label">{t('nav.chat')} &amp; {t('nav.notifications')}</div>
         <Link href="/chat" className={`nav-link ${pathname.startsWith('/chat') ? 'active' : ''}`}>
           <ForumRoundedIcon sx={{ fontSize: 20 }} />
-          <span>Chat Nội bộ</span>
+          <span>{t('nav.chat')}</span>
           {renderBadge(unreadSummary.unreadChatCount, '#1a73e8')}
         </Link>
         <Link href="/notifications" className={`nav-link ${pathname.startsWith('/notifications') ? 'active' : ''}`}>
           <NotificationsRoundedIcon sx={{ fontSize: 20 }} />
-          <span>Thông báo</span>
+          <span>{t('nav.notifications')}</span>
           {renderBadge(unreadSummary.unreadNotifCount, '#d93025')}
         </Link>
         <Link href="/settings" className={`nav-link ${pathname.startsWith('/settings') ? 'active' : ''}`}>
           <SettingsRoundedIcon sx={{ fontSize: 20 }} />
-          <span>Cài đặt</span>
+          <span>{t('nav.settings')}</span>
         </Link>
 
-        <div className="nav-section-label">Ứng dụng Công ty ({visibleApps.length})</div>
+        <div className="nav-section-label">{t('nav.section.apps')} ({visibleApps.length})</div>
         {visibleApps.map((app) => {
           const href = `/apps/${app.code}`;
           const active = pathname.toUpperCase().startsWith(`/APPS/${app.code.toUpperCase()}`);
@@ -170,9 +178,10 @@ export default function Sidebar() {
               flexShrink: 0,
             }}
           />
-          {!collapsed && <span title="Máy chủ dữ liệu đang hoạt động">Hệ thống Sẵn sàng</span>}
+          {!collapsed && <span title={t('nav.systemReadyTitle')}>{t('nav.systemReady')}</span>}
         </div>
       </div>
     </aside>
+    </>
   );
 }

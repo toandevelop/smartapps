@@ -42,6 +42,15 @@ export function AppPublishModal({
     tableCount: number;
     columnCount: number;
   }>>([]);
+  const [diff, setDiff] = useState<{
+    hasPublishedRelease: boolean;
+    publishedVersion?: number | null;
+    addedTables: string[];
+    removedTables: string[];
+    addedColumns: string[];
+    removedColumns: string[];
+    modifiedColumns: string[];
+  } | null>(null);
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -49,12 +58,14 @@ export function AppPublishModal({
     if (!app) return;
     setValidating(true);
     try {
-      const [valRes, relRes] = await Promise.all([
+      const [valRes, relRes, diffRes] = await Promise.all([
         fetch(`/api/apps/${encodeURIComponent(app.id)}/validate-publish`, { method: 'POST', credentials: 'include' }).then((r) => r.json()),
         fetch(`/api/apps/${encodeURIComponent(app.id)}/releases`, { credentials: 'include' }).then((r) => r.json()),
+        fetch(`/api/apps/${encodeURIComponent(app.id)}/releases/diff`, { credentials: 'include' }).then((r) => r.ok ? r.json() : null).catch(() => null),
       ]);
       if (valRes.success) setValidation(valRes.data);
       if (relRes.success) setReleases(relRes.data || []);
+      if (diffRes?.success) setDiff(diffRes.data);
     } finally {
       setValidating(false);
     }
@@ -63,10 +74,16 @@ export function AppPublishModal({
   useEscapeKey(open && Boolean(app), onClose);
 
   useEffect(() => {
-    if (open && app) {
+    if (!open || !app) return;
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
       setNotes('');
-      loadPublishState();
-    }
+      void loadPublishState();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [open, app, loadPublishState]);
 
   if (!open || !app) return null;
@@ -95,26 +112,45 @@ export function AppPublishModal({
               style={{
                 padding: 12,
                 borderRadius: 8,
-                backgroundColor: validation.canPublish ? '#f0fdf4' : '#fef2f2',
-                border: `1px solid ${validation.canPublish ? '#bbf7d0' : '#fecaca'}`,
+                backgroundColor: validation.canPublish ? 'var(--success-bg)' : 'var(--danger-bg)',
+                border: `1px solid ${validation.canPublish ? 'var(--success-border)' : 'var(--danger-border)'}`,
                 fontSize: 12.5,
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: validation.canPublish ? '#166534' : '#991b1b' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: validation.canPublish ? 'var(--success-text)' : 'var(--danger-text)' }}>
                 {validation.canPublish ? <CheckCircleRoundedIcon sx={{ fontSize: 16 }} /> : <ErrorOutlineRoundedIcon sx={{ fontSize: 16 }} />}
                 {validation.summary}
               </div>
               {validation.errors.length > 0 && (
-                <ul style={{ margin: '6px 0 0 18px', color: '#991b1b' }}>
+                <ul style={{ margin: '6px 0 0 18px', color: 'var(--danger-text)' }}>
                   {validation.errors.map((e, i) => <li key={i}>{e}</li>)}
                 </ul>
               )}
               {validation.warnings.length > 0 && (
-                <ul style={{ margin: '6px 0 0 18px', color: '#92400e' }}>
+                <ul style={{ margin: '6px 0 0 18px', color: 'var(--warning-text)' }}>
                   {validation.warnings.map((w, i) => (
                     <li key={i}><WarningAmberRoundedIcon sx={{ fontSize: 13, verticalAlign: 'middle', mr: 0.5 }} />{w}</li>
                   ))}
                 </ul>
+              )}
+            </div>
+          )}
+
+          {diff && diff.hasPublishedRelease && (
+            <div style={{ padding: 12, borderRadius: 8, border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-secondary)', fontSize: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                So sánh thay đổi Draft vs Bản phát hành v{diff.publishedVersion ?? 1}
+              </div>
+              {diff.addedTables.length === 0 && diff.removedTables.length === 0 && diff.addedColumns.length === 0 && diff.removedColumns.length === 0 && diff.modifiedColumns.length === 0 ? (
+                <div style={{ color: 'var(--text-muted)' }}>Chưa có thay đổi cấu trúc bảng/cột nào kể từ bản phát hành gần nhất.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {diff.addedTables.map((t, i) => <div key={`at_${i}`} style={{ color: '#137333' }}>+ Bảng mới: {t}</div>)}
+                  {diff.removedTables.map((t, i) => <div key={`rt_${i}`} style={{ color: '#c5221f' }}>- Bảng đã gỡ: {t}</div>)}
+                  {diff.addedColumns.map((c, i) => <div key={`ac_${i}`} style={{ color: '#137333' }}>+ Cột mới: {c}</div>)}
+                  {diff.modifiedColumns.map((c, i) => <div key={`mc_${i}`} style={{ color: '#b45309' }}>~ Sửa cột: {c}</div>)}
+                  {diff.removedColumns.map((c, i) => <div key={`rc_${i}`} style={{ color: '#c5221f' }}>- Cột đã gỡ: {c}</div>)}
+                </div>
               )}
             </div>
           )}
@@ -244,7 +280,7 @@ export function PluginsMarketplacePanel({
     code: string;
     name: string;
     category: string;
-    config: Record<string, any>;
+    config: Record<string, unknown>;
     hasSecret: boolean;
     appId?: string | null;
     isEnabled: boolean;
@@ -286,7 +322,13 @@ export function PluginsMarketplacePanel({
   }, []);
 
   useEffect(() => {
-    loadPlugins();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadPlugins();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadPlugins]);
 
   const categories = ['ALL', 'EINVOICE', 'DIGITAL_SIGN', 'PAYMENT', 'BANKING', 'SMS_VN', 'NOTIFICATION', 'WEBHOOK_INBOUND', 'ERP_CRM'];
@@ -332,7 +374,7 @@ export function PluginsMarketplacePanel({
                     </span>
                   </div>
                   <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
-                    Nhóm: {plg.category} • Môi trường: {plg.config?.environment || 'sandbox'} • Secret: {plg.hasSecret ? 'Đã cấu hình' : 'Chưa có'}
+                    Nhóm: {plg.category} • Môi trường: {String(plg.config?.environment || 'sandbox')} • Secret: {plg.hasSecret ? 'Đã cấu hình' : 'Chưa có'}
                     {plg.lastTestMessage && ` • Test gần nhất: ${plg.lastTestStatus} (${plg.lastTestMessage})`}
                   </div>
                 </div>
@@ -407,7 +449,7 @@ export function PluginsMarketplacePanel({
 
       {/* Inline Plugin Config Editor */}
       {editingItem && (
-        <div style={{ padding: 14, borderRadius: 10, border: '1px solid #1a73e8', backgroundColor: '#eff6ff' }}>
+        <div style={{ padding: 14, borderRadius: 10, border: '1px solid var(--info-border)', backgroundColor: 'var(--info-bg)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
             <strong style={{ fontSize: 13.5 }}>Cấu hình Plugin: {editingItem.name} ({editingItem.code})</strong>
             <button type="button" className="btn btn-outline btn-xs" onClick={() => setEditingItem(null)}>Đóng</button>
@@ -638,11 +680,12 @@ export function AppPluginBindingsPanel({
   const [draftMapping, setDraftMapping] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
+  const appId = app?.id;
   const loadBindings = useCallback(async () => {
-    if (!app?.id) return;
+    if (!appId) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/integrations/apps/${encodeURIComponent(app.id)}/plugins`, {
+      const res = await fetch(`/api/integrations/apps/${encodeURIComponent(appId)}/plugins`, {
         credentials: 'include',
       }).then((r) => r.json());
       if (res?.success && Array.isArray(res.data)) {
@@ -653,10 +696,16 @@ export function AppPluginBindingsPanel({
     } finally {
       setLoading(false);
     }
-  }, [app?.id]);
+  }, [appId]);
 
   useEffect(() => {
-    loadBindings();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadBindings();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadBindings]);
 
   const saveBinding = async (
@@ -714,6 +763,41 @@ export function AppPluginBindingsPanel({
           <button type="button" className="btn btn-outline btn-xs" onClick={loadBindings} disabled={loading}>
             <RefreshRoundedIcon sx={{ fontSize: 14 }} /> Làm mới
           </button>
+        </div>
+      </div>
+
+      {/* Dynamic OpenAPI 3.0 & MCP Server Gateway Strip */}
+      <div
+        style={{
+          padding: '10px 12px',
+          borderRadius: 10,
+          backgroundColor: 'var(--bg-secondary)',
+          border: '1px solid var(--border-subtle)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+          fontSize: 12,
+        }}
+      >
+        <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+          🌐 OpenAPI 3.0 &amp; MCP AI Agent Gateway cho App {app.code}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+          <span>
+            OpenAPI Spec:{' '}
+            <a
+              href={`/api/apps/${encodeURIComponent(app.code)}/openapi.json`}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: 'var(--accent-primary)', fontWeight: 600 }}
+            >
+              /api/apps/{app.code}/openapi.json
+            </a>
+          </span>
+          <span>
+            MCP JSON-RPC:{' '}
+            <code>POST /api/mcp/{app.code}</code>
+          </span>
         </div>
       </div>
 
@@ -862,6 +946,39 @@ export function AppPluginBindingsPanel({
                         onChange={(e) => setDraftMapping((m) => ({ ...m, orderRefField: e.target.value }))}
                       />
                     </div>
+                    <div>
+                      <label style={{ fontSize: 11.5, fontWeight: 600, display: 'block', marginBottom: 4 }}>
+                        Ghi ngược Số HĐ/Mã GD (tùy chọn)
+                      </label>
+                      <input
+                        className="form-input"
+                        placeholder="VD: so_hoa_don"
+                        value={draftMapping.writeBackRefField || ''}
+                        onChange={(e) => setDraftMapping((m) => ({ ...m, writeBackRefField: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11.5, fontWeight: 600, display: 'block', marginBottom: 4 }}>
+                        Ghi ngược Link QR/Thanh toán
+                      </label>
+                      <input
+                        className="form-input"
+                        placeholder="VD: link_thanh_toan"
+                        value={draftMapping.writeBackUrlField || ''}
+                        onChange={(e) => setDraftMapping((m) => ({ ...m, writeBackUrlField: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11.5, fontWeight: 600, display: 'block', marginBottom: 4 }}>
+                        Ghi ngược Trạng thái tích hợp
+                      </label>
+                      <input
+                        className="form-input"
+                        placeholder="VD: trang_thai_tich_hop"
+                        value={draftMapping.writeBackStatusField || ''}
+                        onChange={(e) => setDraftMapping((m) => ({ ...m, writeBackStatusField: e.target.value }))}
+                      />
+                    </div>
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button
                         type="button"
@@ -909,23 +1026,72 @@ export function OutboxMonitorPanel({
     nextAttemptAt: string;
     createdAt: string;
   }>>([]);
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'FAILED' | 'DEAD_LETTER' | 'SUCCEEDED'>('ALL');
+  const [retryingAll, setRetryingAll] = useState(false);
 
   const loadOutbox = useCallback(async () => {
-    const res = await fetch('/api/automations/outbox?limit=50', { credentials: 'include' }).then((r) => r.json());
+    const stParam = statusFilter !== 'ALL' ? `&status=${statusFilter}` : '';
+    const res = await fetch(`/api/automations/outbox?limit=80${stParam}`, { credentials: 'include' }).then((r) => r.json());
     if (res.success) setEvents(res.data || []);
-  }, []);
+  }, [statusFilter]);
 
   useEffect(() => {
-    loadOutbox();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadOutbox();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadOutbox]);
+
+  const deadLetterCount = events.filter((e) => e.status === 'DEAD_LETTER').length;
 
   return (
     <div className="form-section-card" style={{ marginTop: 14 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <strong style={{ fontSize: 13.5 }}>Hàng đợi Webhook Outbox ({events.length})</strong>
-        <button type="button" className="btn btn-outline btn-xs" onClick={loadOutbox}>
-          <RefreshRoundedIcon sx={{ fontSize: 14 }} /> Tải lại
-        </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <strong style={{ fontSize: 13.5 }}>Hàng đợi Webhook Outbox ({events.length})</strong>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {(['ALL', 'PENDING', 'FAILED', 'DEAD_LETTER', 'SUCCEEDED'] as const).map((st) => (
+              <button
+                key={st}
+                type="button"
+                className={`btn btn-xs ${statusFilter === st ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => setStatusFilter(st)}
+              >
+                {st === 'ALL' ? 'Tất cả' : st}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {deadLetterCount > 0 && (
+            <button
+              type="button"
+              className="btn btn-outline btn-xs"
+              style={{ color: '#c5221f', borderColor: '#fad2cf' }}
+              disabled={retryingAll}
+              onClick={async () => {
+                setRetryingAll(true);
+                try {
+                  const res = await fetch('/api/automations/outbox/retry-dead-letters', { method: 'POST', credentials: 'include' }).then((r) => r.json());
+                  if (res.success) {
+                    toast(`Đã đưa ${res.retried || 0} sự kiện Dead-Letter về hàng đợi thử lại.`);
+                    await loadOutbox();
+                  }
+                } finally {
+                  setRetryingAll(false);
+                }
+              }}
+            >
+              {retryingAll ? 'Đang đưa lại...' : `Thử lại tất cả Dead-Letter (${deadLetterCount})`}
+            </button>
+          )}
+          <button type="button" className="btn btn-outline btn-xs" onClick={loadOutbox}>
+            <RefreshRoundedIcon sx={{ fontSize: 14 }} /> Tải lại
+          </button>
+        </div>
       </div>
       {events.length === 0 ? (
         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Chưa có sự kiện webhook nào trong hàng đợi Outbox.</div>
@@ -946,7 +1112,7 @@ export function OutboxMonitorPanel({
                     </span>
                   </td>
                   <td>{ev.attemptCount}/{ev.maxAttempts}</td>
-                  <td style={{ fontSize: 11.5, color: '#991b1b', maxWidth: 260 }}>{ev.lastError || '—'}</td>
+                  <td style={{ fontSize: 11.5, color: 'var(--danger-text)', maxWidth: 260 }}>{ev.lastError || '—'}</td>
                   <td>
                     {(ev.status === 'FAILED' || ev.status === 'DEAD_LETTER') && (
                       <button
@@ -1003,6 +1169,23 @@ export function PrintTemplateDesignerModal({
   const [requireApproved, setRequireApproved] = useState(false);
   const [htmlTemplate, setHtmlTemplate] = useState(PRINT_TEMPLATE_PRESETS[0].htmlTemplate);
   const [saving, setSaving] = useState(false);
+  const templateRef = React.useRef<HTMLTextAreaElement | null>(null);
+
+  const insertTokenAtCursor = (token: string) => {
+    const el = templateRef.current;
+    if (!el) {
+      setHtmlTemplate((prev) => `${prev}${token}`);
+      return;
+    }
+    const start = el.selectionStart ?? htmlTemplate.length;
+    const end = el.selectionEnd ?? htmlTemplate.length;
+    const next = `${htmlTemplate.slice(0, start)}${token}${htmlTemplate.slice(end)}`;
+    setHtmlTemplate(next);
+    setTimeout(() => {
+      el.focus();
+      el.setSelectionRange(start + token.length, start + token.length);
+    }, 0);
+  };
 
   const loadTemplates = useCallback(async () => {
     if (!table) return;
@@ -1013,8 +1196,11 @@ export function PrintTemplateDesignerModal({
   useEscapeKey(open && Boolean(table), onClose);
 
   useEffect(() => {
-    if (open && table) {
-      loadTemplates();
+    if (!open || !table) return;
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      void loadTemplates();
       setEditingId(null);
       setName(`Mẫu in ${table.displayName}`);
       setPaperSize('A4');
@@ -1022,7 +1208,10 @@ export function PrintTemplateDesignerModal({
       setWatermarkDraft(true);
       setRequireApproved(false);
       setHtmlTemplate(PRINT_TEMPLATE_PRESETS[0].htmlTemplate);
-    }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [open, table, loadTemplates]);
 
   if (!open || !table || !app) return null;
@@ -1142,12 +1331,47 @@ export function PrintTemplateDesignerModal({
             </div>
 
             <div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 4 }}>
-                Biến cột có sẵn: {columns.map((c) => `{{${c.columnCode}}}`).join(', ')}
+              <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 6 }}>
+                <strong>Token Picker</strong> (nhấn để chèn nhanh vào vị trí con trỏ):
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8, maxHeight: 112, overflowY: 'auto', padding: 6, borderRadius: 8, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+                {[
+                  { label: 'Mã hồ sơ', token: '{{record_key}}' },
+                  { label: 'Ngày in', token: '{{print_date}}' },
+                  { label: 'Người lập', token: '{{created_by}}' },
+                  { label: 'Người duyệt', token: '{{approved_by}}' },
+                  ...columns.map((c) => {
+                    const dt = (c.dataType || '').toUpperCase();
+                    if (dt === 'SUB_TABLE') {
+                      return {
+                        label: `Lặp bảng: ${c.columnName}`,
+                        token: `{{#each ${c.columnCode}}}\n  <tr><td>{{@index1}}</td><td>...</td></tr>\n{{/each}}`,
+                      };
+                    }
+                    if (dt === 'CURRENCY') return { label: `${c.columnName} (Tiền)`, token: `{{${c.columnCode} | currency}}` };
+                    if (dt === 'DATE') return { label: `${c.columnName} (Ngày)`, token: `{{${c.columnCode} | date}}` };
+                    return { label: c.columnName, token: `{{${c.columnCode}}}` };
+                  }),
+                  ...columns
+                    .filter((c) => (c.dataType || '').toUpperCase() === 'CURRENCY')
+                    .map((c) => ({ label: `${c.columnName} (Bằng chữ)`, token: `{{${c.columnCode} | vnd_words}}` })),
+                ].map((item, idx) => (
+                  <button
+                    key={`${item.label}_${idx}`}
+                    type="button"
+                    className="btn btn-outline btn-xs"
+                    style={{ fontSize: 11, padding: '2px 7px' }}
+                    onClick={() => insertTokenAtCursor(item.token)}
+                    title={item.token}
+                  >
+                    + {item.label}
+                  </button>
+                ))}
               </div>
               <textarea
+                ref={templateRef}
                 className="form-input"
-                rows={12}
+                rows={11}
                 style={{ fontFamily: 'monospace', fontSize: 12 }}
                 value={htmlTemplate}
                 onChange={(e) => setHtmlTemplate(e.target.value)}
@@ -1203,6 +1427,7 @@ export function PrintTemplateDesignerModal({
             <div
               style={{
                 backgroundColor: '#fff',
+                color: '#111827',
                 padding: 18,
                 borderRadius: 8,
                 border: '1px solid #cbd5e1',
@@ -1256,7 +1481,7 @@ export function BackupManagerPanel({
       setIsEnabled(Boolean(cfgRes.data.isEnabled));
       setIntervalHours(Number(cfgRes.data.intervalHours || 24));
       setRetentionCount(Number(cfgRes.data.retentionCount || 7));
-      setDestinationType((cfgRes.data.destinationType || 'LOCAL') as any);
+      setDestinationType((cfgRes.data.destinationType || 'LOCAL') as 'LOCAL' | 'S3' | 'GOOGLE_DRIVE' | 'CUSTOM_WEBHOOK');
       const rawCfg = cfgRes.data.destinationConfig || {};
       setDestConfig(Object.fromEntries(Object.entries(rawCfg).map(([k, v]) => [k, String(v ?? '')])));
       setHasSecret(Boolean(cfgRes.data.hasSecret));
@@ -1266,7 +1491,13 @@ export function BackupManagerPanel({
   }, []);
 
   useEffect(() => {
-    loadBackups();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadBackups();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadBackups]);
 
   return (
@@ -1302,7 +1533,11 @@ export function BackupManagerPanel({
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
         <div>
           <label className="form-label">Đích lưu trữ</label>
-          <select className="form-select" value={destinationType} onChange={(e) => setDestinationType(e.target.value as any)}>
+          <select
+            className="form-select"
+            value={destinationType}
+            onChange={(e) => setDestinationType(e.target.value as 'LOCAL' | 'S3' | 'GOOGLE_DRIVE' | 'CUSTOM_WEBHOOK')}
+          >
             <option value="LOCAL">Cục bộ (Local Disk)</option>
             <option value="S3">Amazon S3 / MinIO / R2</option>
             <option value="GOOGLE_DRIVE">Google Drive (OAuth)</option>

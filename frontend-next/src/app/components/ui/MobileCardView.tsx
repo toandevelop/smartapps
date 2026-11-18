@@ -4,7 +4,6 @@ import React, { useState } from 'react';
 import { ColumnDef } from './DataTable';
 import KeyboardArrowDownRoundedIcon from '@mui/icons-material/KeyboardArrowDownRounded';
 import KeyboardArrowUpRoundedIcon from '@mui/icons-material/KeyboardArrowUpRounded';
-import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import EmptyState from './EmptyState';
 
 export interface MobileCardViewProps<T extends { id: string }> {
@@ -28,12 +27,18 @@ export interface MobileCardViewProps<T extends { id: string }> {
   };
 }
 
-function getCardFieldValue<T>(row: T, key: string): any {
-  const r = row as Record<string, any>;
-  if (r.data && typeof r.data === 'object' && key in r.data) {
-    return r.data[key];
+function getCardFieldValue<T>(row: T, key: string): unknown {
+  const r = row as Record<string, unknown>;
+  if (r.data && typeof r.data === 'object' && key in (r.data as Record<string, unknown>)) {
+    return (r.data as Record<string, unknown>)[key];
   }
   return r[key];
+}
+
+function renderCardColumnValue<T>(col: ColumnDef<T> | undefined, row: T, idx: number, fallbackKey = 'id'): React.ReactNode {
+  if (col?.render) return col.render(row, idx);
+  const raw = getCardFieldValue(row, col?.key || fallbackKey);
+  return raw === null || raw === undefined || raw === '' ? '---' : String(raw);
 }
 
 export default function MobileCardView<T extends { id: string }>({
@@ -129,7 +134,7 @@ export default function MobileCardView<T extends { id: string }>({
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '10px 14px',
-            backgroundColor: '#e8f0fe',
+            backgroundColor: 'var(--info-bg)',
             border: '1px solid #1a73e8',
             borderRadius: 'var(--radius-md)',
             marginBottom: '4px',
@@ -171,7 +176,7 @@ export default function MobileCardView<T extends { id: string }>({
               tabIndex={0}
               onClick={() => onRowClick?.(row)}
               style={{
-                backgroundColor: isSelected ? '#f8fafd' : 'var(--bg-surface)',
+                backgroundColor: isSelected ? 'var(--info-bg)' : 'var(--bg-surface)',
                 border: isSelected ? '1.5px solid #1a73e8' : '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-md)',
                 padding: '14px 16px',
@@ -221,7 +226,7 @@ export default function MobileCardView<T extends { id: string }>({
                         wordBreak: 'break-word',
                       }}
                     >
-                      {primaryCol?.render ? primaryCol.render(row, idx) : getCardFieldValue(row, primaryCol?.key || 'id') ?? '---'}
+                      {renderCardColumnValue(primaryCol, row, idx)}
                     </div>
                   </div>
                 </div>
@@ -269,7 +274,7 @@ export default function MobileCardView<T extends { id: string }>({
                 {previewCols.map((col) => {
                   const label =
                     col.label || (typeof col.header === 'string' ? col.header : col.key);
-                  const renderedVal = col.render ? col.render(row, idx) : getCardFieldValue(row, col.key);
+                  const renderedVal = renderCardColumnValue(col, row, idx);
 
                   return (
                     <div key={col.key} style={{ minWidth: 0 }}>
@@ -292,7 +297,7 @@ export default function MobileCardView<T extends { id: string }>({
                           wordBreak: 'break-word',
                         }}
                       >
-                        {renderedVal ?? '---'}
+                        {renderedVal}
                       </div>
                     </div>
                   );
@@ -303,7 +308,7 @@ export default function MobileCardView<T extends { id: string }>({
                   extraCols.map((col) => {
                     const label =
                       col.label || (typeof col.header === 'string' ? col.header : col.key);
-                    const renderedVal = col.render ? col.render(row, idx) : getCardFieldValue(row, col.key);
+                    const renderedVal = renderCardColumnValue(col, row, idx);
 
                     return (
                       <div
@@ -333,7 +338,7 @@ export default function MobileCardView<T extends { id: string }>({
                             wordBreak: 'break-word',
                           }}
                         >
-                          {renderedVal ?? '---'}
+                          {renderedVal}
                         </div>
                       </div>
                     );

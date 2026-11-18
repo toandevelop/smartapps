@@ -239,4 +239,73 @@ export const PRINT_TEMPLATE_PRESETS: Array<{
   <div style="text-align:center; margin-top: 10px; font-size: 11px;">Xin cảm ơn quý khách!</div>
 </div>`,
   },
+  {
+    key: 'vn_payment_request',
+    name: 'Đề nghị Thanh toán Doanh nghiệp VN (Quốc hiệu & 4 chữ ký)',
+    paperSize: 'A4',
+    orientation: 'portrait',
+    htmlTemplate: `<div style="font-family: 'Times New Roman', serif; color: #111827; line-height: 1.55;">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px;">
+    <div style="font-size:12.5px;">
+      <strong>{{app_name}}</strong><br/>
+      <span>Phòng ban: {{app_department}}</span>
+    </div>
+    <div style="text-align:center; font-size:12.5px;">
+      <strong>CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</strong><br/>
+      <u>Độc lập - Tự do - Hạnh phúc</u><br/>
+      <i style="font-size:11.5px;">Ngày in: {{print_date}}</i>
+    </div>
+  </div>
+  <h2 style="text-align:center; margin:12px 0 4px; font-size:19px;">GIẤY ĐỀ NGHỊ THANH TOÁN</h2>
+  <div style="text-align:center; font-size:12.5px; margin-bottom:14px;">Số hồ sơ: <strong>{{record_key}}</strong> • Trạng thái: <strong>{{approval_status}}</strong></div>
+  <p>Người đề nghị: <strong>{{created_by}}</strong></p>
+  <p>Tổng số tiền đề nghị: <strong>{{tong_tien | currency}}</strong></p>
+  <p>Số tiền viết bằng chữ: <i><strong>{{tong_tien | vnd_words}}</strong></i></p>
+  <div style="display:grid; grid-template-columns: repeat(4, 1fr); margin-top: 32px; text-align:center; font-size: 12.5px;">
+    <div><strong>Người đề nghị</strong><div style="margin-top:46px;">{{created_by}}</div></div>
+    <div><strong>Trưởng bộ phận</strong><div style="margin-top:46px;">(Ký, ghi rõ họ tên)</div></div>
+    <div><strong>Kế toán trưởng</strong><div style="margin-top:46px;">(Ký, ghi rõ họ tên)</div></div>
+    <div><strong>Ban Giám đốc</strong><div style="margin-top:46px;">{{approved_by}}</div></div>
+  </div>
+</div>`,
+  },
+  {
+    key: 'vn_handover_minutes',
+    name: 'Biên bản Bàn giao / Hợp đồng Dịch vụ A4',
+    paperSize: 'A4',
+    orientation: 'portrait',
+    htmlTemplate: `<div style="font-family: 'Times New Roman', serif; color: #111827; line-height: 1.55;">
+  <div style="text-align:center; margin-bottom:12px;">
+    <strong>CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</strong><br/>
+    <u>Độc lập - Tự do - Hạnh phúc</u>
+    <h2 style="margin:12px 0 4px; font-size:19px;">BIÊN BẢN BÀN GIAO / XÁC NHẬN</h2>
+    <div style="font-size:12.5px;">Mã số: <strong>{{record_key}}</strong> • {{print_date}}</div>
+  </div>
+  <p>Hôm nay, ngày {{print_date}}, tại đơn vị <strong>{{app_department}}</strong> ({{app_name}}), hai bên cùng lập biên bản bàn giao cho danh mục <strong>{{table_name}}</strong> như sau:</p>
+  <table style="width:100%; border-collapse:collapse; font-size:13px; margin:10px 0;">
+    <thead>
+      <tr style="background:#f3f4f6;">
+        <th style="border:1px solid #9ca3af; padding:6px; width:40px;">STT</th>
+        <th style="border:1px solid #9ca3af; padding:6px; text-align:left;">Nội dung / Hạng mục</th>
+        <th style="border:1px solid #9ca3af; padding:6px; text-align:right;">Số lượng</th>
+        <th style="border:1px solid #9ca3af; padding:6px; text-align:left;">Ghi chú</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{#each chi_tiet}}
+      <tr>
+        <td style="border:1px solid #9ca3af; padding:6px; text-align:center;">{{@index1}}</td>
+        <td style="border:1px solid #9ca3af; padding:6px;">{{ten_hang}}</td>
+        <td style="border:1px solid #9ca3af; padding:6px; text-align:right;">{{so_luong | number}}</td>
+        <td style="border:1px solid #9ca3af; padding:6px;">{{ghi_chu}}</td>
+      </tr>
+      {{/each}}
+    </tbody>
+  </table>
+  <div style="display:grid; grid-template-columns: repeat(2, 1fr); margin-top: 32px; text-align:center; font-size: 13px;">
+    <div><strong>ĐẠI DIỆN BÊN GIAO</strong><div style="margin-top:52px;">{{created_by}}</div></div>
+    <div><strong>ĐẠI DIỆN BÊN NHẬN / DUYỆT</strong><div style="margin-top:52px;">{{approved_by}}</div></div>
+  </div>
+</div>`,
+  },
 ];

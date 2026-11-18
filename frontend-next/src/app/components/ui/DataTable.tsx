@@ -73,6 +73,7 @@ export interface DataTableProps<T extends { id: string }> {
     direction: 'asc' | 'desc';
     onSortChange: (key: string, dir: 'asc' | 'desc') => void;
   };
+  onRowClick?: (row: T) => void;
   pagination?: {
     page: number;
     pageSize: number;
@@ -85,10 +86,10 @@ export interface DataTableProps<T extends { id: string }> {
   hideToolbar?: boolean;
 }
 
-function getRowFieldValue<T>(row: T, key: string): any {
-  const r = row as Record<string, any>;
-  if (r.data && typeof r.data === 'object' && key in r.data) {
-    return r.data[key];
+function getRowFieldValue<T>(row: T, key: string): unknown {
+  const r = row as Record<string, unknown>;
+  if (r.data && typeof r.data === 'object' && key in (r.data as Record<string, unknown>)) {
+    return (r.data as Record<string, unknown>)[key];
   }
   return r[key];
 }
@@ -119,6 +120,7 @@ export default function DataTable<T extends { id: string }>({
   enableFiltering = true,
   enablePinning = true,
   serverSort,
+  onRowClick,
   pagination,
   toolbarExtra,
 }: DataTableProps<T>) {
@@ -171,7 +173,7 @@ export default function DataTable<T extends { id: string }>({
       try {
         const saved = localStorage.getItem(`dt_pinned_${storageKey}`);
         if (saved) return new Set(JSON.parse(saved));
-      } catch (e) {
+      } catch {
         // ignore
       }
     }
@@ -190,12 +192,58 @@ export default function DataTable<T extends { id: string }>({
       if (typeof window !== 'undefined' && storageKey) {
         try {
           localStorage.setItem(`dt_pinned_${storageKey}`, JSON.stringify(Array.from(next)));
-        } catch (e) {
+        } catch {
           // ignore
         }
       }
       return next;
     });
+  };
+
+  // Client-side Column Resizing State
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    if (typeof window !== 'undefined' && storageKey) {
+      try {
+        const saved = localStorage.getItem(`dt_widths_${storageKey}`);
+        if (saved) return JSON.parse(saved);
+      } catch {
+        // ignore
+      }
+    }
+    return {};
+  });
+
+  const startResize = (colKey: string, e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const th = (e.currentTarget as HTMLElement).parentElement;
+    const startX = e.clientX;
+    const startW = th ? th.getBoundingClientRect().width : 140;
+    let latestW = startW;
+
+    const onMove = (moveEvt: MouseEvent) => {
+      latestW = Math.min(640, Math.max(80, Math.round(startW + (moveEvt.clientX - startX))));
+      setColWidths((prev) => ({ ...prev, [colKey]: latestW }));
+    };
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      if (typeof window !== 'undefined' && storageKey) {
+        try {
+          setColWidths((prev) => {
+            const next = { ...prev, [colKey]: latestW };
+            localStorage.setItem(`dt_widths_${storageKey}`, JSON.stringify(next));
+            return next;
+          });
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   };
 
   // Client-side Sorting State
@@ -240,30 +288,26 @@ export default function DataTable<T extends { id: string }>({
   }, []);
 
   useEffect(() => {
-    if (!showFilterBox) {
-      setFilterPos(null);
-      return;
-    }
+    if (!showFilterBox) return;
     const update = () => setFilterPos(computePopoverPos(filterBoxRef.current, 600, false));
-    update();
+    const raf = requestAnimationFrame(update);
     window.addEventListener('resize', update);
     window.addEventListener('scroll', update, true);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener('resize', update);
       window.removeEventListener('scroll', update, true);
     };
   }, [showFilterBox, computePopoverPos]);
 
   useEffect(() => {
-    if (!showColPicker) {
-      setColPos(null);
-      return;
-    }
+    if (!showColPicker) return;
     const update = () => setColPos(computePopoverPos(colPickerRef.current, 270, true));
-    update();
+    const raf = requestAnimationFrame(update);
     window.addEventListener('resize', update);
     window.addEventListener('scroll', update, true);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener('resize', update);
       window.removeEventListener('scroll', update, true);
     };
@@ -283,7 +327,7 @@ export default function DataTable<T extends { id: string }>({
       if (typeof window !== 'undefined' && storageKey) {
         try {
           localStorage.setItem(`dt_cols_${storageKey}`, JSON.stringify(Array.from(next)));
-        } catch (e) {
+        } catch {
           // ignore
         }
       }
@@ -408,7 +452,7 @@ export default function DataTable<T extends { id: string }>({
     }
 
     // 2. Column Filters (category, date, and text support)
-    const activeFilters = Object.entries(columnFilters).filter(([_, v]) => v && v.trim() !== '');
+    const activeFilters = Object.entries(columnFilters).filter(([, v]) => v && v.trim() !== '');
     if (activeFilters.length > 0) {
       result = result.filter((row) => {
         return activeFilters.every(([colKey, filterVal]) => {
@@ -1386,6 +1430,32 @@ export default function DataTable<T extends { id: string }>({
                     >
                       Hiện tất cả
                     </button>
+                    {Object.keys(colWidths).length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setColWidths({});
+                          if (typeof window !== 'undefined' && storageKey) {
+                            try {
+                              localStorage.removeItem(`dt_widths_${storageKey}`);
+                            } catch {
+                              // ignore
+                            }
+                          }
+                        }}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--text-muted)',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          padding: '2px 4px',
+                        }}
+                      >
+                        Đặt lại độ rộng
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={resetColumnsToDefault}
@@ -1648,6 +1718,7 @@ export default function DataTable<T extends { id: string }>({
             data={processedData}
             selectedIds={selectedIds}
             onSelectRow={handleToggleRow}
+            onRowClick={onRowClick}
             enableSelection={hasSelection}
             emptyText={typeof emptyText === 'string' ? emptyText : 'Không có bản ghi nào.'}
             loading={loading}
@@ -1753,8 +1824,8 @@ export default function DataTable<T extends { id: string }>({
                     }}
                     onClick={() => handleSortClick(col.key, col.sortable)}
                     style={{
-                      width: col.width,
-                      minWidth: col.width,
+                      width: colWidths[col.key] ?? col.width,
+                      minWidth: colWidths[col.key] ?? col.width,
                       textAlign: col.align || 'left',
                       padding: '10px 14px',
                       fontSize: '12px',
@@ -1762,12 +1833,13 @@ export default function DataTable<T extends { id: string }>({
                       letterSpacing: '0.01em',
                       textTransform: 'none',
                       color: isSortActive ? '#1a73e8' : 'var(--text-muted)',
-                      backgroundColor: isSortActive ? '#f1f5fd' : 'var(--bg-primary)',
+                      backgroundColor: isSortActive ? 'var(--info-bg)' : 'var(--bg-primary)',
                       borderBottom: '1px solid var(--border-subtle)',
                       whiteSpace: 'nowrap',
                       cursor: isSortable ? 'pointer' : 'default',
                       userSelect: 'none',
                       transition: 'background-color 0.1s ease',
+                      position: stickyThStyle.position ?? 'relative',
                       ...stickyThStyle,
                     }}
                     title={isSortable ? 'Nhấp để sắp xếp' : undefined}
@@ -1801,6 +1873,19 @@ export default function DataTable<T extends { id: string }>({
                         </span>
                       )}
                     </div>
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => startResize(col.key, e)}
+                      title="Kéo để thay đổi độ rộng cột"
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        right: 0,
+                        bottom: 0,
+                        width: 6,
+                        cursor: 'col-resize',
+                      }}
+                    />
                   </th>
                 );
               })}
@@ -1945,16 +2030,26 @@ export default function DataTable<T extends { id: string }>({
           </thead>
           <tbody style={loading && processedData.length > 0 ? { opacity: 0.6, transition: 'opacity 120ms ease', pointerEvents: 'none' } : undefined}>
             {loading && processedData.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={visibleColumns.length + (hasSelection ? 1 : 0)}
-                  style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--text-muted)' }}
-                >
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-                    <div style={{ fontSize: '13px', fontWeight: 600 }}>Đang tải dữ liệu...</div>
-                  </div>
-                </td>
-              </tr>
+              Array.from({ length: 6 }).map((_, rIdx) => (
+                <tr key={`sk-${rIdx}`} aria-hidden="true">
+                  {hasSelection && (
+                    <td style={{ padding: '12px 10px' }}>
+                      <div className="skeleton-box" style={{ width: 16, height: 16, borderRadius: 4 }} />
+                    </td>
+                  )}
+                  {visibleColumns.map((col, cIdx) => (
+                    <td key={String(col.key || cIdx)} style={{ padding: '12px 10px' }}>
+                      <div
+                        className="skeleton-box"
+                        style={{
+                          height: 14,
+                          width: `${55 + ((rIdx * 17 + cIdx * 23) % 35)}%`,
+                        }}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))
             ) : processedData.length === 0 ? (
               <tr>
                 <td
@@ -2068,7 +2163,12 @@ export default function DataTable<T extends { id: string }>({
                             ...stickyTdStyle,
                           }}
                         >
-                          {col.render ? col.render(row, index) : getRowFieldValue(row, col.key) ?? '—'}
+                          {col.render
+                            ? col.render(row, index)
+                            : (() => {
+                                const raw = getRowFieldValue(row, col.key);
+                                return raw === null || raw === undefined || raw === '' ? '—' : String(raw);
+                              })()}
                         </td>
                       );
                     })}

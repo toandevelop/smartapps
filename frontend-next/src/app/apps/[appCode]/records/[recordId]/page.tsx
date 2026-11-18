@@ -13,11 +13,14 @@ import CancelRoundedIcon from '@mui/icons-material/CancelRounded';
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded';
 import ForumRoundedIcon from '@mui/icons-material/ForumRounded';
 import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
+import UndoRoundedIcon from '@mui/icons-material/UndoRounded';
+import BlockRoundedIcon from '@mui/icons-material/BlockRounded';
 import {
   PageHeader,
   StatusBadge,
   NotificationSnackbar,
   PrintableRecordModal,
+  ConfirmDialog,
 } from '@/app/components/ui';
 import { RecordEditorModal } from '@/app/studio/StudioModals';
 import { useAuth } from '@/lib/auth-context';
@@ -92,6 +95,10 @@ export default function RecordFullDetailPage() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showPrint, setShowPrint] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectModalMode, setRejectModalMode] = useState<'reject' | 'return'>('reject');
+  const [rejectReason, setRejectReason] = useState('');
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const [snack, setSnack] = useState<{ open: boolean; msg: string; type: 'success' | 'error' }>({
     open: false,
     msg: '',
@@ -110,7 +117,7 @@ export default function RecordFullDetailPage() {
   const [pluginResult, setPluginResult] = useState<{
     success: boolean;
     message: string;
-    data: Record<string, any>;
+    data: Record<string, unknown>;
   } | null>(null);
 
   const toast = (msg: string, type: 'success' | 'error' = 'success') => setSnack({ open: true, msg, type });
@@ -154,15 +161,26 @@ export default function RecordFullDetailPage() {
       if (audRes.success) setAudits(audRes.data || []);
       if (cmtRes.success) setComments(cmtRes.data || []);
 
-      if (isUserAdmin) {
+      const canRunPlugins = isUserAdmin
+        || canPerformTableAction(appTree.app.code, rec.tableId, 'edit')
+        || canPerformTableAction(appTree.app.code, rec.tableId, 'approve');
+      if (canRunPlugins) {
         fetch(`/api/integrations/apps/${encodeURIComponent(appTree.app.id)}/plugins?enabledOnly=true`)
           .then((r) => (r.ok ? r.json() : null))
           .then((pRes) => {
             if (pRes?.success && Array.isArray(pRes.data)) {
+              const pluginBindings = pRes.data as Array<{
+                id: string;
+                pluginCode: string;
+                pluginName: string;
+                category: string;
+                tableId?: string | null;
+                fieldMapping?: Record<string, string>;
+              }>;
               setEnabledPlugins(
-                pRes.data
-                  .filter((p: any) => p.category !== 'WEBHOOK_INBOUND' && (!p.tableId || p.tableId === rec.tableId))
-                  .map((p: any) => ({
+                pluginBindings
+                  .filter((p) => p.category !== 'WEBHOOK_INBOUND' && (!p.tableId || p.tableId === rec.tableId))
+                  .map((p) => ({
                     id: p.id,
                     code: p.pluginCode,
                     name: p.pluginName,
@@ -174,16 +192,24 @@ export default function RecordFullDetailPage() {
             }
           })
           .catch(() => {});
+      } else {
+        setEnabledPlugins([]);
       }
     } catch {
       setErrorMsg('Lỗi kết nối tới máy chủ.');
     } finally {
       setLoading(false);
     }
-  }, [appCode, recordId, isUserAdmin]);
+  }, [appCode, recordId, isUserAdmin, canPerformTableAction]);
 
   useEffect(() => {
-    loadAll();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadAll();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadAll]);
 
   const { activeTable, activeColumns } = useMemo<{ activeTable: SysTable | null; activeColumns: SysColumn[] }>(() => {
@@ -195,7 +221,7 @@ export default function RecordFullDetailPage() {
   const canEdit = Boolean(tree && activeTable && canPerformTableAction(tree.app.code, activeTable.id, 'edit'));
   const canApprove = Boolean(tree && activeTable && canPerformTableAction(tree.app.code, activeTable.id, 'approve'));
 
-  const handleSaveEdit = async (data: Record<string, any>) => {
+  const handleSaveEdit = async (data: Record<string, unknown>) => {
     if (!record || !activeTable) return;
     setSaving(true);
     try {
@@ -223,21 +249,48 @@ export default function RecordFullDetailPage() {
     }
   };
 
-  const handleApprovalAction = async (action: 'submit' | 'approve' | 'reject') => {
+  const handleApprovalAction = async (
+    action: 'submit' | 'approve' | 'reject' | 'return' | 'recall' | 'cancel',
+    reasonText?: string
+  ) => {
     if (!record) return;
     const url = action === 'submit'
       ? `/api/records/${record.id}/submit-approval`
-      : `/api/records/${record.id}/approve`;
+      : action === 'recall'
+        ? `/api/records/${record.id}/recall-approval`
+        : action === 'cancel'
+          ? `/api/records/${record.id}/cancel-approval`
+          : `/api/records/${record.id}/approve`;
     const body = action === 'submit'
       ? {}
-      : { approve: action === 'approve', reason: action === 'reject' ? 'Từ chối từ trang chi tiết' : 'Phê duyệt', expectedVersion: record.version, expectedStepOrder: record.currentStepOrder };
+      : action === 'recall' || action === 'cancel'
+        ? { expectedVersion: record.version, reason: reasonText }
+        : {
+            approve: action === 'approve',
+            action: action === 'return' ? 'RETURN' : action === 'reject' ? 'REJECT' : 'APPROVE',
+            reason: action === 'reject'
+              ? (reasonText?.trim() || 'Từ chối phê duyệt')
+              : action === 'return'
+                ? (reasonText?.trim() || 'Trả lại bước trước để bổ sung')
+                : 'Phê duyệt',
+            expectedVersion: record.version,
+            expectedStepOrder: record.currentStepOrder,
+          };
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify(body),
     }).then((r) => r.json());
     if (res.success) {
-      toast('Đã cập nhật trạng thái phê duyệt.');
+      const msg = action === 'recall'
+        ? 'Đã thu hồi trình duyệt!'
+        : action === 'cancel'
+          ? 'Đã hủy hồ sơ!'
+          : action === 'return'
+            ? 'Đã trả lại bước trước!'
+            : 'Đã cập nhật trạng thái phê duyệt.';
+      toast(msg);
       await loadAll();
     } else {
       toast(res.message || 'Thao tác thất bại.', 'error');
@@ -268,8 +321,14 @@ export default function RecordFullDetailPage() {
   }
 
   const approvalStatus = (record.approvalStatus || 'DRAFT').toUpperCase();
+  const isOwner = Boolean(user?.username && record.createdBy && user.username.toLowerCase() === record.createdBy.toLowerCase());
+  const canRecallOrCancel = isOwner || isUserAdmin;
   const steps = ['DRAFT', 'PENDING', 'APPROVED'];
-  const activeStepIdx = approvalStatus === 'REJECTED' ? 1 : Math.max(0, steps.indexOf(approvalStatus));
+  const activeStepIdx = (approvalStatus === 'REJECTED' || approvalStatus === 'CANCELLED')
+    ? 1
+    : approvalStatus === 'RECALLED'
+      ? 0
+      : Math.max(0, steps.indexOf(approvalStatus));
 
   return (
     <>
@@ -306,9 +365,9 @@ export default function RecordFullDetailPage() {
               <StatusBadge status={record.approvalStatus || 'DRAFT'} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
                 {[
-                  { key: 'DRAFT', label: '1. Nháp' },
+                  { key: 'DRAFT', label: approvalStatus === 'RECALLED' ? '1. Đã thu hồi' : '1. Nháp' },
                   { key: 'PENDING', label: record.currentStepName ? `2. ${record.currentStepName}` : '2. Chờ duyệt' },
-                  { key: 'APPROVED', label: approvalStatus === 'REJECTED' ? '3. Từ chối' : '3. Đã duyệt' },
+                  { key: 'APPROVED', label: approvalStatus === 'REJECTED' ? '3. Từ chối' : approvalStatus === 'CANCELLED' ? '3. Đã hủy' : '3. Đã duyệt' },
                 ].map((s, i) => (
                   <React.Fragment key={s.key}>
                     <span
@@ -317,10 +376,10 @@ export default function RecordFullDetailPage() {
                         borderRadius: 999,
                         fontWeight: i <= activeStepIdx ? 700 : 500,
                         backgroundColor: i <= activeStepIdx
-                          ? (approvalStatus === 'REJECTED' && i === 2 ? '#fce8e6' : '#e8f0fe')
-                          : '#f1f5f9',
+                          ? ((approvalStatus === 'REJECTED' || approvalStatus === 'CANCELLED') && i === 2 ? '#fce8e6' : '#e8f0fe')
+                          : 'var(--bg-secondary)',
                         color: i <= activeStepIdx
-                          ? (approvalStatus === 'REJECTED' && i === 2 ? '#c5221f' : '#1a73e8')
+                          ? ((approvalStatus === 'REJECTED' || approvalStatus === 'CANCELLED') && i === 2 ? '#c5221f' : '#1a73e8')
                           : 'var(--text-muted)',
                       }}
                     >
@@ -332,10 +391,10 @@ export default function RecordFullDetailPage() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 8 }}>
-              {(approvalStatus === 'DRAFT' || approvalStatus === 'REJECTED') && canEdit && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {(approvalStatus === 'DRAFT' || approvalStatus === 'REJECTED' || approvalStatus === 'RECALLED') && canEdit && (
                 <button type="button" className="btn btn-primary btn-sm" onClick={() => handleApprovalAction('submit')}>
-                  <FactCheckRoundedIcon sx={{ fontSize: 16 }} /> Gửi phê duyệt
+                  <FactCheckRoundedIcon sx={{ fontSize: 16 }} /> {approvalStatus === 'DRAFT' ? 'Gửi phê duyệt' : 'Nộp lại phê duyệt'}
                 </button>
               )}
               {approvalStatus === 'PENDING' && canApprove && (
@@ -343,10 +402,38 @@ export default function RecordFullDetailPage() {
                   <button type="button" className="btn btn-primary btn-sm" style={{ backgroundColor: '#137333' }} onClick={() => handleApprovalAction('approve')}>
                     <CheckCircleRoundedIcon sx={{ fontSize: 16 }} /> Phê duyệt
                   </button>
-                  <button type="button" className="btn btn-outline btn-sm" style={{ color: '#c5221f', borderColor: '#f5c2c7' }} onClick={() => handleApprovalAction('reject')}>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    style={{ color: '#b06000', borderColor: 'var(--warning-border)' }}
+                    onClick={() => { setRejectReason(''); setRejectModalMode('return'); setShowRejectModal(true); }}
+                  >
+                    <UndoRoundedIcon sx={{ fontSize: 16 }} /> Trả lại bước trước
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    style={{ color: '#c5221f', borderColor: '#f5c2c7' }}
+                    onClick={() => { setRejectReason(''); setRejectModalMode('reject'); setShowRejectModal(true); }}
+                  >
                     <CancelRoundedIcon sx={{ fontSize: 16 }} /> Từ chối
                   </button>
                 </>
+              )}
+              {approvalStatus === 'PENDING' && canRecallOrCancel && (
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => handleApprovalAction('recall')}>
+                  <UndoRoundedIcon sx={{ fontSize: 16 }} /> Thu hồi
+                </button>
+              )}
+              {(approvalStatus === 'PENDING' || approvalStatus === 'REJECTED' || approvalStatus === 'RECALLED') && canRecallOrCancel && (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  style={{ color: '#64748b' }}
+                  onClick={() => setConfirmCancel(true)}
+                >
+                  <BlockRoundedIcon sx={{ fontSize: 16 }} /> Hủy hồ sơ
+                </button>
               )}
             </div>
           </div>
@@ -367,8 +454,8 @@ export default function RecordFullDetailPage() {
                       gridColumn: (c.dataType || '').toUpperCase() === 'TEXTAREA' || (c.dataType || '').toUpperCase() === 'SUB_TABLE' ? '1 / -1' : undefined,
                       padding: '10px 12px',
                       borderRadius: 8,
-                      backgroundColor: '#f8fafc',
-                      border: '1px solid #f1f5f9',
+                      backgroundColor: 'var(--bg-secondary)',
+                      border: '1px solid var(--border-light)',
                     }}
                   >
                     <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 4 }}>
@@ -399,7 +486,7 @@ export default function RecordFullDetailPage() {
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                           {g.records.slice(0, 5).map((relRec) => (
-                            <div key={relRec.id} style={{ fontSize: 12.5, padding: '6px 8px', borderRadius: 6, backgroundColor: '#f8fafc', display: 'flex', justifyContent: 'space-between' }}>
+                            <div key={relRec.id} style={{ fontSize: 12.5, padding: '6px 8px', borderRadius: 6, backgroundColor: 'var(--bg-secondary)', display: 'flex', justifyContent: 'space-between' }}>
                               <span><code>{relRec.recordKey || relRec.id}</code></span>
                               <span style={{ color: 'var(--text-muted)' }}>
                                 {relRec.updatedAt ? new Date(relRec.updatedAt).toLocaleDateString('vi-VN') : '—'}
@@ -443,8 +530,10 @@ export default function RecordFullDetailPage() {
                             const res = await fetch(`/api/integrations/plugins/${encodeURIComponent(plg.code)}/execute`, {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
+                              credentials: 'include',
                               body: JSON.stringify({
                                 operation: op,
+                                appId: record.appId,
                                 recordId: record.id,
                                 tableId: record.tableId,
                                 orderRef,
@@ -453,7 +542,19 @@ export default function RecordFullDetailPage() {
                                 message: `Ho so ${orderRef} da duoc xu ly.`,
                               }),
                             }).then((r) => r.json());
-                            if (res?.data) setPluginResult(res.data);
+                            if (res?.data) {
+                              setPluginResult(res.data);
+                              if (res.updatedRecord) {
+                                setRecord(res.updatedRecord);
+                                toast('Đã chạy plugin và ghi ngược dữ liệu vào hồ sơ.');
+                              }
+                            } else {
+                              setPluginResult({
+                                success: false,
+                                message: res?.message || 'Thực thi plugin thất bại.',
+                                data: {},
+                              });
+                            }
                           } finally {
                             setPluginRunning(null);
                           }
@@ -465,10 +566,27 @@ export default function RecordFullDetailPage() {
                   })}
                 </div>
                 {pluginResult && (
-                  <div style={{ marginTop: 10, padding: 10, borderRadius: 8, backgroundColor: pluginResult.success ? '#f0fdf4' : '#fef2f2', fontSize: 12 }}>
+                  <div style={{ marginTop: 10, padding: 10, borderRadius: 8, backgroundColor: pluginResult.success ? 'rgba(19, 115, 51, 0.1)' : 'rgba(197, 34, 31, 0.1)', fontSize: 12 }}>
                     <div style={{ fontWeight: 700 }}>{pluginResult.message}</div>
-                    {pluginResult.data?.qrUrl && (
+                    {Boolean(pluginResult.data?.qrUrl) && (
                       <img src={String(pluginResult.data.qrUrl)} alt="VietQR" style={{ maxWidth: 180, marginTop: 8, borderRadius: 6 }} />
+                    )}
+                    {Boolean(pluginResult.data?.paymentUrl) && (
+                      <div style={{ marginTop: 6 }}>
+                        <a href={String(pluginResult.data.paymentUrl)} target="_blank" rel="noreferrer" style={{ color: '#1a73e8', fontWeight: 600 }}>
+                          Mở liên kết thanh toán ↗
+                        </a>
+                      </div>
+                    )}
+                    {Boolean(pluginResult.data?.invoiceNo) && (
+                      <div style={{ marginTop: 4, color: 'var(--text-secondary)' }}>
+                        Số HĐ: <strong>{String(pluginResult.data.invoiceNo)}</strong> • Mã tra cứu: <strong>{String(pluginResult.data.lookupCode ?? '')}</strong>
+                      </div>
+                    )}
+                    {Boolean(pluginResult.data?.signTransactionId) && (
+                      <div style={{ marginTop: 4, color: 'var(--text-secondary)' }}>
+                        Mã GD ký số: <strong>{String(pluginResult.data.signTransactionId)}</strong> ({String(pluginResult.data.signStatus ?? '')})
+                      </div>
                     )}
                   </div>
                 )}
@@ -484,7 +602,7 @@ export default function RecordFullDetailPage() {
                   <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Chưa có bình luận nào.</div>
                 ) : (
                   comments.map((c) => (
-                    <div key={c.id} style={{ padding: 8, borderRadius: 6, backgroundColor: '#f8fafc', fontSize: 12.5 }}>
+                    <div key={c.id} style={{ padding: 8, borderRadius: 6, backgroundColor: 'var(--bg-secondary)', fontSize: 12.5 }}>
                       <div style={{ fontWeight: 700 }}>@{c.author}</div>
                       <div>{c.content}</div>
                     </div>
@@ -534,7 +652,7 @@ export default function RecordFullDetailPage() {
                   <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Chưa có lịch sử.</div>
                 ) : (
                   audits.map((a) => (
-                    <div key={a.id} style={{ padding: 8, borderRadius: 6, backgroundColor: '#f8fafc', fontSize: 12 }}>
+                    <div key={a.id} style={{ padding: 8, borderRadius: 6, backgroundColor: 'var(--bg-secondary)', fontSize: 12 }}>
                       <div style={{ fontWeight: 700 }}>{a.action} • @{a.actor}</div>
                       <div style={{ color: 'var(--text-secondary)' }}>{a.summary}</div>
                     </div>
@@ -573,20 +691,71 @@ export default function RecordFullDetailPage() {
         onClose={() => setSnack((s) => ({ ...s, open: false }))}
       />
 
+      <ConfirmDialog
+        open={confirmCancel}
+        title="Hủy hồ sơ"
+        message="Hồ sơ sau khi hủy sẽ đóng quy trình phê duyệt. Bạn chắc chắn muốn hủy?"
+        onConfirm={() => {
+          setConfirmCancel(false);
+          void handleApprovalAction('cancel');
+        }}
+        onCancel={() => setConfirmCancel(false)}
+      />
+
+      {showRejectModal && (
+        <div className="modal-overlay" onClick={() => setShowRejectModal(false)}>
+          <div className="modal-dialog" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>
+              {rejectModalMode === 'return' ? 'Trả lại bước trước / về Nháp' : 'Từ chối phê duyệt hồ sơ'}
+            </h3>
+            <p style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 12 }}>
+              {rejectModalMode === 'return'
+                ? 'Nhập ghi chú yêu cầu bổ sung trước khi chuyển trả hồ sơ.'
+                : 'Nhập lý do từ chối để người tạo nắm rõ và chỉnh sửa nộp lại.'}
+            </p>
+            <textarea
+              className="form-input"
+              rows={3}
+              placeholder={rejectModalMode === 'return' ? 'Ví dụ: Vui lòng bổ sung bảng báo giá kèm theo...' : 'Ví dụ: Thiếu chứng từ đính kèm hoặc sai đơn giá...'}
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              autoFocus
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowRejectModal(false)}>
+                Hủy
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{ backgroundColor: rejectModalMode === 'return' ? '#b06000' : '#d93025', color: '#ffffff', border: 'none' }}
+                onClick={async () => {
+                  const rsn = rejectReason.trim();
+                  setShowRejectModal(false);
+                  await handleApprovalAction(rejectModalMode, rsn);
+                }}
+              >
+                {rejectModalMode === 'return' ? 'Xác nhận trả lại' : 'Xác nhận từ chối'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mobile Sticky Quick Approve / Submit Bar */}
       {activeTable.approvalEnabled && (
-        ((approvalStatus === 'DRAFT' || approvalStatus === 'REJECTED') && canEdit) ||
-        (approvalStatus === 'PENDING' && canApprove)
+        ((approvalStatus === 'DRAFT' || approvalStatus === 'REJECTED' || approvalStatus === 'RECALLED') && canEdit) ||
+        (approvalStatus === 'PENDING' && (canApprove || canRecallOrCancel))
       ) && (
         <div className="mobile-sticky-action-bar">
-          {(approvalStatus === 'DRAFT' || approvalStatus === 'REJECTED') && canEdit && (
+          {(approvalStatus === 'DRAFT' || approvalStatus === 'REJECTED' || approvalStatus === 'RECALLED') && canEdit && (
             <button
               type="button"
               className="btn btn-primary"
               style={{ flex: 1 }}
               onClick={() => handleApprovalAction('submit')}
             >
-              <FactCheckRoundedIcon sx={{ fontSize: 18 }} /> Gửi phê duyệt
+              <FactCheckRoundedIcon sx={{ fontSize: 18 }} /> {approvalStatus === 'DRAFT' ? 'Gửi phê duyệt' : 'Nộp lại'}
             </button>
           )}
           {approvalStatus === 'PENDING' && canApprove && (
@@ -603,11 +772,21 @@ export default function RecordFullDetailPage() {
                 type="button"
                 className="btn btn-outline"
                 style={{ flex: 1, color: '#c5221f', borderColor: '#f5c2c7' }}
-                onClick={() => handleApprovalAction('reject')}
+                onClick={() => { setRejectReason(''); setRejectModalMode('reject'); setShowRejectModal(true); }}
               >
                 <CancelRoundedIcon sx={{ fontSize: 18 }} /> Từ chối
               </button>
             </>
+          )}
+          {approvalStatus === 'PENDING' && canRecallOrCancel && !canApprove && (
+            <button
+              type="button"
+              className="btn btn-outline"
+              style={{ flex: 1 }}
+              onClick={() => handleApprovalAction('recall')}
+            >
+              <UndoRoundedIcon sx={{ fontSize: 18 }} /> Thu hồi
+            </button>
           )}
         </div>
       )}

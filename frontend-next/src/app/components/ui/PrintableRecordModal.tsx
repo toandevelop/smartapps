@@ -116,7 +116,7 @@ export default function PrintableRecordModal({
             </tr>
           </thead>
           <tbody>
-            {val.map((row: Record<string, any>, idx: number) => (
+            {val.map((row: Record<string, unknown>, idx: number) => (
               <tr key={idx}>
                 <td style={{ border: '1px solid #dadce0', padding: '4px 6px', textAlign: 'center' }}>{idx + 1}</td>
                 {subKeys.map((k) => (
@@ -132,7 +132,11 @@ export default function PrintableRecordModal({
     }
 
     if (dt === 'IMAGE') {
-      const urlStr = typeof val === 'string' ? val : val?.url || '';
+      const urlStr = typeof val === 'string'
+        ? val
+        : typeof val === 'object' && val !== null && 'url' in val
+        ? String((val as { url?: unknown }).url ?? '')
+        : '';
       return urlStr ? (
         <img src={urlStr} alt={col.columnName} style={{ maxHeight: 90, borderRadius: 6, border: '1px solid #dadce0' }} />
       ) : (
@@ -141,7 +145,11 @@ export default function PrintableRecordModal({
     }
 
     if (dt === 'FILE') {
-      const urlStr = typeof val === 'string' ? val : val?.url || '';
+      const urlStr = typeof val === 'string'
+        ? val
+        : typeof val === 'object' && val !== null && 'url' in val
+        ? String((val as { url?: unknown }).url ?? '')
+        : '';
       const match = urlStr.match(/[?&]name=([^&]+)/);
       return match ? decodeURIComponent(match[1]) : 'Tệp đính kèm';
     }

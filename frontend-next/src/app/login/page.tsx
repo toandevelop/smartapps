@@ -5,25 +5,22 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
 import LoginRoundedIcon from '@mui/icons-material/LoginRounded';
-import AdminPanelSettingsRoundedIcon from '@mui/icons-material/AdminPanelSettingsRounded';
 import KeyRoundedIcon from '@mui/icons-material/KeyRounded';
 import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded';
 import VisibilityOffRoundedIcon from '@mui/icons-material/VisibilityOffRounded';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
-import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded';
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import DarkModeRoundedIcon from '@mui/icons-material/DarkModeRounded';
 import LightModeRoundedIcon from '@mui/icons-material/LightModeRounded';
 import DesktopWindowsRoundedIcon from '@mui/icons-material/DesktopWindowsRounded';
-import EditNoteRoundedIcon from '@mui/icons-material/EditNoteRounded';
 import VerifiedUserRoundedIcon from '@mui/icons-material/VerifiedUserRounded';
-import WifiOffRoundedIcon from '@mui/icons-material/WifiOffRounded';
 import { useAuth, getSafeReturnUrl } from '@/lib/auth-context';
-import { SsoProviderPublic, DemoAccount } from '@/lib/types';
-import { isTauriDesktop, getDesktopServerConfig, setDesktopServerConfig } from '@/lib/tauri-bridge';
+import { SsoProviderPublic } from '@/lib/types';
+import { getDesktopServerConfig, setDesktopServerConfig } from '@/lib/tauri-bridge';
+import { useIsTauriDesktop } from '@/lib/ui-hooks';
 
 const REMEMBER_USER_KEY = 'smartapps_remembered_username';
 const LOGIN_THEME_KEY = 'smartapps_login_theme';
@@ -62,22 +59,6 @@ function MicrosoftBrandIcon() {
   );
 }
 
-function getInitials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return 'SA';
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
-}
-
-function getAvatarColor(roleCode: string): string {
-  const upper = roleCode.toUpperCase();
-  if (upper.includes('ADMIN')) return '#1a73e8';
-  if (upper.includes('MANAGER') || upper.includes('LEAD')) return '#00897b';
-  if (upper.includes('HR')) return '#7b1fa2';
-  if (upper.includes('FIN') || upper.includes('ACC')) return '#ea8600';
-  return '#475569';
-}
-
 function extractLockoutSeconds(message: string): number | null {
   const match = message.match(/sau\s+(\d+)\s+giây/i);
   if (!match) return null;
@@ -91,18 +72,68 @@ function SsoProviderIcon({ provider }: { provider: SsoProviderPublic }) {
   return <KeyRoundedIcon sx={{ fontSize: 18, color: provider.buttonColor || '#00897b' }} />;
 }
 
+function useNativeModal(open: boolean, onClose: () => void) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const pressedOutsideRef = useRef(false);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) {
+      dialog.showModal();
+    } else if (!open && dialog.open) {
+      dialog.close();
+    }
+  }, [open]);
+
+  const handleClose = () => {
+    const dialog = dialogRef.current;
+    if (dialog) dialog.returnValue = '';
+    onClose();
+  };
+
+  const isOutside = (e: React.PointerEvent<HTMLDialogElement>) => {
+    const dialog = dialogRef.current;
+    if (!dialog) return false;
+    const r = dialog.getBoundingClientRect();
+    return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDialogElement>) => {
+    pressedOutsideRef.current = isOutside(e);
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDialogElement>) => {
+    if (pressedOutsideRef.current && isOutside(e)) {
+      dialogRef.current?.close();
+    }
+    pressedOutsideRef.current = false;
+  };
+
+  return { dialogRef, handleClose, handlePointerDown, handlePointerUp };
+}
+
 function ForgotPasswordModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  if (!open) return null;
+  const { dialogRef, handleClose, handlePointerDown, handlePointerUp } = useNativeModal(open, onClose);
+
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="forgot-pw-title" onClick={onClose}>
-      <div className="modal-dialog" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+    <dialog
+      ref={dialogRef}
+      className="native-modal"
+      aria-labelledby="forgot-pw-title"
+      onClose={handleClose}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      {...({ closedby: 'any' } as Record<string, string>)}
+    >
+      <div className="native-modal-card">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div
               style={{
-                width: 36,
-                height: 36,
-                borderRadius: 10,
+                width: 38,
+                height: 38,
+                borderRadius: 11,
                 backgroundColor: 'var(--info-bg)',
                 color: 'var(--info-text)',
                 display: 'flex',
@@ -113,9 +144,9 @@ function ForgotPasswordModal({ open, onClose }: { open: boolean; onClose: () => 
               <HelpOutlineRoundedIcon sx={{ fontSize: 20 }} />
             </div>
             <div>
-              <h3 id="forgot-pw-title" style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
+              <h2 id="forgot-pw-title" style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
                 Hỗ trợ khôi phục mật khẩu
-              </h3>
+              </h2>
               <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
                 Quy trình bảo mật tài khoản doanh nghiệp
               </p>
@@ -123,10 +154,10 @@ function ForgotPasswordModal({ open, onClose }: { open: boolean; onClose: () => 
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => dialogRef.current?.close()}
             aria-label="Đóng hộp thoại"
             className="btn btn-outline btn-sm"
-            style={{ width: 32, padding: 0, borderRadius: '50%' }}
+            style={{ width: 34, height: 34, padding: 0, borderRadius: '50%' }}
           >
             <CloseRoundedIcon sx={{ fontSize: 16 }} />
           </button>
@@ -144,9 +175,9 @@ function ForgotPasswordModal({ open, onClose }: { open: boolean; onClose: () => 
             <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
               1. Liên hệ Quản trị viên hệ thống
             </div>
-            <p style={{ margin: 0, lineHeight: 1.5 }}>
-              Tài khoản nội bộ được quản lý tập trung. Vui lòng liên hệ bộ phận IT / Quản trị viên để đặt lại mật khẩu
-              tại mục <strong>Quản trị &amp; Quy trình → Người dùng</strong>.
+            <p style={{ margin: 0, lineHeight: 1.55 }}>
+              Tài khoản nội bộ được quản lý tập trung. Vui lòng liên hệ bộ phận IT / Quản trị viên để được cấp lại mật
+              khẩu mới.
             </p>
           </div>
 
@@ -161,35 +192,20 @@ function ForgotPasswordModal({ open, onClose }: { open: boolean; onClose: () => 
             <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
               2. Đăng nhập bằng SSO Doanh nghiệp
             </div>
-            <p style={{ margin: 0, lineHeight: 1.5 }}>
-              Nếu công ty đã kích hoạt Google Workspace, Microsoft Entra ID hoặc OIDC riêng, bạn có thể đăng nhập trực
-              tiếp bằng nút SSO mà không cần mật khẩu cục bộ.
+            <p style={{ margin: 0, lineHeight: 1.55 }}>
+              Nếu tổ chức đã kích hoạt Google Workspace, Microsoft Entra ID hoặc OIDC, bạn có thể đăng nhập trực tiếp
+              bằng nút SSO mà không cần mật khẩu cục bộ.
             </p>
           </div>
-
-          <div
-            style={{
-              padding: '10px 14px',
-              borderRadius: 12,
-              backgroundColor: 'var(--info-bg)',
-              border: '1px solid var(--info-border)',
-              color: 'var(--info-text)',
-              fontSize: 12.5,
-            }}
-          >
-            <strong>Môi trường Demo / Kiểm thử:</strong> Mật khẩu mặc định cho các tài khoản mẫu là{' '}
-            <code style={{ fontWeight: 700 }}>123456</code>, hoặc sử dụng bảng <strong>Đăng nhập nhanh (RBAC)</strong>{' '}
-            bên cạnh.
-          </div>
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
-          <button type="button" className="btn btn-primary" onClick={onClose}>
+        <form method="dialog" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+          <button type="submit" className="btn btn-primary" autoFocus>
             Đã hiểu
           </button>
-        </div>
+        </form>
       </div>
-    </div>
+    </dialog>
   );
 }
 
@@ -205,6 +221,7 @@ function DesktopServerModal({
   const [webUrl, setWebUrl] = useState('http://localhost:4100');
   const [apiUrl, setApiUrl] = useState('http://localhost:5200');
   const [savingCfg, setSavingCfg] = useState(false);
+  const { dialogRef, handleClose, handlePointerDown, handlePointerUp } = useNativeModal(open, onClose);
 
   useEffect(() => {
     if (!open) return;
@@ -214,40 +231,47 @@ function DesktopServerModal({
     });
   }, [open]);
 
-  if (!open) return null;
-
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSavingCfg(true);
     try {
       await setDesktopServerConfig(webUrl.trim(), apiUrl.trim());
       onSaved();
-      onClose();
+      dialogRef.current?.close();
     } finally {
       setSavingCfg(false);
     }
   };
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="desktop-cfg-title" onClick={onClose}>
-      <div className="modal-dialog" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+    <dialog
+      ref={dialogRef}
+      className="native-modal"
+      aria-labelledby="desktop-cfg-title"
+      onClose={handleClose}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      {...({ closedby: 'any' } as Record<string, string>)}
+    >
+      <div className="native-modal-card">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <DesktopWindowsRoundedIcon sx={{ fontSize: 22, color: 'var(--accent-primary)' }} />
-            <h3 id="desktop-cfg-title" style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
+            <h2 id="desktop-cfg-title" style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
               Cấu hình máy chủ Desktop
-            </h3>
+            </h2>
           </div>
           <button
             type="button"
-            onClick={onClose}
-            aria-label="Đóng"
+            onClick={() => dialogRef.current?.close()}
+            aria-label="Đóng hộp thoại"
             className="btn btn-outline btn-sm"
-            style={{ width: 32, padding: 0, borderRadius: '50%' }}
+            style={{ width: 34, height: 34, padding: 0, borderRadius: '50%' }}
           >
             <CloseRoundedIcon sx={{ fontSize: 16 }} />
           </button>
         </div>
+
         <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label" htmlFor="desktop-web-url">
@@ -255,6 +279,8 @@ function DesktopServerModal({
             </label>
             <input
               id="desktop-web-url"
+              name="webUrl"
+              type="url"
               className="form-input"
               value={webUrl}
               onChange={(e) => setWebUrl(e.target.value)}
@@ -263,10 +289,12 @@ function DesktopServerModal({
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label" htmlFor="desktop-api-url">
-              Backend API URL (.NET 9)
+              Backend API URL
             </label>
             <input
               id="desktop-api-url"
+              name="apiUrl"
+              type="url"
               className="form-input"
               value={apiUrl}
               onChange={(e) => setApiUrl(e.target.value)}
@@ -274,7 +302,7 @@ function DesktopServerModal({
             />
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-            <button type="button" className="btn btn-outline" onClick={onClose}>
+            <button type="button" className="btn btn-outline" onClick={() => dialogRef.current?.close()}>
               Hủy
             </button>
             <button type="submit" className="btn btn-primary" disabled={savingCfg}>
@@ -283,7 +311,7 @@ function DesktopServerModal({
           </div>
         </form>
       </div>
-    </div>
+    </dialog>
   );
 }
 
@@ -293,7 +321,7 @@ function LoginPageInner() {
   const ssoError = searchParams?.get('sso_error') || '';
   const returnUrl = getSafeReturnUrl(searchParams?.get('returnUrl'));
 
-  const { user, allDemoUsers, login, switchDemoUser, loadingAuth, authServerOnline, refreshAuth } = useAuth();
+  const { user, login, loadingAuth, authServerOnline, refreshAuth } = useAuth();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -301,20 +329,18 @@ function LoginPageInner() {
   const [showPassword, setShowPassword] = useState(false);
   const [capsLockOn, setCapsLockOn] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [switchingUser, setSwitchingUser] = useState<string | null>(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(() => ssoError);
+  const [dismissedSsoErr, setDismissedSsoErr] = useState('');
   const [fieldErrors, setFieldErrors] = useState<{ username?: string; password?: string }>({});
+  const [touched, setTouched] = useState<{ username?: boolean; password?: boolean }>({});
   const [lockoutSeconds, setLockoutSeconds] = useState<number>(0);
 
   const [ssoProviders, setSsoProviders] = useState<SsoProviderPublic[]>([]);
   const [loadingSso, setLoadingSso] = useState(true);
-
-  const [demoQuery, setDemoQuery] = useState('');
-  const [demoRoleFilter, setDemoRoleFilter] = useState('ALL');
   const [retryingConn, setRetryingConn] = useState(false);
 
   const [showForgotModal, setShowForgotModal] = useState(false);
-  const [inDesktop, setInDesktop] = useState(false);
+  const inDesktop = useIsTauriDesktop();
   const [showDesktopCfg, setShowDesktopCfg] = useState(false);
   const [isDark, setIsDark] = useState(false);
 
@@ -322,28 +348,29 @@ function LoginPageInner() {
   const passwordInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setInDesktop(isTauriDesktop());
-    const savedUsername = localStorage.getItem(REMEMBER_USER_KEY);
-    if (savedUsername !== null) {
-      setUsername(savedUsername);
-      setRememberUsername(Boolean(savedUsername));
-    } else {
-      setUsername('admin');
-      setRememberUsername(true);
-    }
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      const savedUsername = localStorage.getItem(REMEMBER_USER_KEY);
+      if (savedUsername) {
+        setUsername(savedUsername);
+        setRememberUsername(true);
+      }
 
-    const savedTheme = localStorage.getItem(LOGIN_THEME_KEY);
-    if (savedTheme === 'dark') {
-      document.body.classList.add('theme-dark');
-      setIsDark(true);
-    } else {
-      setIsDark(document.body.classList.contains('theme-dark'));
-    }
+      const savedTheme = localStorage.getItem(LOGIN_THEME_KEY);
+      if (savedTheme === 'dark') {
+        document.body.classList.add('theme-dark');
+        setIsDark(true);
+      } else {
+        setIsDark(document.body.classList.contains('theme-dark'));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  useEffect(() => {
-    if (ssoError) setError(ssoError);
-  }, [ssoError]);
+  const displayError = error || (dismissedSsoErr === ssoError ? '' : ssoError);
 
   useEffect(() => {
     if (!loadingAuth && user) {
@@ -368,7 +395,13 @@ function LoginPageInner() {
   }, []);
 
   useEffect(() => {
-    fetchSsoProviders();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void fetchSsoProviders();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [fetchSsoProviders]);
 
   useEffect(() => {
@@ -398,6 +431,21 @@ function LoginPageInner() {
     }
   };
 
+  const handleUsernameBlur = () => {
+    if (!touched.username) return;
+    if (!username.trim()) {
+      setFieldErrors((p) => ({ ...p, username: 'Vui lòng nhập tên đăng nhập.' }));
+    }
+  };
+
+  const handlePasswordBlur = () => {
+    if (!touched.password) return;
+    setCapsLockOn(false);
+    if (!password) {
+      setFieldErrors((p) => ({ ...p, password: 'Vui lòng nhập mật khẩu.' }));
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanUser = username.trim();
@@ -418,40 +466,20 @@ function LoginPageInner() {
     if (rememberUsername) {
       localStorage.setItem(REMEMBER_USER_KEY, cleanUser);
     } else {
-      localStorage.setItem(REMEMBER_USER_KEY, '');
+      localStorage.removeItem(REMEMBER_USER_KEY);
     }
 
     const res = await login(cleanUser, password, returnUrl);
     setSubmitting(false);
 
     if (!res.success) {
-      const msg = res.error || 'Sai tên đăng nhập hoặc mật khẩu.';
+      const msg = res.error || 'Tên đăng nhập hoặc mật khẩu không đúng.';
       setError(msg);
       const secs = extractLockoutSeconds(msg);
       if (secs) setLockoutSeconds(secs);
     } else {
       setLockoutSeconds(0);
     }
-  };
-
-  const handleDemoClick = async (demoUsername: string) => {
-    setError('');
-    setFieldErrors({});
-    setSwitchingUser(demoUsername);
-    const res = await switchDemoUser(demoUsername, returnUrl);
-    setSwitchingUser(null);
-    if (!res.success && res.error) {
-      setError(res.error);
-    }
-  };
-
-  const handlePrefillDemo = (u: DemoAccount) => {
-    setUsername(u.username);
-    setPassword('123456');
-    setFieldErrors({});
-    setError('');
-    setLockoutSeconds(0);
-    passwordInputRef.current?.focus();
   };
 
   const handleSsoClick = (provider: SsoProviderPublic) => {
@@ -463,38 +491,13 @@ function LoginPageInner() {
       return;
     }
     const origin = window.location.origin;
-    window.location.href = `/api/auth/sso/start/${encodeURIComponent(provider.code)}?redirectOrigin=${encodeURIComponent(origin)}&returnUrl=${encodeURIComponent(returnUrl)}`;
+    window.location.assign(`/api/auth/sso/start/${encodeURIComponent(provider.code)}?redirectOrigin=${encodeURIComponent(origin)}&returnUrl=${encodeURIComponent(returnUrl)}`);
   };
 
   const readySsoProviders = useMemo(
     () => ssoProviders.filter((p) => p.isEnabled && p.isConfigured),
     [ssoProviders]
   );
-
-  const availableRoles = useMemo(() => {
-    const set = new Set<string>();
-    allDemoUsers.forEach((u) => {
-      if (u.roleCodes?.length) u.roleCodes.forEach((r) => set.add(r));
-      else if (u.roleCode) set.add(u.roleCode);
-    });
-    return ['ALL', ...Array.from(set)];
-  }, [allDemoUsers]);
-
-  const filteredDemoUsers = useMemo(() => {
-    const q = demoQuery.trim().toLowerCase();
-    return allDemoUsers.filter((u) => {
-      const roles = u.roleCodes?.length ? u.roleCodes : [u.roleCode];
-      if (demoRoleFilter !== 'ALL' && !roles.includes(demoRoleFilter)) return false;
-      if (!q) return true;
-      return (
-        u.fullName.toLowerCase().includes(q) ||
-        u.username.toLowerCase().includes(q) ||
-        (u.department || '').toLowerCase().includes(q) ||
-        roles.some((r) => r.toLowerCase().includes(q)) ||
-        u.allowedApps.some((a) => a.toLowerCase().includes(q))
-      );
-    });
-  }, [allDemoUsers, demoQuery, demoRoleFilter]);
 
   if (loadingAuth || user) {
     return (
@@ -514,7 +517,7 @@ function LoginPageInner() {
               width: 48,
               height: 48,
               borderRadius: 14,
-              backgroundColor: 'var(--accent-primary)',
+              background: 'linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%)',
               color: '#ffffff',
               display: 'inline-flex',
               alignItems: 'center',
@@ -531,7 +534,7 @@ function LoginPageInner() {
             {user ? 'Đang chuyển hướng vào hệ thống...' : 'Đang kiểm tra phiên đăng nhập...'}
           </div>
           <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 6 }}>
-            SmartApps Enterprise Multi-App Core
+            SmartApps Enterprise
           </div>
         </div>
       </div>
@@ -540,24 +543,11 @@ function LoginPageInner() {
 
   return (
     <div className="login-viewport">
-      {/* Subtle Top Utility Bar */}
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 1040,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 10,
-          marginBottom: 12,
-          padding: '0 4px',
-          flexWrap: 'wrap',
-        }}
-      >
+      <div className="login-topbar">
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
           <span
             className={`badge ${authServerOnline ? 'badge-success' : 'badge-danger'}`}
-            style={{ fontSize: 11 }}
+            style={{ fontSize: 11.5 }}
           >
             <span
               style={{
@@ -567,7 +557,7 @@ function LoginPageInner() {
                 backgroundColor: authServerOnline ? '#1e8e3e' : '#d93025',
               }}
             />
-            {authServerOnline ? 'Máy chủ xác thực sẵn sàng' : 'Mất kết nối API xác thực'}
+            {authServerOnline ? 'Máy chủ sẵn sàng' : 'Mất kết nối máy chủ'}
           </span>
           {!authServerOnline && (
             <button
@@ -590,7 +580,7 @@ function LoginPageInner() {
               onClick={() => setShowDesktopCfg(true)}
             >
               <DesktopWindowsRoundedIcon sx={{ fontSize: 14 }} />
-              Cấu hình máy chủ
+              Máy chủ
             </button>
           )}
           <button
@@ -606,590 +596,353 @@ function LoginPageInner() {
         </div>
       </div>
 
-      <div className="login-shell">
-        {/* Left Column: Brand + Standard Form + Enterprise SSO */}
+      <main className="login-shell">
         <div className="login-panel-form">
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 24 }}>
-              <div
-                style={{
-                  width: 46,
-                  height: 46,
-                  borderRadius: 14,
-                  background: 'linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%)',
-                  color: '#ffffff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 800,
-                  fontSize: 18,
-                  flexShrink: 0,
-                  boxShadow: '0 4px 12px rgba(26, 115, 232, 0.3)',
-                }}
-              >
-                SA
-              </div>
-              <div>
-                <h1 style={{ fontSize: 21, fontWeight: 700, margin: 0, color: 'var(--text-primary)', lineHeight: 1.25 }}>
-                  SmartApps Enterprise
-                </h1>
-                <p style={{ fontSize: 12.5, color: 'var(--text-muted)', margin: '2px 0 0' }}>
-                  Cổng xác thực tập trung Hệ thống Đa ứng dụng Doanh nghiệp
-                </p>
-              </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div
+              style={{
+                width: 48,
+                height: 48,
+                borderRadius: 14,
+                background: 'linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%)',
+                color: '#ffffff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: 800,
+                fontSize: 19,
+                flexShrink: 0,
+                boxShadow: '0 4px 14px rgba(26, 115, 232, 0.28)',
+              }}
+            >
+              SA
             </div>
-
-            {returnUrl !== '/' && (
-              <div
-                style={{
-                  marginBottom: 16,
-                  padding: '9px 12px',
-                  borderRadius: 10,
-                  backgroundColor: 'var(--info-bg)',
-                  border: '1px solid var(--info-border)',
-                  color: 'var(--info-text)',
-                  fontSize: 12,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
+            <div>
+              <h1
+                id="login-form-title"
+                style={{ fontSize: 22, fontWeight: 700, margin: 0, color: 'var(--text-primary)', lineHeight: 1.25 }}
               >
-                <VerifiedUserRoundedIcon sx={{ fontSize: 16, flexShrink: 0 }} />
-                <span>
-                  Vui lòng đăng nhập để tiếp tục truy cập <code>{returnUrl}</code>
+                SmartApps Enterprise
+              </h1>
+              <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '3px 0 0' }}>
+                Đăng nhập để truy cập không gian làm việc
+              </p>
+            </div>
+          </div>
+
+          {returnUrl !== '/' && (
+            <div
+              style={{
+                padding: '10px 12px',
+                borderRadius: 12,
+                backgroundColor: 'var(--info-bg)',
+                border: '1px solid var(--info-border)',
+                color: 'var(--info-text)',
+                fontSize: 12.5,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <VerifiedUserRoundedIcon sx={{ fontSize: 17, flexShrink: 0 }} />
+              <span>
+                Vui lòng đăng nhập để tiếp tục truy cập <strong>{returnUrl}</strong>
+              </span>
+            </div>
+          )}
+
+          <form
+            aria-labelledby="login-form-title"
+            onSubmit={handleSubmit}
+            noValidate
+            style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+          >
+            <div>
+              <label className="form-label" htmlFor="login-username" style={{ marginBottom: 6 }}>
+                Tên đăng nhập
+              </label>
+              <div className="login-input-wrap">
+                <span className="login-input-icon" aria-hidden="true">
+                  <PersonRoundedIcon sx={{ fontSize: 19 }} />
                 </span>
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
-              <div>
-                <label className="form-label" htmlFor="login-username">
-                  Tên đăng nhập
-                </label>
-                <div className="login-input-wrap">
-                  <span className="login-input-icon">
-                    <PersonRoundedIcon sx={{ fontSize: 18 }} />
-                  </span>
-                  <input
-                    ref={usernameInputRef}
-                    id="login-username"
-                    name="username"
-                    type="text"
-                    autoComplete="username"
-                    className="form-input has-leading has-trailing"
-                    style={fieldErrors.username ? { borderColor: 'var(--danger)' } : undefined}
-                    value={username}
-                    onChange={(e) => {
-                      setUsername(e.target.value);
-                      if (fieldErrors.username) setFieldErrors((p) => ({ ...p, username: undefined }));
-                      if (error) setError('');
-                    }}
-                    placeholder="admin / hr_manager / staff"
-                    aria-invalid={Boolean(fieldErrors.username)}
-                    aria-describedby={fieldErrors.username ? 'login-username-err' : undefined}
-                    disabled={submitting || Boolean(switchingUser)}
-                  />
-                  {username && (
-                    <button
-                      type="button"
-                      className="login-input-action"
-                      aria-label="Xóa tên đăng nhập"
-                      title="Xóa"
-                      onClick={() => {
-                        setUsername('');
-                        usernameInputRef.current?.focus();
-                      }}
-                    >
-                      <CloseRoundedIcon sx={{ fontSize: 16 }} />
-                    </button>
-                  )}
-                </div>
-                {fieldErrors.username && (
-                  <div id="login-username-err" style={{ fontSize: 11.5, color: 'var(--danger-text)', marginTop: 4 }}>
-                    {fieldErrors.username}
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <label className="form-label" htmlFor="login-password" style={{ marginBottom: 0 }}>
-                    Mật khẩu
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowForgotModal(true)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      padding: 0,
-                      color: 'var(--accent-primary)',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      fontFamily: 'inherit',
-                    }}
-                  >
-                    Quên mật khẩu?
-                  </button>
-                </div>
-                <div className="login-input-wrap">
-                  <span className="login-input-icon">
-                    <LockRoundedIcon sx={{ fontSize: 18 }} />
-                  </span>
-                  <input
-                    ref={passwordInputRef}
-                    id="login-password"
-                    name="password"
-                    type={showPassword ? 'text' : 'password'}
-                    autoComplete="current-password"
-                    className="form-input has-leading has-trailing"
-                    style={fieldErrors.password ? { borderColor: 'var(--danger)' } : undefined}
-                    value={password}
-                    onChange={(e) => {
-                      setPassword(e.target.value);
-                      if (fieldErrors.password) setFieldErrors((p) => ({ ...p, password: undefined }));
-                      if (error) setError('');
-                    }}
-                    onKeyDown={handlePasswordKeyEvent}
-                    onKeyUp={handlePasswordKeyEvent}
-                    onBlur={() => setCapsLockOn(false)}
-                    placeholder="Nhập mật khẩu (demo: 123456)"
-                    aria-invalid={Boolean(fieldErrors.password)}
-                    aria-describedby={fieldErrors.password ? 'login-password-err' : undefined}
-                    disabled={submitting || Boolean(switchingUser)}
-                  />
+                <input
+                  ref={usernameInputRef}
+                  id="login-username"
+                  name="username"
+                  type="text"
+                  autoComplete="username"
+                  spellCheck={false}
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  enterKeyHint="next"
+                  required
+                  className="form-input has-leading has-trailing"
+                  style={fieldErrors.username ? { borderColor: 'var(--danger)' } : undefined}
+                  value={username}
+                  onChange={(e) => {
+                    setUsername(e.target.value);
+                    setTouched((p) => ({ ...p, username: true }));
+                    if (fieldErrors.username) setFieldErrors((p) => ({ ...p, username: undefined }));
+                    if (error) setError('');
+                  }}
+                  onBlur={handleUsernameBlur}
+                  placeholder="Nhập tên đăng nhập"
+                  aria-invalid={Boolean(fieldErrors.username)}
+                  aria-describedby={fieldErrors.username ? 'login-username-err' : undefined}
+                  disabled={submitting}
+                />
+                {username && (
                   <button
                     type="button"
                     className="login-input-action"
-                    aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-                    title={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-                    onClick={() => setShowPassword((v) => !v)}
-                  >
-                    {showPassword ? (
-                      <VisibilityOffRoundedIcon sx={{ fontSize: 18 }} />
-                    ) : (
-                      <VisibilityRoundedIcon sx={{ fontSize: 18 }} />
-                    )}
-                  </button>
-                </div>
-                {fieldErrors.password && (
-                  <div id="login-password-err" style={{ fontSize: 11.5, color: 'var(--danger-text)', marginTop: 4 }}>
-                    {fieldErrors.password}
-                  </div>
-                )}
-                {capsLockOn && (
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                      fontSize: 11.5,
-                      color: 'var(--warning-text)',
-                      marginTop: 5,
-                      fontWeight: 500,
+                    aria-label="Xóa tên đăng nhập"
+                    title="Xóa"
+                    onClick={() => {
+                      setUsername('');
+                      usernameInputRef.current?.focus();
                     }}
                   >
-                    <WarningAmberRoundedIcon sx={{ fontSize: 15 }} />
-                    Caps Lock đang bật
-                  </div>
+                    <CloseRoundedIcon sx={{ fontSize: 16 }} />
+                  </button>
                 )}
               </div>
+              {fieldErrors.username && (
+                <div
+                  id="login-username-err"
+                  role="status"
+                  style={{ fontSize: 12, color: 'var(--danger-text)', marginTop: 5 }}
+                >
+                  {fieldErrors.username}
+                </div>
+              )}
+            </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                <label
-                  htmlFor="remember-username"
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <label className="form-label" htmlFor="login-password" style={{ marginBottom: 0 }}>
+                  Mật khẩu
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowForgotModal(true)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: '2px 0',
+                    color: 'var(--accent-primary)',
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  Quên mật khẩu?
+                </button>
+              </div>
+              <div className="login-input-wrap">
+                <span className="login-input-icon" aria-hidden="true">
+                  <LockRoundedIcon sx={{ fontSize: 19 }} />
+                </span>
+                <input
+                  ref={passwordInputRef}
+                  id="login-password"
+                  name="password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  enterKeyHint="done"
+                  required
+                  className="form-input has-leading has-trailing"
+                  style={fieldErrors.password ? { borderColor: 'var(--danger)' } : undefined}
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setTouched((p) => ({ ...p, password: true }));
+                    if (fieldErrors.password) setFieldErrors((p) => ({ ...p, password: undefined }));
+                    if (error) setError('');
+                  }}
+                  onKeyDown={handlePasswordKeyEvent}
+                  onKeyUp={handlePasswordKeyEvent}
+                  onBlur={handlePasswordBlur}
+                  placeholder="Nhập mật khẩu"
+                  aria-invalid={Boolean(fieldErrors.password)}
+                  aria-describedby={fieldErrors.password ? 'login-password-err' : undefined}
+                  disabled={submitting}
+                />
+                <button
+                  type="button"
+                  className="login-input-action"
+                  aria-pressed={showPassword}
+                  aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  title={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  onClick={() => setShowPassword((v) => !v)}
+                >
+                  {showPassword ? (
+                    <VisibilityOffRoundedIcon sx={{ fontSize: 18 }} />
+                  ) : (
+                    <VisibilityRoundedIcon sx={{ fontSize: 18 }} />
+                  )}
+                </button>
+              </div>
+              {fieldErrors.password && (
+                <div
+                  id="login-password-err"
+                  role="status"
+                  style={{ fontSize: 12, color: 'var(--danger-text)', marginTop: 5 }}
+                >
+                  {fieldErrors.password}
+                </div>
+              )}
+              {capsLockOn && (
+                <div
+                  role="status"
+                  aria-live="polite"
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: 8,
-                    fontSize: 12.5,
-                    color: 'var(--text-secondary)',
-                    cursor: 'pointer',
-                    userSelect: 'none',
+                    gap: 5,
+                    fontSize: 12,
+                    color: 'var(--warning-text)',
+                    marginTop: 6,
+                    fontWeight: 500,
                   }}
                 >
-                  <input
-                    id="remember-username"
-                    type="checkbox"
-                    checked={rememberUsername}
-                    onChange={(e) => setRememberUsername(e.target.checked)}
-                    style={{ width: 15, height: 15, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
-                  />
-                  Ghi nhớ tên đăng nhập
-                </label>
-              </div>
-
-              {error && (
-                <div
-                  role="alert"
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 10,
-                    backgroundColor: 'var(--danger-bg)',
-                    border: '1px solid var(--danger-border)',
-                    color: 'var(--danger-text)',
-                    fontSize: 12.5,
-                    fontWeight: 600,
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                  }}
-                >
-                  <span style={{ display: 'inline-flex', alignItems: 'flex-start', gap: 7, lineHeight: 1.45 }}>
-                    <ErrorOutlineRoundedIcon sx={{ fontSize: 18, flexShrink: 0, marginTop: '1px' }} />
-                    <span>
-                      {error}
-                      {lockoutSeconds > 0 && (
-                        <span style={{ display: 'block', fontSize: 11.5, fontWeight: 500, marginTop: 2 }}>
-                          Có thể thử lại sau <strong>{lockoutSeconds} giây</strong>.
-                        </span>
-                      )}
-                    </span>
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Đóng thông báo lỗi"
-                    onClick={() => setError('')}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: 'inherit',
-                      cursor: 'pointer',
-                      padding: 2,
-                      display: 'inline-flex',
-                    }}
-                  >
-                    <CloseRoundedIcon sx={{ fontSize: 15 }} />
-                  </button>
+                  <WarningAmberRoundedIcon sx={{ fontSize: 15 }} />
+                  Caps Lock đang bật
                 </div>
               )}
+            </div>
 
-              <button
-                type="submit"
-                disabled={submitting || Boolean(switchingUser) || lockoutSeconds > 0}
-                className="btn btn-primary"
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <label
+                htmlFor="remember-username"
                 style={{
-                  height: 44,
-                  width: '100%',
-                  justifyContent: 'center',
-                  fontSize: 14,
-                  fontWeight: 600,
-                  borderRadius: 12,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontSize: 13,
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  padding: '4px 0',
                 }}
               >
-                <LoginRoundedIcon sx={{ fontSize: 18 }} />
-                {lockoutSeconds > 0
-                  ? `Tạm khóa (${lockoutSeconds}s)`
-                  : submitting
-                    ? 'Đang xác thực...'
-                    : 'Đăng nhập hệ thống'}
-              </button>
-            </form>
+                <input
+                  id="remember-username"
+                  name="rememberUsername"
+                  type="checkbox"
+                  checked={rememberUsername}
+                  onChange={(e) => setRememberUsername(e.target.checked)}
+                  style={{ width: 16, height: 16, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                />
+                Ghi nhớ tên đăng nhập
+              </label>
+            </div>
 
-            {/* Enterprise SSO Section — only visible when at least one SSO provider is enabled & configured */}
-            {!loadingSso && readySsoProviders.length > 0 && (
-              <div style={{ marginTop: 22 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                  <div style={{ flex: 1, height: 1, backgroundColor: 'var(--border-light)' }} />
-                  <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-muted)' }}>
-                    Hoặc đăng nhập bằng SSO Doanh nghiệp
+            {displayError && (
+              <div
+                role="alert"
+                style={{
+                  padding: '11px 13px',
+                  borderRadius: 12,
+                  backgroundColor: 'var(--danger-bg)',
+                  border: '1px solid var(--danger-border)',
+                  color: 'var(--danger-text)',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'flex-start', gap: 8, lineHeight: 1.45 }}>
+                  <ErrorOutlineRoundedIcon sx={{ fontSize: 18, flexShrink: 0, marginTop: '1px' }} />
+                  <span>
+                    {displayError}
+                    {lockoutSeconds > 0 && (
+                      <span style={{ display: 'block', fontSize: 12, fontWeight: 500, marginTop: 2 }}>
+                        Có thể thử lại sau <strong>{lockoutSeconds} giây</strong>.
+                      </span>
+                    )}
                   </span>
-                  <div style={{ flex: 1, height: 1, backgroundColor: 'var(--border-light)' }} />
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {readySsoProviders.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      disabled={submitting || Boolean(switchingUser)}
-                      onClick={() => handleSsoClick(p)}
-                      className="login-sso-btn"
-                    >
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-                        <SsoProviderIcon provider={p} />
-                        <span>{p.displayName}</span>
-                      </span>
-                      <span className="badge badge-success" style={{ fontSize: 10.5 }}>
-                        Sẵn sàng
-                      </span>
-                    </button>
-                  ))}
-                </div>
+                </span>
+                <button
+                  type="button"
+                  aria-label="Đóng thông báo lỗi"
+                  onClick={() => {
+                    setError('');
+                    setDismissedSsoErr(ssoError);
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'inherit',
+                    cursor: 'pointer',
+                    padding: 2,
+                    display: 'inline-flex',
+                  }}
+                >
+                  <CloseRoundedIcon sx={{ fontSize: 15 }} />
+                </button>
               </div>
             )}
-          </div>
 
-          <div
-            style={{
-              paddingTop: 14,
-              borderTop: '1px solid var(--border-light)',
-              fontSize: 11.5,
-              color: 'var(--text-muted)',
-              lineHeight: 1.5,
-            }}
-          >
-            Phiên đăng nhập sử dụng <strong>HttpOnly Cookie</strong> bảo mật cho Next.js Portal, C# .NET 9 API &amp; Rust
-            Desktop.
-          </div>
-        </div>
-
-        {/* Right Column: Quick Demo RBAC Switcher */}
-        <div className="login-panel-side">
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <AdminPanelSettingsRoundedIcon sx={{ fontSize: 20, color: 'var(--accent-primary)' }} />
-                <h2 style={{ fontSize: 15.5, fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
-                  Đăng nhập nhanh theo Vai trò
-                </h2>
-              </div>
-              {allDemoUsers.length > 0 && (
-                <span className="badge badge-info" style={{ fontSize: 11 }}>
-                  {allDemoUsers.length} tài khoản
-                </span>
-              )}
-            </div>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '6px 0 0', lineHeight: 1.45 }}>
-              Nhấn vào thẻ để vào thẳng phiên làm việc, hoặc nhấn biểu tượng{' '}
-              <EditNoteRoundedIcon sx={{ fontSize: 15, verticalAlign: 'text-bottom' }} /> để điền sẵn vào form (mật khẩu{' '}
-              <code>123456</code>).
-            </p>
-          </div>
-
-          {allDemoUsers.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div className="login-input-wrap">
-                <span className="login-input-icon">
-                  <SearchRoundedIcon sx={{ fontSize: 17 }} />
-                </span>
-                <input
-                  type="search"
-                  className="form-input has-leading"
-                  style={{ height: 36, fontSize: 12.5, borderRadius: 10 }}
-                  placeholder="Tìm tên, username, phòng ban, app..."
-                  value={demoQuery}
-                  onChange={(e) => setDemoQuery(e.target.value)}
-                  aria-label="Tìm kiếm tài khoản mẫu"
-                />
-              </div>
-
-              {availableRoles.length > 2 && (
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {availableRoles.map((role) => {
-                    const active = demoRoleFilter === role;
-                    return (
-                      <button
-                        key={role}
-                        type="button"
-                        onClick={() => setDemoRoleFilter(role)}
-                        style={{
-                          height: 25,
-                          padding: '0 10px',
-                          borderRadius: 999,
-                          border: `1px solid ${active ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
-                          backgroundColor: active ? 'var(--accent-primary)' : 'var(--bg-surface)',
-                          color: active ? '#ffffff' : 'var(--text-secondary)',
-                          fontSize: 11,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          fontFamily: 'inherit',
-                        }}
-                      >
-                        {role === 'ALL' ? 'Tất cả' : role}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {loadingAuth ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-              <div className="login-skeleton" />
-              <div className="login-skeleton" />
-              <div className="login-skeleton" />
-            </div>
-          ) : allDemoUsers.length === 0 ? (
-            <div
+            <button
+              type="submit"
+              disabled={submitting || lockoutSeconds > 0}
+              className="btn btn-primary"
               style={{
-                padding: '24px 16px',
-                borderRadius: 14,
-                border: '1px dashed var(--border-subtle)',
-                backgroundColor: 'var(--bg-surface)',
-                textAlign: 'center',
-                color: 'var(--text-muted)',
-                fontSize: 12.5,
+                minHeight: 48,
+                width: '100%',
+                justifyContent: 'center',
+                fontSize: 15,
+                fontWeight: 600,
+                borderRadius: 12,
+                marginTop: 2,
               }}
             >
-              <WifiOffRoundedIcon sx={{ fontSize: 28, color: 'var(--text-muted)', marginBottom: '6px' }} />
-              <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
-                {authServerOnline ? 'Chưa có tài khoản mẫu khả dụng' : 'Không tải được danh sách tài khoản'}
-              </div>
-              <div style={{ marginBottom: 12 }}>
-                {authServerOnline
-                  ? 'Vui lòng đăng nhập bằng tên tài khoản và mật khẩu ở khung bên trái.'
-                  : 'Kiểm tra kết nối tới máy chủ API (.NET 9) rồi thử tải lại.'}
-              </div>
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={handleRetryConnection}
-                disabled={retryingConn}
-              >
-                <RefreshRoundedIcon sx={{ fontSize: 15 }} />
-                {retryingConn ? 'Đang tải...' : 'Tải lại danh sách'}
-              </button>
-            </div>
-          ) : filteredDemoUsers.length === 0 ? (
-            <div
-              style={{
-                padding: '20px 14px',
-                borderRadius: 14,
-                border: '1px dashed var(--border-subtle)',
-                backgroundColor: 'var(--bg-surface)',
-                textAlign: 'center',
-                fontSize: 12.5,
-                color: 'var(--text-muted)',
-              }}
-            >
-              Không tìm thấy tài khoản khớp với &ldquo;{demoQuery}&rdquo;.
-            </div>
-          ) : (
-            <div className="login-demo-list">
-              {filteredDemoUsers.map((u) => {
-                const isBusy = switchingUser === u.username;
-                const roles = u.roleCodes?.length ? u.roleCodes : [u.roleCode];
-                const appsPreview = u.allowedApps.slice(0, 3);
-                const extraApps = Math.max(0, u.allowedApps.length - 3);
-                return (
-                  <div key={u.username} className="login-demo-card">
-                    <button
-                      type="button"
-                      className="login-demo-main"
-                      disabled={submitting || Boolean(switchingUser)}
-                      onClick={() => handleDemoClick(u.username)}
-                      title={`Đăng nhập nhanh với ${u.fullName} (@${u.username})`}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div
-                          style={{
-                            width: 34,
-                            height: 34,
-                            borderRadius: 10,
-                            backgroundColor: getAvatarColor(u.roleCode),
-                            color: '#ffffff',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontWeight: 700,
-                            fontSize: 12,
-                            flexShrink: 0,
-                          }}
-                        >
-                          {getInitials(u.fullName)}
-                        </div>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              gap: 6,
-                              flexWrap: 'wrap',
-                            }}
-                          >
-                            <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>
-                              {u.fullName}
-                            </span>
-                            <span className="badge badge-info" style={{ fontSize: 10.5, padding: '2px 8px' }}>
-                              {isBusy ? 'Đang vào...' : roles.join(', ')}
-                            </span>
-                          </div>
-                          <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2 }}>
-                            <code>@{u.username}</code> • {u.department}
-                          </div>
-                        </div>
-                      </div>
+              <LoginRoundedIcon sx={{ fontSize: 19 }} />
+              {lockoutSeconds > 0
+                ? `Tạm khóa (${lockoutSeconds}s)`
+                : submitting
+                  ? 'Đang xác thực...'
+                  : 'Đăng nhập'}
+            </button>
+          </form>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginTop: 8, paddingLeft: 44 }}>
-                        {u.allowedApps.includes('*') ? (
-                          <span
-                            className="badge"
-                            style={{
-                              fontSize: 10.5,
-                              padding: '1px 7px',
-                              backgroundColor: 'var(--success-bg)',
-                              color: 'var(--success-text)',
-                            }}
-                          >
-                            Toàn bộ App (*)
-                          </span>
-                        ) : u.allowedApps.length === 0 ? (
-                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Chưa cấp App</span>
-                        ) : (
-                          <>
-                            {appsPreview.map((app) => (
-                              <span
-                                key={app}
-                                className="badge"
-                                style={{
-                                  fontSize: 10.5,
-                                  padding: '1px 7px',
-                                  backgroundColor: 'var(--bg-secondary)',
-                                  color: 'var(--text-secondary)',
-                                }}
-                              >
-                                {app}
-                              </span>
-                            ))}
-                            {extraApps > 0 && (
-                              <span style={{ fontSize: 10.5, color: 'var(--text-muted)', fontWeight: 600 }}>
-                                +{extraApps}
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </button>
+          {!loadingSso && readySsoProviders.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                <div style={{ flex: 1, height: 1, backgroundColor: 'var(--border-light)' }} />
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>
+                  Hoặc đăng nhập bằng SSO
+                </span>
+                <div style={{ flex: 1, height: 1, backgroundColor: 'var(--border-light)' }} />
+              </div>
 
-                    <button
-                      type="button"
-                      className="btn btn-outline btn-xs"
-                      disabled={submitting || Boolean(switchingUser)}
-                      onClick={() => handlePrefillDemo(u)}
-                      title={`Điền @${u.username} vào form đăng nhập`}
-                      aria-label={`Điền tài khoản ${u.username} vào form`}
-                      style={{ flexShrink: 0, borderRadius: 8 }}
-                    >
-                      <EditNoteRoundedIcon sx={{ fontSize: 15 }} />
-                    </button>
-                  </div>
-                );
-              })}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {readySsoProviders.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => handleSsoClick(p)}
+                    className="login-sso-btn"
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+                      <SsoProviderIcon provider={p} />
+                      <span>{p.displayName}</span>
+                    </span>
+                    <span className="badge badge-success" style={{ fontSize: 11 }}>
+                      SSO
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
-
-          <div
-            style={{
-              marginTop: 'auto',
-              padding: '10px 12px',
-              borderRadius: 12,
-              backgroundColor: 'var(--bg-surface)',
-              border: '1px solid var(--border-light)',
-              fontSize: 11.5,
-              color: 'var(--text-secondary)',
-              lineHeight: 1.45,
-            }}
-          >
-            <strong>Kiểm thử RBAC trực tiếp:</strong> Phân quyền App, giới hạn dòng{' '}
-            <code>OWNER_ONLY</code> và ẩn cột nhạy cảm theo từng vai trò.
-          </div>
         </div>
-      </div>
+      </main>
 
       <ForgotPasswordModal open={showForgotModal} onClose={() => setShowForgotModal(false)} />
       <DesktopServerModal

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import AssignmentTurnedInRoundedIcon from '@mui/icons-material/AssignmentTurnedInRounded';
@@ -33,8 +33,24 @@ interface AssignTaskModalProps {
   onSubmit: (payload: AssignTaskPayload) => Promise<void>;
 }
 
-export default function AssignTaskModal({
-  open,
+function getDefaultDueDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 3);
+  return d.toISOString().slice(0, 10);
+}
+
+export default function AssignTaskModal(props: AssignTaskModalProps) {
+  useEscapeKey(props.open, props.onClose);
+  if (!props.open) return null;
+  return (
+    <AssignTaskModalBody
+      key={`${props.initialTitle || ''}_${props.defaultAssignee || ''}_${props.defaultChannelId || ''}`}
+      {...props}
+    />
+  );
+}
+
+function AssignTaskModalBody({
   users,
   channels = [],
   defaultChannelId = null,
@@ -46,33 +62,15 @@ export default function AssignTaskModal({
   onSubmit,
 }: AssignTaskModalProps) {
   const { apps } = usePlatform();
-  const [title, setTitle] = useState(initialTitle);
-  const [description, setDescription] = useState(initialDescription);
-  const [assignee, setAssignee] = useState(defaultAssignee);
+  const [title, setTitle] = useState(() => initialTitle);
+  const [description, setDescription] = useState(() => initialDescription);
+  const [assignee, setAssignee] = useState(() => defaultAssignee || users[0]?.username || '');
   const [priority, setPriority] = useState('MEDIUM');
-  const [dueDate, setDueDate] = useState('');
-  const [channelId, setChannelId] = useState(defaultChannelId || '');
+  const [dueDate, setDueDate] = useState(getDefaultDueDate);
+  const [channelId, setChannelId] = useState(() => defaultChannelId || '');
   const [linkedAppCode, setLinkedAppCode] = useState('');
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [newStep, setNewStep] = useState('');
-  useEscapeKey(open, onClose);
-
-  useEffect(() => {
-    if (!open) return;
-    setTitle(initialTitle);
-    setDescription(initialDescription);
-    setAssignee(defaultAssignee || users[0]?.username || '');
-    setPriority('MEDIUM');
-    const d = new Date();
-    d.setDate(d.getDate() + 3);
-    setDueDate(d.toISOString().slice(0, 10));
-    setChannelId(defaultChannelId || '');
-    setLinkedAppCode('');
-    setChecklist([]);
-    setNewStep('');
-  }, [open, initialTitle, initialDescription, defaultAssignee, defaultChannelId, users]);
-
-  if (!open) return null;
 
   const addChecklistStep = () => {
     if (!newStep.trim()) return;
