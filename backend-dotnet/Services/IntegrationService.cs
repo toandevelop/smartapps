@@ -289,7 +289,7 @@ public class IntegrationService
             Version = "1.0.0",
             Description = "Ký số từ xa (Remote Signing) tài liệu PDF/XML qua VNPT SmartCA.",
             RequiredConfigKeys = ["clientId", "signerUid", "baseUrl", "environment"],
-            SupportedOperations = ["request_sign"]
+            SupportedOperations = ["request_sign", "complete_local_sign"]
         },
         new()
         {
@@ -299,7 +299,7 @@ public class IntegrationService
             Version = "1.0.0",
             Description = "Xác thực ký số PAdES/XAdES qua ứng dụng Viettel MySign.",
             RequiredConfigKeys = ["clientId", "userId", "baseUrl", "environment"],
-            SupportedOperations = ["request_sign"]
+            SupportedOperations = ["request_sign", "complete_local_sign"]
         },
         new()
         {
@@ -309,7 +309,7 @@ public class IntegrationService
             Version = "1.0.0",
             Description = "Ký số hợp đồng, chứng từ từ xa qua MISA eSign.",
             RequiredConfigKeys = ["appId", "taxCode", "baseUrl", "environment"],
-            SupportedOperations = ["request_sign"]
+            SupportedOperations = ["request_sign", "complete_local_sign"]
         },
         // Ngân hàng & Cổng thanh toán Việt Nam
         new()

@@ -243,4 +243,28 @@ public class AuthServiceTests
         Assert.Equal("DEPARTMENT", AuthService.ResolveRowScope(deptLead, "HRM", "tbl_hrm_phucap", "OWNER_ONLY", false));
         Assert.Equal("OWNER_ONLY", AuthService.ResolveRowScope(deptLead, "HRM", "tbl_hrm_nhanvien", "ALL", true));
     }
+
+    [Fact]
+    public void OrgUnitSupport_PreservesOrgUnitIdOnUserModelsAndSubtreeFilterClause()
+    {
+        var req = new UpsertUserRequest
+        {
+            Username = "sales_rep",
+            FullName = "Sales Rep",
+            Department = "Phòng Kinh doanh 1",
+            OrgUnitId = "org_kd_1"
+        };
+        var user = new SysUserDto
+        {
+            Username = req.Username,
+            FullName = req.FullName,
+            Department = req.Department,
+            OrgUnitId = req.OrgUnitId
+        };
+
+        Assert.Equal("org_kd_1", user.OrgUnitId);
+        Assert.Contains("sys_org_units", RecordService.OwnerFilterSqlClause);
+        Assert.Contains("org_tree", RecordService.OwnerFilterSqlClause);
+        Assert.Contains("su.org_unit_id = t.id", RecordService.OwnerFilterSqlClause);
+    }
 }

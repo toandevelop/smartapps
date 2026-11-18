@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Npgsql;
+using NpgsqlTypes;
 using SmartApps.Api.Models;
 
 namespace SmartApps.Api.Services;
@@ -369,7 +370,7 @@ public class AuthService
 
     private const string UserSelectColumns = """
         id, username, full_name, email, employee_code, department, role_code, COALESCE(role_codes::text, '[]'),
-        password_hash, allowed_apps::text, permissions::text, is_active, sso_provider, sso_subject
+        password_hash, allowed_apps::text, permissions::text, is_active, sso_provider, sso_subject, org_unit_id
         """;
 
     public async Task<(SysUserDto? User, string? Token, string? Error)> LoginAsync(string username, string password)
@@ -1176,13 +1177,14 @@ public class AuthService
         var primaryRoleCode = roleCodes[0];
 
         var sql = """
-            INSERT INTO sys_users (id, username, full_name, email, employee_code, department, role_code, role_codes, password_hash, allowed_apps, permissions, is_active)
-            VALUES (@id, @u, @fn, @em, @ec, @dept, @rc, @rcs::jsonb, @ph, @apps::jsonb, @perms::jsonb, @act)
+            INSERT INTO sys_users (id, username, full_name, email, employee_code, department, org_unit_id, role_code, role_codes, password_hash, allowed_apps, permissions, is_active)
+            VALUES (@id, @u, @fn, @em, @ec, @dept, @ouid, @rc, @rcs::jsonb, @ph, @apps::jsonb, @perms::jsonb, @act)
             ON CONFLICT (id) DO UPDATE SET
                 full_name = EXCLUDED.full_name,
                 email = EXCLUDED.email,
                 employee_code = EXCLUDED.employee_code,
                 department = EXCLUDED.department,
+                org_unit_id = EXCLUDED.org_unit_id,
                 role_code = EXCLUDED.role_code,
                 role_codes = EXCLUDED.role_codes,
                 password_hash = CASE WHEN @hasPw THEN EXCLUDED.password_hash ELSE sys_users.password_hash END,
@@ -1199,6 +1201,10 @@ public class AuthService
             cmd.Parameters.AddWithValue("em", (object?)req.Email ?? DBNull.Value);
             cmd.Parameters.AddWithValue("ec", string.IsNullOrWhiteSpace(req.EmployeeCode) ? DBNull.Value : req.EmployeeCode.Trim().ToUpperInvariant());
             cmd.Parameters.AddWithValue("dept", req.Department);
+            cmd.Parameters.Add(new NpgsqlParameter("ouid", NpgsqlDbType.Varchar)
+            {
+                Value = string.IsNullOrWhiteSpace(req.OrgUnitId) ? DBNull.Value : req.OrgUnitId.Trim()
+            });
             cmd.Parameters.AddWithValue("rc", primaryRoleCode);
             cmd.Parameters.AddWithValue("rcs", JsonSerializer.Serialize(roleCodes));
             cmd.Parameters.AddWithValue("ph", hash);
@@ -1429,6 +1435,7 @@ public class AuthService
             Email = r.IsDBNull(3) ? null : r.GetString(3),
             EmployeeCode = r.IsDBNull(4) ? null : r.GetString(4),
             Department = r.IsDBNull(5) ? "Toàn công ty" : r.GetString(5),
+            OrgUnitId = r.FieldCount > 14 && !r.IsDBNull(14) ? r.GetString(14) : null,
             RoleCode = roleCodes.FirstOrDefault() ?? primaryRole,
             RoleCodes = roleCodes,
             AllowedApps = JsonSerializer.Deserialize<List<string>>(r.GetString(9)) ?? new(),

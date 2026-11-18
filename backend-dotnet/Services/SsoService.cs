@@ -19,11 +19,12 @@ public class SsoService
         string ProviderCode,
         string RedirectUri,
         string CodeVerifier,
+        string Nonce,
         string ReturnUrl,
         DateTimeOffset ExpiresAt
     );
 
-    private readonly ConcurrentDictionary<string, PendingSsoState> _pendingStates = new();
+    private readonly ConcurrentDictionary<string, (string Json, DateTimeOffset FetchedAt)> _jwksCache = new(StringComparer.OrdinalIgnoreCase);
 
     public SsoService(IConfiguration config, IHttpClientFactory httpFactory, AuthService auth)
     {
@@ -209,6 +210,7 @@ public class SsoService
             var tok = root.TryGetProperty("token_endpoint", out var te) ? te.GetString() : null;
             var ui = root.TryGetProperty("userinfo_endpoint", out var ue) ? ue.GetString() : null;
             var iss = root.TryGetProperty("issuer", out var ie) ? ie.GetString() : baseUrl;
+            var jwks = root.TryGetProperty("jwks_uri", out var je) ? je.GetString() : null;
 
             if (string.IsNullOrWhiteSpace(auth) || string.IsNullOrWhiteSpace(tok))
                 return (null, "Metadata OIDC thiếu authorization_endpoint hoặc token_endpoint.");
@@ -218,7 +220,8 @@ public class SsoService
                 Issuer = iss ?? baseUrl,
                 AuthorizationUrl = auth!,
                 TokenUrl = tok!,
-                UserinfoUrl = ui
+                UserinfoUrl = ui,
+                JwksUri = jwks
             }, null);
         }
         catch (Exception ex)
@@ -232,7 +235,6 @@ public class SsoService
         string redirectUri,
         string? returnUrl)
     {
-        PruneExpiredStates();
         var provider = (await LoadProvidersAsync()).FirstOrDefault(p => p.Code.Equals(code.Trim(), StringComparison.OrdinalIgnoreCase));
         if (provider == null)
             return (null, $"Không tìm thấy phương thức đăng nhập SSO '{code}'.");
@@ -260,12 +262,13 @@ public class SsoService
         var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
         var safeReturn = !string.IsNullOrWhiteSpace(returnUrl) && returnUrl.StartsWith('/') ? returnUrl : "/";
 
-        _pendingStates[state] = new PendingSsoState(
+        await SavePendingStateAsync(state, new PendingSsoState(
             provider.Code,
             redirectUri,
             verifier,
+            nonce,
             safeReturn,
-            DateTimeOffset.UtcNow.AddMinutes(10));
+            DateTimeOffset.UtcNow.AddMinutes(10)));
 
         var url = BuildAuthorizeUrl(
             authEndpoint!,
@@ -290,7 +293,8 @@ public class SsoService
         {
             return (null, null, "/", $"Nhà cung cấp SSO từ chối đăng nhập: {oauthErrorDesc ?? oauthError}");
         }
-        if (string.IsNullOrWhiteSpace(state) || !_pendingStates.TryRemove(state, out var pending))
+        var pending = string.IsNullOrWhiteSpace(state) ? null : await ConsumePendingStateAsync(state);
+        if (pending == null)
         {
             return (null, null, "/", "Phiên xác thực SSO đã hết hạn hoặc state không hợp lệ. Vui lòng thử lại.");
         }
@@ -311,14 +315,17 @@ public class SsoService
 
         var tokenEndpoint = provider.TokenUrl;
         var userinfoEndpoint = provider.UserinfoUrl;
-        if ((string.IsNullOrWhiteSpace(tokenEndpoint) || string.IsNullOrWhiteSpace(userinfoEndpoint))
-            && !string.IsNullOrWhiteSpace(provider.IssuerUrl))
+        string? expectedIssuer = provider.IssuerUrl;
+        string? jwksUri = null;
+        if (!string.IsNullOrWhiteSpace(provider.IssuerUrl))
         {
             var (disc, _) = await DiscoverOidcAsync(provider.IssuerUrl);
             if (disc != null)
             {
                 tokenEndpoint ??= disc.TokenUrl;
                 userinfoEndpoint ??= disc.UserinfoUrl;
+                expectedIssuer = string.IsNullOrWhiteSpace(disc.Issuer) ? expectedIssuer : disc.Issuer;
+                jwksUri = disc.JwksUri;
             }
         }
         if (string.IsNullOrWhiteSpace(tokenEndpoint))
@@ -358,7 +365,55 @@ public class SsoService
             if (tokDoc.RootElement.TryGetProperty("id_token", out var it)) idToken = it.GetString();
         }
 
-        var claims = ParseJwtPayloadClaims(idToken);
+        Dictionary<string, string> claims;
+        if (!string.IsNullOrWhiteSpace(idToken))
+        {
+            string? jwksJson = null;
+            if (!string.IsNullOrWhiteSpace(jwksUri))
+            {
+                jwksJson = await GetJwksJsonAsync(client, jwksUri, forceRefresh: false);
+                var (ok, verifiedClaims, verifyErr) = VerifyJwtWithJwkJson(
+                    idToken,
+                    jwksJson ?? "",
+                    expectedIssuer,
+                    provider.ClientId,
+                    pending.Nonce);
+                if (!ok && verifyErr != null && verifyErr.Contains("kid", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Refresh JWKS once on key rotation miss
+                    jwksJson = await GetJwksJsonAsync(client, jwksUri, forceRefresh: true);
+                    (ok, verifiedClaims, verifyErr) = VerifyJwtWithJwkJson(
+                        idToken,
+                        jwksJson ?? "",
+                        expectedIssuer,
+                        provider.ClientId,
+                        pending.Nonce);
+                }
+                if (!ok)
+                {
+                    return (null, null, pending.ReturnUrl, verifyErr ?? "Xác thực chữ ký OIDC id_token thất bại.");
+                }
+                claims = verifiedClaims;
+            }
+            else
+            {
+                // Still validate non-cryptographic standard claims if OIDC JWKS URI was not configured
+                var (claimsOk, validatedClaims, claimErr) = ValidateJwtClaimsOnly(
+                    idToken,
+                    expectedIssuer,
+                    provider.ClientId,
+                    pending.Nonce);
+                if (!claimsOk)
+                {
+                    return (null, null, pending.ReturnUrl, claimErr ?? "Claims trên id_token không hợp lệ.");
+                }
+                claims = validatedClaims;
+            }
+        }
+        else
+        {
+            claims = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
 
         // Enrich with UserInfo endpoint if available
         if (!string.IsNullOrWhiteSpace(userinfoEndpoint) && !string.IsNullOrWhiteSpace(accessToken))
@@ -514,14 +569,308 @@ public class SsoService
         return Convert.FromBase64String(s);
     }
 
-    private void PruneExpiredStates()
+    private async Task<string?> GetJwksJsonAsync(HttpClient client, string jwksUri, bool forceRefresh)
     {
-        var now = DateTimeOffset.UtcNow;
-        foreach (var kv in _pendingStates)
+        var hasCached = _jwksCache.TryGetValue(jwksUri, out var cached);
+        if (!forceRefresh && hasCached && cached.FetchedAt > DateTimeOffset.UtcNow.AddMinutes(-15))
         {
-            if (kv.Value.ExpiresAt < now)
-                _pendingStates.TryRemove(kv.Key, out _);
+            return cached.Json;
         }
+        try
+        {
+            var resp = await client.GetAsync(jwksUri);
+            if (!resp.IsSuccessStatusCode) return hasCached ? cached.Json : null;
+            var json = await resp.Content.ReadAsStringAsync();
+            _jwksCache[jwksUri] = (json, DateTimeOffset.UtcNow);
+            return json;
+        }
+        catch
+        {
+            return hasCached ? cached.Json : null;
+        }
+    }
+
+    public static (bool Ok, Dictionary<string, string> Claims, string? Error) ValidateJwtClaimsOnly(
+        string? jwt,
+        string? expectedIssuer,
+        string? expectedAudience,
+        string? expectedNonce,
+        DateTimeOffset? utcNow = null)
+    {
+        var empty = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(jwt))
+            return (false, empty, "Thiếu JWT id_token.");
+        var parts = jwt.Split('.');
+        if (parts.Length < 2)
+            return (false, empty, "Định dạng JWT id_token không hợp lệ.");
+
+        try
+        {
+            var payloadJson = Encoding.UTF8.GetString(Base64UrlDecode(parts[1]));
+            using var doc = JsonDocument.Parse(payloadJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return (false, empty, "Payload id_token không phải JSON object.");
+
+            var nowUnix = (utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("exp", out var expEl) && TryGetUnixSeconds(expEl, out var exp) && nowUnix > exp + 120)
+                return (false, empty, "SSO id_token đã hết hạn (exp).");
+
+            if (root.TryGetProperty("nbf", out var nbfEl) && TryGetUnixSeconds(nbfEl, out var nbf) && nowUnix < nbf - 120)
+                return (false, empty, "SSO id_token chưa đến thời điểm có hiệu lực (nbf).");
+
+            if (!string.IsNullOrWhiteSpace(expectedIssuer))
+            {
+                var actualIss = root.TryGetProperty("iss", out var issEl) ? issEl.GetString()?.TrimEnd('/') : null;
+                var normExpectedIss = expectedIssuer.Trim().TrimEnd('/');
+                if (string.IsNullOrWhiteSpace(actualIss) || !string.Equals(actualIss, normExpectedIss, StringComparison.OrdinalIgnoreCase))
+                    return (false, empty, $"Issuer (iss) không khớp: nhận '{actualIss ?? "(trống)"}'.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(expectedAudience))
+            {
+                var matchedAud = false;
+                if (root.TryGetProperty("aud", out var audEl))
+                {
+                    if (audEl.ValueKind == JsonValueKind.String)
+                        matchedAud = string.Equals(audEl.GetString(), expectedAudience.Trim(), StringComparison.Ordinal);
+                    else if (audEl.ValueKind == JsonValueKind.Array)
+                        matchedAud = audEl.EnumerateArray().Any(e => string.Equals(e.GetString(), expectedAudience.Trim(), StringComparison.Ordinal));
+                }
+                if (!matchedAud)
+                    return (false, empty, "Audience (aud) của id_token không khớp Client ID.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(expectedNonce))
+            {
+                var actualNonce = root.TryGetProperty("nonce", out var nEl) ? nEl.GetString() : null;
+                if (string.IsNullOrWhiteSpace(actualNonce) || !string.Equals(actualNonce, expectedNonce, StringComparison.Ordinal))
+                    return (false, empty, "Nonce bảo mật SSO không khớp.");
+            }
+
+            var claims = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in root.EnumerateObject())
+            {
+                var val = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : prop.Value.ToString();
+                if (!string.IsNullOrWhiteSpace(val)) claims[prop.Name] = val;
+            }
+            return (true, claims, null);
+        }
+        catch (Exception ex)
+        {
+            return (false, empty, $"Không thể phân tích payload id_token: {ex.Message}");
+        }
+    }
+
+    public static (bool Ok, Dictionary<string, string> Claims, string? Error) VerifyJwtWithJwkJson(
+        string? jwt,
+        string jwksJson,
+        string? expectedIssuer,
+        string? expectedAudience,
+        string? expectedNonce,
+        DateTimeOffset? utcNow = null)
+    {
+        var empty = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(jwt))
+            return (false, empty, "Thiếu id_token.");
+        var parts = jwt.Split('.');
+        if (parts.Length != 3 || string.IsNullOrWhiteSpace(parts[2]))
+            return (false, empty, "id_token phải gồm đủ header.payload.signature.");
+        if (string.IsNullOrWhiteSpace(jwksJson))
+            return (false, empty, "Không tải được khóa công khai JWKS từ nhà cung cấp SSO.");
+
+        string? alg;
+        string? kid;
+        try
+        {
+            var headerJson = Encoding.UTF8.GetString(Base64UrlDecode(parts[0]));
+            using var hDoc = JsonDocument.Parse(headerJson);
+            alg = hDoc.RootElement.TryGetProperty("alg", out var aEl) ? aEl.GetString() : null;
+            kid = hDoc.RootElement.TryGetProperty("kid", out var kEl) ? kEl.GetString() : null;
+        }
+        catch
+        {
+            return (false, empty, "Header JWT id_token không hợp lệ.");
+        }
+
+        if (string.IsNullOrWhiteSpace(alg) || alg.Equals("none", StringComparison.OrdinalIgnoreCase))
+            return (false, empty, "Thuật toán chữ ký JWT 'none' bị từ chối.");
+
+        byte[] sigBytes;
+        try
+        {
+            sigBytes = Base64UrlDecode(parts[2]);
+        }
+        catch
+        {
+            return (false, empty, "Chữ ký Base64Url trên id_token không hợp lệ.");
+        }
+        var signedBytes = Encoding.ASCII.GetBytes($"{parts[0]}.{parts[1]}");
+
+        try
+        {
+            using var jwkDoc = JsonDocument.Parse(jwksJson);
+            if (!jwkDoc.RootElement.TryGetProperty("keys", out var keysEl) || keysEl.ValueKind != JsonValueKind.Array)
+                return (false, empty, "JWKS không chứa danh sách keys hợp lệ.");
+
+            var keyCandidates = new List<JsonElement>();
+            foreach (var k in keysEl.EnumerateArray())
+            {
+                var kKid = k.TryGetProperty("kid", out var kidEl) ? kidEl.GetString() : null;
+                var kUse = k.TryGetProperty("use", out var useEl) ? useEl.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(kUse) && !kUse.Equals("sig", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!string.IsNullOrWhiteSpace(kid))
+                {
+                    if (string.Equals(kKid, kid, StringComparison.Ordinal))
+                        keyCandidates.Add(k);
+                }
+                else
+                {
+                    keyCandidates.Add(k);
+                }
+            }
+
+            if (keyCandidates.Count == 0)
+                return (false, empty, $"Không tìm thấy JWK phù hợp cho kid '{kid ?? "(none)"}'.");
+
+            var signatureValid = false;
+            foreach (var jwk in keyCandidates)
+            {
+                if (VerifySignatureAgainstJwk(signedBytes, sigBytes, alg, jwk))
+                {
+                    signatureValid = true;
+                    break;
+                }
+            }
+
+            if (!signatureValid)
+                return (false, empty, "Chữ ký số RSA/ECDSA của id_token không khớp JWKS.");
+
+            return ValidateJwtClaimsOnly(jwt, expectedIssuer, expectedAudience, expectedNonce, utcNow);
+        }
+        catch (Exception ex)
+        {
+            return (false, empty, $"Lỗi xác thực JWKS: {ex.Message}");
+        }
+    }
+
+    private static bool VerifySignatureAgainstJwk(byte[] signedBytes, byte[] sigBytes, string alg, JsonElement jwk)
+    {
+        var kty = jwk.TryGetProperty("kty", out var ktyEl) ? ktyEl.GetString() : null;
+        if (string.Equals(kty, "RSA", StringComparison.OrdinalIgnoreCase) && alg.StartsWith("RS", StringComparison.OrdinalIgnoreCase))
+        {
+            var hashAlg = alg.ToUpperInvariant() switch
+            {
+                "RS256" => HashAlgorithmName.SHA256,
+                "RS384" => HashAlgorithmName.SHA384,
+                "RS512" => HashAlgorithmName.SHA512,
+                _ => default
+            };
+            if (hashAlg == default) return false;
+            if (!jwk.TryGetProperty("n", out var nEl) || !jwk.TryGetProperty("e", out var eEl)) return false;
+            using var rsa = RSA.Create(new RSAParameters
+            {
+                Modulus = Base64UrlDecode(nEl.GetString()!),
+                Exponent = Base64UrlDecode(eEl.GetString()!)
+            });
+            return rsa.VerifyData(signedBytes, sigBytes, hashAlg, RSASignaturePadding.Pkcs1);
+        }
+
+        if (string.Equals(kty, "EC", StringComparison.OrdinalIgnoreCase) && alg.StartsWith("ES", StringComparison.OrdinalIgnoreCase))
+        {
+            var (hashAlg, curve, coordBytes) = alg.ToUpperInvariant() switch
+            {
+                "ES256" => (HashAlgorithmName.SHA256, ECCurve.NamedCurves.nistP256, 32),
+                "ES384" => (HashAlgorithmName.SHA384, ECCurve.NamedCurves.nistP384, 48),
+                "ES512" => (HashAlgorithmName.SHA512, ECCurve.NamedCurves.nistP521, 66),
+                _ => (default(HashAlgorithmName), default(ECCurve), 0)
+            };
+            if (coordBytes == 0) return false;
+            if (!jwk.TryGetProperty("x", out var xEl) || !jwk.TryGetProperty("y", out var yEl)) return false;
+            using var ecdsa = ECDsa.Create(new ECParameters
+            {
+                Curve = curve,
+                Q = new ECPoint
+                {
+                    X = PadBigEndian(Base64UrlDecode(xEl.GetString()!), coordBytes),
+                    Y = PadBigEndian(Base64UrlDecode(yEl.GetString()!), coordBytes)
+                }
+            });
+            return ecdsa.VerifyData(signedBytes, sigBytes, hashAlg, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        }
+
+        return false;
+    }
+
+    private static byte[] PadBigEndian(byte[] bytes, int targetLen)
+    {
+        if (bytes.Length == targetLen) return bytes;
+        var res = new byte[targetLen];
+        if (bytes.Length > targetLen)
+            Buffer.BlockCopy(bytes, bytes.Length - targetLen, res, 0, targetLen);
+        else
+            Buffer.BlockCopy(bytes, 0, res, targetLen - bytes.Length, bytes.Length);
+        return res;
+    }
+
+    private static bool TryGetUnixSeconds(JsonElement el, out long value)
+    {
+        if (el.ValueKind == JsonValueKind.Number && el.TryGetInt64(out value)) return true;
+        if (el.ValueKind == JsonValueKind.String && long.TryParse(el.GetString(), out value)) return true;
+        value = 0;
+        return false;
+    }
+
+    private async Task SavePendingStateAsync(string state, PendingSsoState pending)
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+        await using (var prune = new NpgsqlCommand("DELETE FROM sys_sso_states WHERE expires_at < CURRENT_TIMESTAMP", conn))
+        {
+            await prune.ExecuteNonQueryAsync();
+        }
+        await using var cmd = new NpgsqlCommand("""
+            INSERT INTO sys_sso_states (state, provider_code, redirect_uri, code_verifier, nonce, return_url, expires_at)
+            VALUES (@st, @pc, @ru, @cv, @nc, @ret, @exp)
+            ON CONFLICT (state) DO UPDATE SET
+                provider_code = EXCLUDED.provider_code,
+                redirect_uri = EXCLUDED.redirect_uri,
+                code_verifier = EXCLUDED.code_verifier,
+                nonce = EXCLUDED.nonce,
+                return_url = EXCLUDED.return_url,
+                expires_at = EXCLUDED.expires_at
+            """, conn);
+        cmd.Parameters.AddWithValue("st", state);
+        cmd.Parameters.AddWithValue("pc", pending.ProviderCode);
+        cmd.Parameters.AddWithValue("ru", pending.RedirectUri);
+        cmd.Parameters.AddWithValue("cv", pending.CodeVerifier);
+        cmd.Parameters.AddWithValue("nc", pending.Nonce);
+        cmd.Parameters.AddWithValue("ret", pending.ReturnUrl);
+        cmd.Parameters.AddWithValue("exp", pending.ExpiresAt.UtcDateTime);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private async Task<PendingSsoState?> ConsumePendingStateAsync(string state)
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("""
+            DELETE FROM sys_sso_states
+            WHERE state = @st
+            RETURNING provider_code, redirect_uri, code_verifier, nonce, return_url, expires_at
+            """, conn);
+        cmd.Parameters.AddWithValue("st", state);
+        await using var r = await cmd.ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return null;
+        return new PendingSsoState(
+            r.GetString(0),
+            r.GetString(1),
+            r.GetString(2),
+            r.GetString(3),
+            r.GetString(4),
+            new DateTimeOffset(DateTime.SpecifyKind(r.GetDateTime(5), DateTimeKind.Utc)));
     }
 
     private async Task<List<SsoProviderInternal>> LoadProvidersAsync()

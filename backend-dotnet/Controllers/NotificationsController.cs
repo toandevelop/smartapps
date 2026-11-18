@@ -156,4 +156,38 @@ public class NotificationsController : ControllerBase
 
         return Ok(new { success = true, data = new { id } });
     }
+
+    [HttpGet("online-users")]
+    public async Task<IActionResult> OnlineUsers()
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+
+        _realtime.TouchPresence(user.Username);
+        var onlineSet = _realtime.GetOnlineUsernames();
+        var allUsers = await _auth.ListUsersAsync();
+        var items = allUsers
+            .Where(u => onlineSet.Contains(u.Username))
+            .OrderByDescending(u => u.Username.Equals(user.Username, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(u => u.FullName, StringComparer.OrdinalIgnoreCase)
+            .Select(u => new
+            {
+                u.Username,
+                u.FullName,
+                u.RoleCode,
+                u.Department,
+            })
+            .ToList();
+
+        return Ok(new { success = true, data = items });
+    }
+
+    [HttpPost("presence")]
+    public async Task<IActionResult> TouchPresence()
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+        _realtime.TouchPresence(user.Username);
+        return Ok(new { success = true });
+    }
 }

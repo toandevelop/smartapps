@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using SmartApps.Api.Services;
 using Xunit;
 
@@ -75,5 +76,83 @@ public class SsoServiceTests
         Assert.False(SsoService.IsDomainAllowed("outsider@gmail.com", allowed));
         Assert.False(SsoService.IsDomainAllowed(null, allowed));
         Assert.True(SsoService.IsDomainAllowed("anyone@gmail.com", Array.Empty<string>()));
+    }
+
+    private static string B64Url(byte[] bytes) =>
+        Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    [Fact]
+    public void VerifyJwtWithJwkJson_ValidatesRsaSignatureAndRejectsTamperedOrInvalidClaims()
+    {
+        using var rsa = RSA.Create(2048);
+        var pub = rsa.ExportParameters(false);
+        var jwks = JsonSerializer.Serialize(new
+        {
+            keys = new[]
+            {
+                new { kty = "RSA", kid = "rsa-k1", use = "sig", alg = "RS256", n = B64Url(pub.Modulus!), e = B64Url(pub.Exponent!) }
+            }
+        });
+
+        var now = new DateTimeOffset(2026, 11, 18, 12, 0, 0, TimeSpan.Zero);
+        var headerB64 = B64Url(Encoding.UTF8.GetBytes("{\"alg\":\"RS256\",\"typ\":\"JWT\",\"kid\":\"rsa-k1\"}"));
+        var payloadB64 = B64Url(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            sub = "user-42",
+            email = "an@company.vn",
+            iss = "https://sso.company.vn",
+            aud = "smartapps-web",
+            nonce = "nc-123",
+            exp = now.AddMinutes(10).ToUnixTimeSeconds()
+        })));
+        var signingInput = Encoding.ASCII.GetBytes($"{headerB64}.{payloadB64}");
+        var sigB64 = B64Url(rsa.SignData(signingInput, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1));
+        var jwt = $"{headerB64}.{payloadB64}.{sigB64}";
+
+        var (ok, claims, err) = SsoService.VerifyJwtWithJwkJson(jwt, jwks, "https://sso.company.vn", "smartapps-web", "nc-123", now);
+        Assert.True(ok, err);
+        Assert.Equal("user-42", claims["sub"]);
+
+        // Tamper payload claim
+        var tamperedPayloadB64 = B64Url(Encoding.UTF8.GetBytes("{\"sub\":\"admin\",\"iss\":\"https://sso.company.vn\",\"aud\":\"smartapps-web\",\"nonce\":\"nc-123\",\"exp\":9999999999}"));
+        var (okTamper, _, _) = SsoService.VerifyJwtWithJwkJson($"{headerB64}.{tamperedPayloadB64}.{sigB64}", jwks, "https://sso.company.vn", "smartapps-web", "nc-123", now);
+        Assert.False(okTamper);
+
+        // Wrong audience / nonce / expired checks
+        Assert.False(SsoService.VerifyJwtWithJwkJson(jwt, jwks, "https://sso.company.vn", "other-client", "nc-123", now).Ok);
+        Assert.False(SsoService.VerifyJwtWithJwkJson(jwt, jwks, "https://sso.company.vn", "smartapps-web", "wrong-nonce", now).Ok);
+        Assert.False(SsoService.VerifyJwtWithJwkJson(jwt, jwks, "https://sso.company.vn", "smartapps-web", "nc-123", now.AddHours(1)).Ok);
+    }
+
+    [Fact]
+    public void VerifyJwtWithJwkJson_ValidatesEcdsaEs256Signature()
+    {
+        using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var pub = ecdsa.ExportParameters(false);
+        var jwks = JsonSerializer.Serialize(new
+        {
+            keys = new[]
+            {
+                new { kty = "EC", kid = "ec-1", use = "sig", crv = "P-256", x = B64Url(pub.Q.X!), y = B64Url(pub.Q.Y!) }
+            }
+        });
+
+        var now = new DateTimeOffset(2026, 11, 18, 12, 0, 0, TimeSpan.Zero);
+        var headerB64 = B64Url(Encoding.UTF8.GetBytes("{\"alg\":\"ES256\",\"kid\":\"ec-1\"}"));
+        var payloadB64 = B64Url(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            sub = "ec-user",
+            iss = "https://accounts.google.com",
+            aud = new[] { "other", "smartapps-client" },
+            nonce = "ec-nonce",
+            exp = now.AddMinutes(5).ToUnixTimeSeconds()
+        })));
+        var signingInput = Encoding.ASCII.GetBytes($"{headerB64}.{payloadB64}");
+        var sigBytes = ecdsa.SignData(signingInput, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        var jwt = $"{headerB64}.{payloadB64}.{B64Url(sigBytes)}";
+
+        var (ok, claims, err) = SsoService.VerifyJwtWithJwkJson(jwt, jwks, "https://accounts.google.com", "smartapps-client", "ec-nonce", now);
+        Assert.True(ok, err);
+        Assert.Equal("ec-user", claims["sub"]);
     }
 }

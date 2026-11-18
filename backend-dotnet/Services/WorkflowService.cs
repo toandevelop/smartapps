@@ -86,7 +86,10 @@ public class WorkflowService
                 ApproverRoles = (s.ApproverRoles ?? new()).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
                 ApproverUsers = (s.ApproverUsers ?? new()).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
                 SlaHours = s.SlaHours > 0 ? s.SlaHours : 24,
-                RequireCommentOnReject = s.RequireCommentOnReject
+                RequireCommentOnReject = s.RequireCommentOnReject,
+                ApprovalMode = NormalizeApprovalMode(s.ApprovalMode),
+                QuorumCount = s.QuorumCount > 0 ? s.QuorumCount : 1,
+                AllowReturnToPrevious = s.AllowReturnToPrevious
             })
             .ToList();
 
@@ -224,5 +227,146 @@ public class WorkflowService
             UpdatedAt = r.GetDateTime(15),
             PendingCount = Convert.ToInt32(r.GetInt64(16))
         };
+    }
+
+    public static string NormalizeApprovalMode(string? mode) => (mode ?? "ANY").Trim().ToUpperInvariant() switch
+    {
+        "ALL" => "ALL",
+        "QUORUM" => "QUORUM",
+        _ => "ANY"
+    };
+
+    /// <summary>Computes the required approval votes for a workflow step given ANY/QUORUM/ALL mode.</summary>
+    public static int ResolveRequiredApprovals(WorkflowStepDto? step, int distinctEligibleApprovers)
+    {
+        if (step == null) return 1;
+        return NormalizeApprovalMode(step.ApprovalMode) switch
+        {
+            "ALL" => Math.Max(1, distinctEligibleApprovers),
+            "QUORUM" => Math.Max(1, step.QuorumCount),
+            _ => 1
+        };
+    }
+
+    public async Task<List<SysWorkflowDelegationDto>> ListDelegationsAsync(string? actorFilter = null)
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("""
+            SELECT id, delegator_username, delegate_username, app_id, starts_at, expires_at, reason, is_active, created_at
+            FROM sys_workflow_delegations
+            WHERE (@u IS NULL OR LOWER(delegator_username) = LOWER(@u) OR LOWER(delegate_username) = LOWER(@u))
+            ORDER BY created_at DESC
+            """, conn);
+        cmd.Parameters.Add(new NpgsqlParameter("u", NpgsqlDbType.Varchar)
+        {
+            Value = string.IsNullOrWhiteSpace(actorFilter) ? DBNull.Value : actorFilter.Trim()
+        });
+        var list = new List<SysWorkflowDelegationDto>();
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync())
+        {
+            list.Add(new SysWorkflowDelegationDto
+            {
+                Id = r.GetString(0),
+                DelegatorUsername = r.GetString(1),
+                DelegateUsername = r.GetString(2),
+                AppId = r.IsDBNull(3) ? null : r.GetString(3),
+                StartsAt = r.GetDateTime(4),
+                ExpiresAt = r.GetDateTime(5),
+                Reason = r.IsDBNull(6) ? null : r.GetString(6),
+                IsActive = r.GetBoolean(7),
+                CreatedAt = r.GetDateTime(8)
+            });
+        }
+        return list;
+    }
+
+    public async Task<List<string>> GetActiveDelegatorsForDelegateAsync(NpgsqlConnection conn, string delegateUsername, string? appId)
+    {
+        await using var cmd = new NpgsqlCommand("""
+            SELECT DISTINCT delegator_username
+            FROM sys_workflow_delegations
+            WHERE LOWER(delegate_username) = LOWER(@del)
+              AND is_active = TRUE
+              AND starts_at <= CURRENT_TIMESTAMP
+              AND expires_at >= CURRENT_TIMESTAMP
+              AND (app_id IS NULL OR app_id = '' OR app_id = @app)
+            """, conn);
+        cmd.Parameters.AddWithValue("del", delegateUsername.Trim());
+        cmd.Parameters.AddWithValue("app", appId ?? "");
+        var res = new List<string>();
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync()) res.Add(r.GetString(0));
+        return res;
+    }
+
+    public async Task<(SysWorkflowDelegationDto? Item, string? Error)> UpsertDelegationAsync(UpsertWorkflowDelegationRequest req, string currentUsername, bool isAdmin)
+    {
+        var delegator = isAdmin && !string.IsNullOrWhiteSpace(req.DelegatorUsername)
+            ? req.DelegatorUsername.Trim()
+            : currentUsername;
+        var delegateUser = req.DelegateUsername?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(delegateUser))
+            return (null, "Người được ủy quyền là bắt buộc.");
+        if (delegateUser.Equals(delegator, StringComparison.OrdinalIgnoreCase))
+            return (null, "Không thể tự ủy quyền cho chính mình.");
+        var startsAt = req.StartsAt ?? DateTime.UtcNow.AddMinutes(-5);
+        if (req.ExpiresAt <= startsAt)
+            return (null, "Thời điểm kết thúc ủy quyền phải sau thời điểm bắt đầu.");
+
+        var id = string.IsNullOrWhiteSpace(req.Id) ? $"wfd_{Guid.NewGuid().ToString("N")[..8]}" : req.Id.Trim();
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("""
+            INSERT INTO sys_workflow_delegations (id, delegator_username, delegate_username, app_id, starts_at, expires_at, reason, is_active)
+            VALUES (@id, @from, @to, @app, @st, @ex, @rsn, @act)
+            ON CONFLICT (id) DO UPDATE SET
+                delegator_username = EXCLUDED.delegator_username,
+                delegate_username = EXCLUDED.delegate_username,
+                app_id = EXCLUDED.app_id,
+                starts_at = EXCLUDED.starts_at,
+                expires_at = EXCLUDED.expires_at,
+                reason = EXCLUDED.reason,
+                is_active = EXCLUDED.is_active
+            RETURNING id, delegator_username, delegate_username, app_id, starts_at, expires_at, reason, is_active, created_at
+            """, conn);
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("from", delegator);
+        cmd.Parameters.AddWithValue("to", delegateUser);
+        cmd.Parameters.AddWithValue("app", string.IsNullOrWhiteSpace(req.AppId) ? DBNull.Value : req.AppId.Trim());
+        cmd.Parameters.AddWithValue("st", DateTime.SpecifyKind(startsAt, DateTimeKind.Utc));
+        cmd.Parameters.AddWithValue("ex", DateTime.SpecifyKind(req.ExpiresAt, DateTimeKind.Utc));
+        cmd.Parameters.AddWithValue("rsn", string.IsNullOrWhiteSpace(req.Reason) ? DBNull.Value : req.Reason.Trim());
+        cmd.Parameters.AddWithValue("act", req.IsActive);
+        await using var r = await cmd.ExecuteReaderAsync();
+        await r.ReadAsync();
+        return (new SysWorkflowDelegationDto
+        {
+            Id = r.GetString(0),
+            DelegatorUsername = r.GetString(1),
+            DelegateUsername = r.GetString(2),
+            AppId = r.IsDBNull(3) ? null : r.GetString(3),
+            StartsAt = r.GetDateTime(4),
+            ExpiresAt = r.GetDateTime(5),
+            Reason = r.IsDBNull(6) ? null : r.GetString(6),
+            IsActive = r.GetBoolean(7),
+            CreatedAt = r.GetDateTime(8)
+        }, null);
+    }
+
+    public async Task<bool> DeleteDelegationAsync(string id, string actorUsername, bool isAdmin)
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("""
+            DELETE FROM sys_workflow_delegations
+            WHERE id = @id
+              AND (@adm = TRUE OR LOWER(delegator_username) = LOWER(@u))
+            """, conn);
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("adm", isAdmin);
+        cmd.Parameters.AddWithValue("u", actorUsername);
+        return await cmd.ExecuteNonQueryAsync() > 0;
     }
 }

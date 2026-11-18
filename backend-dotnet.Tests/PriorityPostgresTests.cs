@@ -67,11 +67,14 @@ public sealed class PriorityPostgresFixture : IAsyncLifetime
         builder.Services.AddControllers().AddApplicationPart(typeof(RecordsController).Assembly);
         builder.Services.AddHttpClient();
         builder.Services.AddSingleton<AuthService>();
+        builder.Services.AddSingleton<SsoService>();
         builder.Services.AddSingleton<AiService>();
+        builder.Services.AddSingleton<RealtimeEventService>();
+        builder.Services.AddSingleton<PlatformMetricsService>();
+        builder.Services.AddSingleton<BusinessCalendarService>();
         builder.Services.AddSingleton<MetadataService>();
         builder.Services.AddSingleton<DynamicComputeService>();
         builder.Services.AddSingleton<RecordWriteService>();
-        builder.Services.AddSingleton<RealtimeEventService>();
         builder.Services.AddSingleton<ExternalNotificationService>();
         builder.Services.AddSingleton<NotificationService>();
         builder.Services.AddSingleton<TaskService>();

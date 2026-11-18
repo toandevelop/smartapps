@@ -39,12 +39,13 @@ public class AppsController : ControllerBase
     }
 
     [HttpGet("{codeOrId}")]
-    public async Task<IActionResult> GetAppRuntime(string codeOrId)
+    public async Task<IActionResult> GetAppRuntime(string codeOrId, [FromQuery] bool previewDraft = false)
     {
         var user = await _auth.ResolveRequestUserAsync(Request);
         if (user == null) return Unauthorized(new { success = false, message = "Vui lòng đăng nhập." });
 
-        var tree = await _metadata.GetAppRuntimeTreeAsync(codeOrId);
+        var allowDraft = previewDraft && AuthService.HasPermission(user, "studio.manage");
+        var tree = await _metadata.GetAppRuntimeTreeAsync(codeOrId, usePublishedSnapshot: !allowDraft);
         if (tree == null) return NotFound(new { success = false, message = "Không tìm thấy ứng dụng." });
         if (!AuthService.CanAccessApp(user, tree.App.Code))
             return StatusCode(403, new { success = false, message = "Bạn không có quyền truy cập ứng dụng này." });
@@ -127,6 +128,18 @@ public class AppsController : ControllerBase
 
         var releases = await _metadata.GetAppReleasesAsync(appId);
         return Ok(new { success = true, data = releases });
+    }
+
+    [HttpGet("{appId}/releases/diff")]
+    public async Task<IActionResult> GetReleaseDiff(string appId)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+        if (!AuthService.HasPermission(user, "studio.manage"))
+            return StatusCode(403, new { success = false });
+
+        var diff = await _metadata.ComputeSchemaDiffAsync(appId);
+        return diff != null ? Ok(new { success = true, data = diff }) : NotFound(new { success = false });
     }
 
     [HttpPost("{appId}/releases/{versionNumber:int}/rollback")]

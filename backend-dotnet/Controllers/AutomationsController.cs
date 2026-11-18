@@ -115,4 +115,16 @@ public class AutomationsController : ControllerBase
         var ok = await _outbox.RetryAsync(id);
         return ok ? Ok(new { success = true }) : NotFound(new { success = false, message = "Không tìm thấy sự kiện lỗi/dead-letter để thử lại." });
     }
+
+    [HttpPost("outbox/retry-dead-letters")]
+    public async Task<IActionResult> RetryAllDeadLetters()
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+        if (!AuthService.HasPermission(user, "studio.manage") && !AuthService.HasPermission(user, "automation.manage"))
+            return StatusCode(403, new { success = false });
+
+        var count = await _outbox.RetryDeadLettersAsync();
+        return Ok(new { success = true, retried = count });
+    }
 }

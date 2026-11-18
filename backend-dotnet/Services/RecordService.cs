@@ -37,7 +37,7 @@ public partial class RecordService
         created_by, updated_by, created_at, updated_at,
         COALESCE(approval_status, 'DRAFT'), approved_by, approved_at, rejection_reason, deleted_at, deleted_by,
         workflow_id, COALESCE(current_step_order, 0), current_step_name, COALESCE(workflow_history::text, '[]'),
-        COALESCE(version, 1), workflow_snapshot::text
+        COALESCE(version, 1), workflow_snapshot::text, COALESCE(step_approvals::text, '[]')
         """;
 
     public RecordService(
@@ -92,6 +92,46 @@ public partial class RecordService
                      ))
                    )
              )
+             OR EXISTS (
+                 WITH RECURSIVE my_org_roots AS (
+                     SELECT id FROM sys_org_units
+                     WHERE is_active = TRUE AND (
+                         LOWER(id) = LOWER(@ownerDept)
+                         OR LOWER(code) = LOWER(@ownerDept)
+                         OR LOWER(name) = LOWER(@ownerDept)
+                         OR (@owner IS NOT NULL AND (
+                             LOWER(COALESCE(manager_username, '')) = LOWER(@owner)
+                             OR id = (SELECT org_unit_id FROM sys_users WHERE LOWER(username) = LOWER(@owner) LIMIT 1)
+                         ))
+                     )
+                 ),
+                 org_tree AS (
+                     SELECT id, code, name FROM sys_org_units WHERE id IN (SELECT id FROM my_org_roots) AND is_active = TRUE
+                     UNION ALL
+                     SELECT c.id, c.code, c.name
+                     FROM sys_org_units c
+                     JOIN org_tree p ON c.parent_id = p.id
+                     WHERE c.is_active = TRUE
+                 )
+                 SELECT 1 FROM org_tree t
+                 WHERE LOWER(COALESCE(app_records.data ->> 'phong_ban', '')) IN (LOWER(t.code), LOWER(t.name))
+                    OR LOWER(COALESCE(app_records.data ->> 'department', '')) IN (LOWER(t.code), LOWER(t.name))
+                    OR LOWER(COALESCE(app_records.data ->> 'bo_phan', '')) IN (LOWER(t.code), LOWER(t.name))
+                    OR EXISTS (
+                        SELECT 1 FROM sys_users su
+                        WHERE (su.org_unit_id = t.id OR LOWER(COALESCE(su.department, '')) = LOWER(t.name))
+                          AND (
+                               LOWER(su.username) = LOWER(app_records.created_by)
+                            OR (su.employee_code IS NOT NULL AND (
+                                   LOWER(COALESCE(app_records.data ->> 'ma_nv', '')) = LOWER(su.employee_code)
+                                OR LOWER(COALESCE(app_records.data ->> 'nhan_vien', '')) = LOWER(su.employee_code)
+                                OR LOWER(COALESCE(app_records.data ->> 'ho_ten_nv', '')) = LOWER(su.employee_code)
+                                OR LOWER(COALESCE(app_records.data ->> 'nguoi_nhan', '')) = LOWER(su.employee_code)
+                                OR LOWER(COALESCE(app_records.data ->> 'nguoi_tao', '')) = LOWER(su.employee_code)
+                            ))
+                          )
+                    )
+             )
          ))
          OR (@ownerDept IS NULL AND @owner IS NOT NULL AND (
                 LOWER(created_by) = LOWER(@owner)
@@ -140,7 +180,9 @@ public partial class RecordService
             LIMIT 1
             """, conn);
         cmd.Parameters.AddWithValue("id", recordId);
-        var dept = effectiveRowScope.Equals("DEPARTMENT", StringComparison.OrdinalIgnoreCase) ? user.Department : null;
+        var dept = effectiveRowScope.Equals("DEPARTMENT", StringComparison.OrdinalIgnoreCase)
+            ? (string.IsNullOrWhiteSpace(user.Department) ? (user.OrgUnitId ?? "__UNASSIGNED__") : user.Department)
+            : null;
         AddOwnerFilterParams(cmd, user.Username, user.Email, user.EmployeeCode, dept);
         return await cmd.ExecuteScalarAsync() != null;
     }
@@ -563,6 +605,7 @@ public partial class RecordService
             SET approval_status = 'PENDING', rejection_reason = NULL, data = @data::jsonb,
                 workflow_id = @wfid, current_step_order = @so, current_step_name = @sn,
                 workflow_history = @wh::jsonb, workflow_snapshot = @wfs::jsonb,
+                step_approvals = '[]'::jsonb,
                 version = COALESCE(version, 1) + 1, updated_by = @actor, updated_at = CURRENT_TIMESTAMP
             WHERE id = @id AND deleted_at IS NULL
               AND COALESCE(approval_status, 'DRAFT') = @expectedStatus
@@ -645,7 +688,8 @@ public partial class RecordService
         bool approve,
         string? reason,
         int? expectedVersion = null,
-        int? expectedStepOrder = null)
+        int? expectedStepOrder = null,
+        string? action = null)
     {
         await using var conn = new NpgsqlConnection(_connStr);
         await conn.OpenAsync();
@@ -682,7 +726,8 @@ public partial class RecordService
                           ?? orderedSteps.FirstOrDefault();
 
         var fallbackRoles = table?.ApproverRoles ?? new List<string>();
-        var isAuthorized = CanUserApproveStep(actorUser, appCode, currentStep, fallbackRoles);
+        var (isAuthorized, delegatedFrom) = await ResolveApprovalAuthorizationAsync(
+            conn, actorUser, rec.AppId, appCode, currentStep, fallbackRoles);
 
         if (!isAuthorized)
         {
@@ -690,14 +735,102 @@ public partial class RecordService
             return (null, $"Vai trò {actorUser.RoleCode} không có quyền phê duyệt bước hiện tại (yêu cầu: {string.Join(", ", reqRoles)}).");
         }
 
+        var op = !string.IsNullOrWhiteSpace(action)
+            ? action.Trim().ToUpperInvariant()
+            : (approve ? "APPROVE" : "REJECT");
+        if (op is not ("APPROVE" or "REJECT" or "RETURN")) op = approve ? "APPROVE" : "REJECT";
+
         var actor = actorUser.Username;
         var actorRole = actorUser.RoleCode;
-
         var stepName = currentStep?.Name ?? rec.CurrentStepName ?? "Phê duyệt";
         var stepOrder = currentStep?.StepOrder ?? Math.Max(1, rec.CurrentStepOrder);
-        var nextStep = approve && orderedSteps.Count > 0
-            ? orderedSteps.FirstOrDefault(s => s.StepOrder > stepOrder)
-            : null;
+        var noteWithDelegation = string.IsNullOrWhiteSpace(delegatedFrom)
+            ? reason
+            : string.IsNullOrWhiteSpace(reason) ? $"[Ủy quyền từ @{delegatedFrom}]" : $"[Ủy quyền từ @{delegatedFrom}] {reason}";
+
+        string nextStatus;
+        int nextStepOrder;
+        string? nextStepName;
+        bool isFinalApproval = false;
+        var nextApprovals = new List<WorkflowStepApprovalVoteDto>(rec.StepApprovals ?? new());
+        string historyAction = op;
+        string? historyNote = noteWithDelegation;
+        WorkflowStepDto? nextStep = null;
+
+        if (op == "RETURN")
+        {
+            var prevStep = orderedSteps
+                .Where(s => s.StepOrder < stepOrder)
+                .OrderByDescending(s => s.StepOrder)
+                .FirstOrDefault();
+
+            if (prevStep != null)
+            {
+                nextStatus = "PENDING";
+                nextStepOrder = prevStep.StepOrder;
+                nextStepName = prevStep.Name;
+                nextStep = prevStep;
+                nextApprovals.Clear();
+            }
+            else if (currentStep?.AllowReturnToPrevious == true)
+            {
+                nextStatus = "DRAFT";
+                nextStepOrder = 0;
+                nextStepName = null;
+                nextApprovals.Clear();
+            }
+            else
+            {
+                return (null, "Bước đầu tiên không cho phép trả lại bước trước; vui lòng dùng Từ chối hoặc Thu hồi.");
+            }
+            if (string.IsNullOrWhiteSpace(historyNote)) historyNote = "Trả lại hồ sơ để bổ sung thông tin";
+        }
+        else if (op == "REJECT")
+        {
+            nextStatus = "REJECTED";
+            nextStepOrder = 0;
+            nextStepName = null;
+            nextApprovals.Clear();
+        }
+        else
+        {
+            var stepVotes = nextApprovals.Where(v => v.StepOrder == stepOrder).ToList();
+            if (stepVotes.Any(v => v.Actor.Equals(actor, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new RecordConflictException("Bạn đã bỏ phiếu phê duyệt tại bước này rồi, đang chờ các người duyệt khác.");
+            }
+
+            var newVote = new WorkflowStepApprovalVoteDto
+            {
+                StepOrder = stepOrder,
+                Actor = actor,
+                ActorRole = actorRole,
+                DelegatedFrom = delegatedFrom,
+                At = DateTime.UtcNow
+            };
+            stepVotes.Add(newVote);
+            var eligibleCount = await CountEligibleApproversAsync(conn, currentStep, fallbackRoles);
+            var requiredCount = WorkflowService.ResolveRequiredApprovals(currentStep, eligibleCount);
+
+            if (stepVotes.Count < requiredCount)
+            {
+                // Stay in current step until parallel/quorum threshold is satisfied
+                nextApprovals.Add(newVote);
+                nextStatus = "PENDING";
+                nextStepOrder = stepOrder;
+                nextStepName = stepName;
+                historyNote = $"[Đồng duyệt {stepVotes.Count}/{requiredCount}] {noteWithDelegation}".Trim();
+            }
+            else
+            {
+                nextApprovals.RemoveAll(v => v.StepOrder == stepOrder);
+                nextStep = orderedSteps.Count > 0 ? orderedSteps.FirstOrDefault(s => s.StepOrder > stepOrder) : null;
+                isFinalApproval = nextStep == null;
+                nextStatus = nextStep != null ? "PENDING" : "APPROVED";
+                nextStepOrder = nextStep != null ? nextStep.StepOrder : stepOrder;
+                nextStepName = nextStep != null ? nextStep.Name : stepName;
+            }
+        }
 
         var history = new List<WorkflowHistoryEntryDto>(rec.WorkflowHistory)
         {
@@ -705,23 +838,24 @@ public partial class RecordService
             {
                 StepOrder = stepOrder,
                 StepName = stepName,
-                Action = approve ? "APPROVE" : "REJECT",
+                Action = historyAction,
                 Actor = actor,
                 ActorRole = actorRole,
-                Note = reason,
+                Note = historyNote,
                 At = DateTime.UtcNow
             }
         };
 
-        var isFinalApproval = approve && nextStep == null;
-        var nextStatus = !approve ? "REJECTED" : (nextStep != null ? "PENDING" : "APPROVED");
-        var nextStepOrder = !approve ? 0 : (nextStep != null ? nextStep.StepOrder : stepOrder);
-        var nextStepName = !approve ? null : (nextStep != null ? nextStep.Name : stepName);
-
         var field = table?.ApprovalField;
         if (!string.IsNullOrWhiteSpace(field) && rec.Data.ContainsKey(field))
         {
-            rec.Data[field] = !approve ? "TU_CHOI" : (nextStep != null ? "CHO_DUYET" : "DA_DUYET");
+            rec.Data[field] = nextStatus switch
+            {
+                "REJECTED" => "TU_CHOI",
+                "APPROVED" => "DA_DUYET",
+                "DRAFT" => "NHAP",
+                _ => "CHO_DUYET"
+            };
         }
         if (table?.FormRules.Count > 0)
             await new FormRuleService(_metadata, _compute).PrepareWriteAsync(rec.TableId, new(), rec.Data);
@@ -735,6 +869,7 @@ public partial class RecordService
                 current_step_order = @nso,
                 current_step_name = @nsn,
                 workflow_history = @wh::jsonb,
+                step_approvals = @sa::jsonb,
                 data = @data::jsonb,
                 version = COALESCE(version, 1) + 1,
                 updated_by = @actor,
@@ -748,10 +883,14 @@ public partial class RecordService
         up.Parameters.AddWithValue("st", nextStatus);
         up.Parameters.AddWithValue("isFinal", isFinalApproval);
         up.Parameters.AddWithValue("actor", actor);
-        up.Parameters.Add(new NpgsqlParameter("rsn", NpgsqlDbType.Text) { Value = approve || string.IsNullOrWhiteSpace(reason) ? DBNull.Value : reason.Trim() });
+        up.Parameters.Add(new NpgsqlParameter("rsn", NpgsqlDbType.Text)
+        {
+            Value = op == "REJECT" && !string.IsNullOrWhiteSpace(reason) ? reason.Trim() : DBNull.Value
+        });
         up.Parameters.AddWithValue("nso", nextStepOrder);
         up.Parameters.AddWithValue("nsn", (object?)nextStepName ?? DBNull.Value);
         up.Parameters.AddWithValue("wh", JsonSerializer.Serialize(history));
+        up.Parameters.AddWithValue("sa", JsonSerializer.Serialize(nextApprovals));
         up.Parameters.AddWithValue("data", JsonSerializer.Serialize(rec.Data));
         up.Parameters.AddWithValue("id", id);
         up.Parameters.AddWithValue("expectedStepOrder", rec.CurrentStepOrder);
@@ -768,15 +907,18 @@ public partial class RecordService
         }
 
         await WriteAuditAsync(conn, updated.AppId, updated.TableId, updated.Id,
-            approve ? "APPROVE" : "REJECT", actor, rec.Data, updated.Data,
-            !approve
-                ? $"Từ chối {updated.RecordKey ?? updated.Id} tại {stepName}: {reason ?? "Không nêu lý do"}"
-                : nextStep != null
-                    ? $"Đã duyệt bước {stepOrder} ({stepName}) → Chuyển tiếp bước {nextStep.StepOrder} ({nextStep.Name})"
-                    : $"Đã phê duyệt hoàn tất {updated.RecordKey ?? updated.Id}");
+            op, actor, rec.Data, updated.Data,
+            op switch
+            {
+                "REJECT" => $"Từ chối {updated.RecordKey ?? updated.Id} tại {stepName}: {reason ?? "Không nêu lý do"}",
+                "RETURN" => $"Trả lại hồ sơ {updated.RecordKey ?? updated.Id} từ {stepName} → {(nextStepName ?? "Nháp")}: {historyNote}",
+                _ when nextStatus == "PENDING" && nextStep == null => $"Ghi nhận phiếu đồng duyệt {updated.RecordKey ?? updated.Id} tại {stepName}",
+                _ when nextStep != null => $"Đã duyệt bước {stepOrder} ({stepName}) → Chuyển tiếp bước {nextStep.StepOrder} ({nextStep.Name})",
+                _ => $"Đã phê duyệt hoàn tất {updated.RecordKey ?? updated.Id}"
+            });
 
         var app = await _metadata.GetAppByCodeOrIdAsync(updated.AppId);
-        if (!approve)
+        if (op == "REJECT")
         {
             await _notifications.CreateAsync(
                 $"Bị từ chối ({app?.Code})",
@@ -788,6 +930,18 @@ public partial class RecordService
                 app != null ? $"/apps/{app.Code}" : "/",
                 actor);
             await _automations.ExecuteTriggersAsync("RECORD_REJECTED", updated);
+        }
+        else if (op == "RETURN")
+        {
+            await _notifications.CreateAsync(
+                $"Trả lại bước trước ({app?.Code})",
+                $"Hồ sơ '{updated.RecordKey ?? updated.Id}' được {actor} trả lại từ {stepName} → {nextStepName ?? "Nháp"}: {historyNote}.",
+                app?.Code,
+                updated.Id,
+                string.IsNullOrWhiteSpace(updated.CreatedBy) ? "*" : updated.CreatedBy,
+                "APPROVAL",
+                app != null ? $"/apps/{app.Code}" : "/",
+                actor);
         }
         else if (nextStep != null)
         {
@@ -802,7 +956,7 @@ public partial class RecordService
                 actor,
                 "HIGH");
         }
-        else
+        else if (isFinalApproval)
         {
             await _notifications.CreateAsync(
                 $"Đã phê duyệt ({app?.Code})",
@@ -880,6 +1034,7 @@ public partial class RecordService
                 current_step_order = 0,
                 current_step_name = NULL,
                 workflow_history = @wh::jsonb,
+                step_approvals = '[]'::jsonb,
                 data = @data::jsonb,
                 version = COALESCE(version, 1) + 1,
                 updated_by = @actor,
@@ -966,6 +1121,7 @@ public partial class RecordService
                 current_step_order = 0,
                 current_step_name = NULL,
                 workflow_history = @wh::jsonb,
+                step_approvals = '[]'::jsonb,
                 data = @data::jsonb,
                 version = COALESCE(version, 1) + 1,
                 updated_by = @actor,
@@ -1118,7 +1274,8 @@ public partial class RecordService
             SELECT r.id, r.record_key, r.app_id, ap.code, ap.name, ap.color,
                    r.table_id, t.display_name, r.created_by, r.created_at,
                    r.data::text, COALESCE(t.approver_roles::text, '["ADMIN","HR_MANAGER","ASSET_LEAD"]'),
-                   r.workflow_id, COALESCE(r.current_step_order, 1), r.current_step_name
+                   r.workflow_id, COALESCE(r.current_step_order, 1), r.current_step_name,
+                   COALESCE(r.step_approvals::text, '[]')
             FROM app_records r
             JOIN sys_apps ap ON ap.id = r.app_id
             JOIN sys_tables t ON t.id = r.table_id
@@ -1129,26 +1286,50 @@ public partial class RecordService
 
         var list = new List<PendingApprovalItemDto>();
         await using var cmd = new NpgsqlCommand(sql, conn);
-        await using var r = await cmd.ExecuteReaderAsync();
-        while (await r.ReadAsync())
+        var pendingRows = new List<(string Id, string? Key, string AppId, string AppCode, string AppName, string AppColor, string TblId, string TblDisplay, string CreatedBy, DateTime CreatedAt, string DataJson, List<string> FallbackRoles, string? WfId, int StepOrder, string? StepName, List<WorkflowStepApprovalVoteDto> StepVotes)>();
+        await using (var r = await cmd.ExecuteReaderAsync())
         {
-            var appCode = r.GetString(3);
-            if (!AuthService.CanAccessApp(user, appCode)) continue;
+            while (await r.ReadAsync())
+            {
+                pendingRows.Add((
+                    r.GetString(0),
+                    r.IsDBNull(1) ? null : r.GetString(1),
+                    r.GetString(2),
+                    r.GetString(3),
+                    r.GetString(4),
+                    r.IsDBNull(5) ? "#1a73e8" : r.GetString(5),
+                    r.GetString(6),
+                    r.GetString(7),
+                    r.IsDBNull(8) ? "system" : r.GetString(8),
+                    r.GetDateTime(9),
+                    r.GetString(10),
+                    JsonSerializer.Deserialize<List<string>>(r.GetString(11)) ?? new(),
+                    r.IsDBNull(12) ? null : r.GetString(12),
+                    r.GetInt32(13),
+                    r.IsDBNull(14) ? null : r.GetString(14),
+                    JsonSerializer.Deserialize<List<WorkflowStepApprovalVoteDto>>(r.GetString(15),
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new()
+                ));
+            }
+        }
 
-            var tblId = r.GetString(6);
-            var wfId = r.IsDBNull(12) ? null : r.GetString(12);
-            var stepOrder = r.GetInt32(13);
-            var stepName = r.IsDBNull(14) ? null : r.GetString(14);
-            var wf = !string.IsNullOrWhiteSpace(wfId)
-                ? allWfs.FirstOrDefault(w => w.Id == wfId)
-                : allWfs.FirstOrDefault(w => w.TableId == tblId && w.IsActive);
-            var activeStep = wf?.Steps.FirstOrDefault(s => s.StepOrder == stepOrder) ?? wf?.Steps.FirstOrDefault();
+        foreach (var row in pendingRows)
+        {
+            if (!AuthService.CanAccessApp(user, row.AppCode)) continue;
 
-            var fallbackRoles = JsonSerializer.Deserialize<List<string>>(r.GetString(11)) ?? new();
-            var canApprove = CanUserApproveStep(user, appCode, activeStep, fallbackRoles);
+            var wf = !string.IsNullOrWhiteSpace(row.WfId)
+                ? allWfs.FirstOrDefault(w => w.Id == row.WfId)
+                : allWfs.FirstOrDefault(w => w.TableId == row.TblId && w.IsActive);
+            var activeStep = wf?.Steps.FirstOrDefault(s => s.StepOrder == row.StepOrder) ?? wf?.Steps.FirstOrDefault();
+
+            if (row.StepVotes.Any(v => v.StepOrder == row.StepOrder && v.Actor.Equals(user.Username, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            var (canApprove, _) = await ResolveApprovalAuthorizationAsync(
+                conn, user, row.AppId, row.AppCode, activeStep, row.FallbackRoles);
             if (!canApprove) continue;
 
-            var dict = ParseJsonDict(r.GetString(10));
+            var dict = ParseJsonDict(row.DataJson);
             var previewParts = dict.Values
                 .Where(v => v != null && v is not System.Collections.IEnumerable or string)
                 .Select(v => v!.ToString())
@@ -1157,23 +1338,105 @@ public partial class RecordService
 
             list.Add(new PendingApprovalItemDto
             {
-                RecordId = r.GetString(0),
-                RecordKey = r.IsDBNull(1) ? null : r.GetString(1),
-                AppId = r.GetString(2),
-                AppCode = appCode,
-                AppName = r.GetString(4),
-                AppColor = r.IsDBNull(5) ? "#1a73e8" : r.GetString(5),
-                TableId = tblId,
-                TableDisplayName = r.GetString(7),
-                CreatedBy = r.IsDBNull(8) ? "system" : r.GetString(8),
-                CreatedAt = r.GetDateTime(9),
+                RecordId = row.Id,
+                RecordKey = row.Key,
+                AppId = row.AppId,
+                AppCode = row.AppCode,
+                AppName = row.AppName,
+                AppColor = row.AppColor,
+                TableId = row.TblId,
+                TableDisplayName = row.TblDisplay,
+                CreatedBy = row.CreatedBy,
+                CreatedAt = row.CreatedAt,
                 SummaryText = string.Join(" • ", previewParts),
-                CurrentStepOrder = activeStep?.StepOrder ?? stepOrder,
-                CurrentStepName = stepName ?? activeStep?.Name ?? "Phê duyệt",
+                CurrentStepOrder = activeStep?.StepOrder ?? row.StepOrder,
+                CurrentStepName = row.StepName ?? activeStep?.Name ?? "Phê duyệt",
                 TotalSteps = wf?.Steps.Count > 0 ? wf.Steps.Count : 1
             });
         }
         return list;
+    }
+
+    private async Task<(bool Authorized, string? DelegatedFrom)> ResolveApprovalAuthorizationAsync(
+        NpgsqlConnection conn,
+        SysUserDto user,
+        string appId,
+        string? appCode,
+        WorkflowStepDto? activeStep,
+        List<string> fallbackRoles)
+    {
+        if (CanUserApproveStep(user, appCode, activeStep, fallbackRoles))
+            return (true, null);
+
+        var delegators = await _workflows.GetActiveDelegatorsForDelegateAsync(conn, user.Username, appId);
+        foreach (var delegatorUsername in delegators)
+        {
+            var delegatorDto = await LoadLiteUserByUsernameAsync(conn, delegatorUsername);
+            if (delegatorDto != null && CanUserApproveStep(delegatorDto, appCode, activeStep, fallbackRoles))
+                return (true, delegatorDto.Username);
+        }
+        return (false, null);
+    }
+
+    private static async Task<SysUserDto?> LoadLiteUserByUsernameAsync(NpgsqlConnection conn, string username)
+    {
+        await using var cmd = new NpgsqlCommand("""
+            SELECT u.id, u.username, u.role_code, COALESCE(u.role_codes::text, '[]'),
+                   COALESCE(u.allowed_apps::text, '[]'), COALESCE(r.all_apps_access, FALSE)
+            FROM sys_users u
+            LEFT JOIN sys_roles r ON LOWER(r.code) = LOWER(u.role_code)
+            WHERE u.is_active = TRUE AND LOWER(u.username) = LOWER(@u)
+            LIMIT 1
+            """, conn);
+        cmd.Parameters.AddWithValue("u", username);
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        var roleCode = rd.GetString(2);
+        var roleCodes = JsonSerializer.Deserialize<List<string>>(rd.GetString(3)) ?? new();
+        if (!roleCodes.Contains(roleCode, StringComparer.OrdinalIgnoreCase)) roleCodes.Add(roleCode);
+        var allApps = rd.GetBoolean(5);
+        return new SysUserDto
+        {
+            Id = rd.GetString(0),
+            Username = rd.GetString(1),
+            RoleCode = roleCode,
+            RoleCodes = roleCodes,
+            AllowedApps = allApps ? new() { "*" } : (JsonSerializer.Deserialize<List<string>>(rd.GetString(4)) ?? new()),
+            IsAdmin = roleCodes.Any(x => x.Equals("ADMIN", StringComparison.OrdinalIgnoreCase)),
+            IsActive = true
+        };
+    }
+
+    private static async Task<int> CountEligibleApproversAsync(
+        NpgsqlConnection conn,
+        WorkflowStepDto? step,
+        List<string> fallbackRoles)
+    {
+        if (step == null || !WorkflowService.NormalizeApprovalMode(step.ApprovalMode).Equals("ALL", StringComparison.Ordinal))
+            return 1;
+
+        var usersSet = new HashSet<string>(step.ApproverUsers ?? new(), StringComparer.OrdinalIgnoreCase);
+        var rolesSet = new HashSet<string>(
+            (step.ApproverRoles?.Count > 0 ? step.ApproverRoles : fallbackRoles),
+            StringComparer.OrdinalIgnoreCase);
+
+        if (rolesSet.Count > 0)
+        {
+            await using var cmd = new NpgsqlCommand("SELECT username, role_code, COALESCE(role_codes::text, '[]') FROM sys_users WHERE is_active = TRUE", conn);
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                var uname = rd.GetString(0);
+                var rc = rd.GetString(1);
+                var rcs = JsonSerializer.Deserialize<List<string>>(rd.GetString(2)) ?? new();
+                if (!rcs.Contains(rc, StringComparer.OrdinalIgnoreCase)) rcs.Add(rc);
+                if (rcs.Any(x => rolesSet.Contains(x)))
+                {
+                    usersSet.Add(uname);
+                }
+            }
+        }
+        return Math.Max(1, usersSet.Count);
     }
 
     private static bool CanUserApproveStep(
@@ -1697,6 +1960,269 @@ public partial class RecordService
         return list;
     }
 
+    /// <summary>
+    /// Selectively restores chosen field values from a historical audit log snapshot
+    /// through the unified write pipeline with optimistic locking (FUN-11).
+    /// </summary>
+    public async Task<(AppRecordDto? Record, string? Error)> RestoreRecordFieldsAsync(
+        string recordId,
+        string auditId,
+        IReadOnlyList<string> allowedFields,
+        int? expectedVersion,
+        string actor,
+        bool isAdmin,
+        IReadOnlySet<string> serverManagedFields)
+    {
+        if (string.IsNullOrWhiteSpace(auditId) || allowedFields.Count == 0)
+            return (null, "Thiếu thông tin phiên bản lịch sử hoặc danh sách trường cần khôi phục.");
+
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+
+        var current = await GetRecordByIdInternalAsync(conn, recordId);
+        if (current == null) return (null, "Không tìm thấy bản ghi.");
+        if (!isAdmin && current.ApprovalStatus is "PENDING" or "APPROVED" or "CANCELLED")
+        {
+            throw new RecordLockedException("Bản ghi đang khóa phê duyệt, không thể khôi phục trường dữ liệu.");
+        }
+
+        Dictionary<string, object?>? sourceSnapshot = null;
+        await using (var audCmd = new NpgsqlCommand("""
+            SELECT old_data::text, new_data::text
+            FROM app_audit_logs
+            WHERE id = @aid AND record_id = @rid
+            LIMIT 1
+            """, conn))
+        {
+            audCmd.Parameters.AddWithValue("aid", auditId);
+            audCmd.Parameters.AddWithValue("rid", recordId);
+            await using var ar = await audCmd.ExecuteReaderAsync();
+            if (!await ar.ReadAsync())
+                return (null, "Không tìm thấy mốc lịch sử chỉnh sửa được yêu cầu.");
+
+            if (!ar.IsDBNull(0)) sourceSnapshot = ParseJsonDict(ar.GetString(0));
+            else if (!ar.IsDBNull(1)) sourceSnapshot = ParseJsonDict(ar.GetString(1));
+        }
+
+        if (sourceSnapshot == null)
+            return (null, "Mốc lịch sử này không chứa snapshot dữ liệu để khôi phục.");
+
+        var nextData = new Dictionary<string, object?>(current.Data);
+        var restoredNames = new List<string>();
+        foreach (var field in allowedFields)
+        {
+            if (sourceSnapshot.TryGetValue(field, out var oldVal))
+                nextData[field] = oldVal;
+            else
+                nextData.Remove(field);
+            restoredNames.Add(field);
+        }
+
+        var req = new UpsertRecordRequest
+        {
+            Id = current.Id,
+            AppId = current.AppId,
+            ModuleId = current.ModuleId,
+            TableId = current.TableId,
+            RecordKey = current.RecordKey,
+            Data = nextData,
+            ExpectedVersion = expectedVersion ?? current.Version
+        };
+
+        var (saved, _) = await _writer.UpsertCoreAsync(
+            req,
+            actor,
+            isAdmin,
+            serverManagedFields,
+            $"Khôi phục {restoredNames.Count} trường từ lịch sử ({string.Join(", ", restoredNames)})");
+        return (saved, null);
+    }
+
+    /// <summary>
+    /// Searches Apps, RBAC/RLS-filtered Records, accessible Chat messages, and Attachments (FUN-13).
+    /// </summary>
+    public async Task<GlobalSearchResultDto> GlobalSearchAsync(SysUserDto user, string query, int limitPerKind = 6)
+    {
+        var q = query.Trim();
+        var result = new GlobalSearchResultDto { Query = q };
+        if (q.Length < 2) return result;
+
+        var lim = Math.Clamp(limitPerKind, 1, 15);
+        var isAdmin = AuthService.IsAdminUser(user);
+        var apps = await _metadata.GetAppsAsync();
+        var accessibleApps = apps
+            .Where(a => a.IsActive && AuthService.CanAccessApp(user, a.Code))
+            .ToList();
+        var appById = accessibleApps.ToDictionary(a => a.Id, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var app in accessibleApps)
+        {
+            if (app.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                app.Code.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                (app.Description?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
+            {
+                result.Apps.Add(new GlobalSearchHitDto
+                {
+                    Kind = "APP",
+                    Id = app.Id,
+                    Title = $"{app.Name} ({app.Code})",
+                    Subtitle = app.Department,
+                    Url = $"/apps/{app.Code}",
+                    Badge = app.Code
+                });
+                if (result.Apps.Count >= lim) break;
+            }
+        }
+
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+
+        // 1. Accessible records search with per-table permission and owner scope enforcement
+        var accessibleAppIds = accessibleApps.Select(a => a.Id).ToArray();
+        if (accessibleAppIds.Length > 0)
+        {
+            var tables = await _metadata.GetTablesAsync(null, null);
+            var tableMap = tables.ToDictionary(t => t.Id, StringComparer.OrdinalIgnoreCase);
+            var colCache = new Dictionary<string, List<SysColumnDto>>(StringComparer.OrdinalIgnoreCase);
+            var userRoles = user.RoleCodes.Count > 0 ? user.RoleCodes : new List<string> { user.RoleCode };
+
+            await using var rCmd = new NpgsqlCommand("""
+                SELECT id, app_id, table_id, record_key, data::text, COALESCE(approval_status, 'DRAFT'),
+                       created_by, updated_at
+                FROM app_records
+                WHERE deleted_at IS NULL
+                  AND app_id = ANY(@apps)
+                  AND (LOWER(COALESCE(record_key, '')) LIKE '%' || LOWER(@q) || '%'
+                       OR LOWER(data::text) LIKE '%' || LOWER(@q) || '%')
+                ORDER BY updated_at DESC
+                LIMIT 60
+                """, conn);
+            rCmd.Parameters.AddWithValue("apps", accessibleAppIds);
+            rCmd.Parameters.AddWithValue("q", q);
+            await using var rr = await rCmd.ExecuteReaderAsync();
+            var candidates = new List<(string Id, string AppId, string TableId, string? Key, string DataJson, string Status, string CreatedBy, DateTime UpdatedAt)>();
+            while (await rr.ReadAsync())
+            {
+                candidates.Add((rr.GetString(0), rr.GetString(1), rr.GetString(2),
+                    rr.IsDBNull(3) ? null : rr.GetString(3), rr.GetString(4), rr.GetString(5),
+                    rr.IsDBNull(6) ? "" : rr.GetString(6), rr.GetDateTime(7)));
+            }
+            await rr.CloseAsync();
+
+            foreach (var cand in candidates)
+            {
+                if (!appById.TryGetValue(cand.AppId, out var app)) continue;
+                if (!AuthService.CanAccessTable(user, app.Code, cand.TableId, "view")) continue;
+
+                tableMap.TryGetValue(cand.TableId, out var tbl);
+                var rowScope = AuthService.ResolveRowScope(user, app.Code, cand.TableId, tbl?.RowScope, false);
+                if (rowScope != "ALL" && !await IsRecordOwnedByUserAsync(cand.Id, user, rowScope)) continue;
+
+                if (!colCache.TryGetValue(cand.TableId, out var cols))
+                    cols = colCache[cand.TableId] = await _metadata.GetColumnsAsync(cand.TableId);
+
+                var data = ParseJsonDict(cand.DataJson);
+                if (!isAdmin)
+                {
+                    foreach (var hc in cols.Where(c => c.HiddenForRoles.Any(hr => userRoles.Contains(hr, StringComparer.OrdinalIgnoreCase))))
+                        data.Remove(hc.ColumnCode);
+                }
+
+                // Re-verify query hits either recordKey or unmasked visible field values
+                var visibleHit = (cand.Key?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    data.Values.Any(v => v?.ToString()?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false);
+                if (!visibleHit) continue;
+
+                var preview = string.Join(" • ", data.Values
+                    .Where(v => v != null && v is not System.Collections.IEnumerable or string)
+                    .Select(v => v!.ToString())
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Take(3));
+
+                result.Records.Add(new GlobalSearchHitDto
+                {
+                    Kind = "RECORD",
+                    Id = cand.Id,
+                    Title = $"{cand.Key ?? cand.Id} — {tbl?.DisplayName ?? app.Code}",
+                    Subtitle = preview,
+                    Url = $"/apps/{app.Code}/records/{cand.Id}",
+                    Badge = app.Code,
+                    Timestamp = cand.UpdatedAt
+                });
+                if (result.Records.Count >= lim) break;
+            }
+        }
+
+        // 2. Chat messages in channels user participates in
+        await using (var cCmd = new NpgsqlCommand("""
+            SELECT m.id, c.id, c.name, m.sender_username, LEFT(m.content, 160), m.created_at
+            FROM chat_messages m
+            JOIN chat_channels c ON c.id = m.channel_id
+            LEFT JOIN chat_channel_members mem ON mem.channel_id = c.id AND LOWER(mem.username) = LOWER(@u)
+            WHERE m.deleted_at IS NULL
+              AND c.is_archived = FALSE
+              AND (c.channel_type = 'PUBLIC' OR mem.username IS NOT NULL)
+              AND LOWER(m.content) LIKE '%' || LOWER(@q) || '%'
+            ORDER BY m.created_at DESC
+            LIMIT @lim
+            """, conn))
+        {
+            cCmd.Parameters.AddWithValue("u", user.Username);
+            cCmd.Parameters.AddWithValue("q", q);
+            cCmd.Parameters.AddWithValue("lim", lim);
+            await using var cr = await cCmd.ExecuteReaderAsync();
+            while (await cr.ReadAsync())
+            {
+                result.Chats.Add(new GlobalSearchHitDto
+                {
+                    Kind = "CHAT",
+                    Id = cr.GetString(0),
+                    Title = $"#{cr.GetString(2)} — @{cr.GetString(3)}",
+                    Subtitle = cr.GetString(4),
+                    Url = $"/chat?channel={Uri.EscapeDataString(cr.GetString(1))}",
+                    Badge = "CHAT",
+                    Timestamp = cr.GetDateTime(5)
+                });
+            }
+        }
+
+        // 3. Attachments linked to accessible apps
+        await using (var aCmd = new NpgsqlCommand("""
+            SELECT a.id, a.file_name, COALESCE(ap.code, 'SYSTEM'), a.size_bytes, a.uploaded_by, a.created_at
+            FROM app_attachments a
+            LEFT JOIN sys_apps ap ON ap.id = a.app_id
+            WHERE COALESCE(a.is_deleted, FALSE) = FALSE
+              AND (@appsEmpty = FALSE AND (a.app_id IS NULL OR a.app_id = ANY(@apps)))
+              AND LOWER(a.file_name) LIKE '%' || LOWER(@q) || '%'
+            ORDER BY a.created_at DESC
+            LIMIT @lim
+            """, conn))
+        {
+            aCmd.Parameters.AddWithValue("appsEmpty", accessibleAppIds.Length == 0);
+            aCmd.Parameters.AddWithValue("apps", accessibleAppIds);
+            aCmd.Parameters.AddWithValue("q", q);
+            aCmd.Parameters.AddWithValue("lim", lim);
+            await using var ar = await aCmd.ExecuteReaderAsync();
+            while (await ar.ReadAsync())
+            {
+                var attId = ar.GetString(0);
+                var szKb = Math.Max(1, ar.GetInt64(3) / 1024);
+                result.Attachments.Add(new GlobalSearchHitDto
+                {
+                    Kind = "ATTACHMENT",
+                    Id = attId,
+                    Title = ar.GetString(1),
+                    Subtitle = $"{szKb} KB • Tải lên bởi @{ar.GetString(4)}",
+                    Url = $"/api/attachments/{attId}",
+                    Badge = ar.GetString(2),
+                    Timestamp = ar.GetDateTime(5)
+                });
+            }
+        }
+
+        return result;
+    }
+
     public async Task<List<AppAuditLogDto>> QueryGlobalAuditLogsAsync(
         string? appId,
         string? action,
@@ -1883,7 +2409,7 @@ public partial class RecordService
                 AppId = r.GetString(1),
                 TableId = r.GetString(2),
                 Name = r.GetString(3),
-                Filters = JsonSerializer.Deserialize<Dictionary<string, string>>(r.GetString(4)) ?? new(),
+                Filters = JsonDocument.Parse(string.IsNullOrWhiteSpace(r.GetString(4)) ? "{}" : r.GetString(4)).RootElement,
                 SortField = r.IsDBNull(5) ? null : r.GetString(5),
                 SortDir = r.IsDBNull(6) ? "DESC" : r.GetString(6),
                 IsShared = r.GetBoolean(7),
@@ -1912,7 +2438,10 @@ public partial class RecordService
         cmd.Parameters.AddWithValue("app", req.AppId);
         cmd.Parameters.AddWithValue("tbl", req.TableId);
         cmd.Parameters.AddWithValue("name", req.Name.Trim());
-        cmd.Parameters.AddWithValue("flt", JsonSerializer.Serialize(req.Filters ?? new()));
+        var fltJson = req.Filters.HasValue && req.Filters.Value.ValueKind != JsonValueKind.Undefined && req.Filters.Value.ValueKind != JsonValueKind.Null
+            ? req.Filters.Value.GetRawText()
+            : "{}";
+        cmd.Parameters.AddWithValue("flt", fltJson);
         cmd.Parameters.AddWithValue("sf", string.IsNullOrWhiteSpace(req.SortField) ? DBNull.Value : req.SortField.Trim());
         cmd.Parameters.AddWithValue("sd", string.Equals(req.SortDir, "ASC", StringComparison.OrdinalIgnoreCase) ? "ASC" : "DESC");
         cmd.Parameters.AddWithValue("sh", req.IsShared);
@@ -2049,7 +2578,11 @@ public partial class RecordService
             WorkflowSnapshot = r.FieldCount > 23 && !r.IsDBNull(23)
                 ? JsonSerializer.Deserialize<List<WorkflowStepDto>>(r.GetString(23),
                     new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-                : null
+                : null,
+            StepApprovals = r.FieldCount > 24 && !r.IsDBNull(24)
+                ? (JsonSerializer.Deserialize<List<WorkflowStepApprovalVoteDto>>(r.GetString(24),
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new())
+                : new()
         };
     }
 
@@ -2185,6 +2718,50 @@ public partial class RecordService
         cmd.Parameters.AddWithValue("col", columnCode);
         cmd.Parameters.AddWithValue("scope", scopeKey);
         cmd.Parameters.AddWithValue("val", minValue);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public async Task<(int Status, string BodyJson)?> TryGetIdempotentResultAsync(string idempotencyKey, string actor)
+    {
+        if (string.IsNullOrWhiteSpace(idempotencyKey)) return null;
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("""
+            SELECT response_status, response_body::text
+            FROM app_idempotency_keys
+            WHERE idempotency_key = @key AND LOWER(actor) = LOWER(@actor)
+            LIMIT 1
+            """, conn);
+        cmd.Parameters.AddWithValue("key", idempotencyKey.Trim());
+        cmd.Parameters.AddWithValue("actor", actor);
+        await using var r = await cmd.ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return null;
+        return (r.GetInt32(0), r.GetString(1));
+    }
+
+    public async Task SaveIdempotentResultAsync(
+        string idempotencyKey,
+        string actor,
+        string method,
+        string path,
+        int status,
+        string bodyJson)
+    {
+        if (string.IsNullOrWhiteSpace(idempotencyKey) || string.IsNullOrWhiteSpace(bodyJson)) return;
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("""
+            INSERT INTO app_idempotency_keys (idempotency_key, actor, method, path, response_status, response_body)
+            VALUES (@key, @actor, @method, @path, @status, @body::jsonb)
+            ON CONFLICT (idempotency_key) DO NOTHING;
+            DELETE FROM app_idempotency_keys WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '7 days';
+            """, conn);
+        cmd.Parameters.AddWithValue("key", idempotencyKey.Trim());
+        cmd.Parameters.AddWithValue("actor", actor);
+        cmd.Parameters.AddWithValue("method", method);
+        cmd.Parameters.AddWithValue("path", path.Length > 255 ? path[..255] : path);
+        cmd.Parameters.AddWithValue("status", status);
+        cmd.Parameters.AddWithValue("body", bodyJson);
         await cmd.ExecuteNonQueryAsync();
     }
 }

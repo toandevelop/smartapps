@@ -31,6 +31,39 @@ public sealed class VietnamIntegrationsPostgresTests : IClassFixture<PriorityPos
         }
     }
 
+    [Fact]
+    public void BuildWriteBackPatch_MapsConfiguredOutputFieldsSafely()
+    {
+        var mapping = new Dictionary<string, string>
+        {
+            ["writeBackRefField"] = "so_hoa_don",
+            ["writeBackLookupCodeField"] = "ma_tra_cuu",
+            ["writeBackUrlField"] = "link_qr",
+            ["writeBackStatusField"] = "trang_thai_hd"
+        };
+        var okResult = new PluginExecutionResult
+        {
+            Success = true,
+            ProviderCode = "misa-meinvoice",
+            Operation = "issue_einvoice",
+            Data = new()
+            {
+                ["invoiceNo"] = "000123",
+                ["lookupCode"] = "CQT-XYZ",
+                ["cqtStatus"] = "ISSUED_SANDBOX"
+            }
+        };
+
+        var patch = VietnamIntegrationService.BuildWriteBackPatch(mapping, okResult);
+        Assert.Equal("000123", patch["so_hoa_don"]);
+        Assert.Equal("CQT-XYZ", patch["ma_tra_cuu"]);
+        Assert.Equal("ISSUED_SANDBOX", patch["trang_thai_hd"]);
+        Assert.False(patch.ContainsKey("link_qr"));
+
+        var failedPatch = VietnamIntegrationService.BuildWriteBackPatch(mapping, new PluginExecutionResult { Success = false });
+        Assert.Empty(failedPatch);
+    }
+
     [PostgresFact]
     public async Task VietnamPlugins_ExecuteEInvoiceSignSmsVietQrAndVerifyVnpayIpn()
     {
@@ -111,6 +144,24 @@ public sealed class VietnamIntegrationsPostgresTests : IClassFixture<PriorityPos
         var signRes = await vietnam.ExecutePluginAsync("vnpt-smartca", "request_sign", new() { ["documentId"] = $"HD-{suffix}" });
         Assert.True(signRes.Success);
         Assert.Equal("PENDING_USER_CONFIRM", signRes.Data["signStatus"]);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            vietnam.ExecutePluginAsync("vnpt-smartca", "complete_local_sign", new()
+            {
+                ["documentHash"] = signRes.Data["documentHash"]!,
+                ["signatureBase64"] = "not!valid!base64"
+            }));
+
+        var localSigned = await vietnam.ExecutePluginAsync("vnpt-smartca", "complete_local_sign", new()
+        {
+            ["signTransactionId"] = signRes.Data["signTransactionId"]!,
+            ["documentHash"] = signRes.Data["documentHash"]!,
+            ["signatureBase64"] = Convert.ToBase64String(Encoding.UTF8.GetBytes("sig-bytes")),
+            ["certificateSubject"] = "CONG TY SMARTAPPS",
+            ["certificateSerial"] = $"SER-{suffix}"
+        });
+        Assert.True(localSigned.Success);
+        Assert.Equal("SIGNED_LOCAL_TOKEN", localSigned.Data["signStatus"]);
 
         // 2) Automation RUN_PLUGIN sends Viettel SMS on RECORD_CREATED
         await automations.UpsertAutomationAsync(new UpsertAutomationRequest

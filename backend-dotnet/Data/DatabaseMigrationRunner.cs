@@ -201,6 +201,70 @@ public static class DatabaseMigrationRunner
             """),
         new("0010_column_quick_create", "Allow inline quick-create for category-linked columns", """
             ALTER TABLE sys_columns ADD COLUMN IF NOT EXISTS allow_quick_create BOOLEAN NOT NULL DEFAULT FALSE;
+            """),
+        new("0011_app_records_approval_idx", "Index approval_status on active app_records", """
+            CREATE INDEX IF NOT EXISTS idx_app_records_approval ON app_records(table_id, approval_status) WHERE deleted_at IS NULL;
+            """),
+        new("0012_phase2_enterprise_hardening", "DB-backed SSO states, business holidays, workflow delegations, parallel approvals, and public form limits", """
+            CREATE TABLE IF NOT EXISTS sys_sso_states (
+                state VARCHAR(128) PRIMARY KEY,
+                provider_code VARCHAR(64) NOT NULL,
+                redirect_uri TEXT NOT NULL,
+                code_verifier TEXT NOT NULL,
+                nonce VARCHAR(128) NOT NULL,
+                return_url TEXT NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_sso_states_expires ON sys_sso_states(expires_at);
+
+            CREATE TABLE IF NOT EXISTS sys_business_holidays (
+                id VARCHAR(64) PRIMARY KEY,
+                holiday_date DATE NOT NULL UNIQUE,
+                name VARCHAR(255) NOT NULL,
+                is_recurring BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            INSERT INTO sys_business_holidays (id, holiday_date, name, is_recurring)
+            VALUES
+                ('hol_vn_0101', '2026-01-01', 'Tết Dương lịch', TRUE),
+                ('hol_vn_0430', '2026-04-30', 'Ngày Giải phóng miền Nam', TRUE),
+                ('hol_vn_0501', '2026-05-01', 'Ngày Quốc tế Lao động', TRUE),
+                ('hol_vn_0902', '2026-09-02', 'Ngày Quốc khánh', TRUE)
+            ON CONFLICT (holiday_date) DO NOTHING;
+
+            CREATE TABLE IF NOT EXISTS sys_workflow_delegations (
+                id VARCHAR(64) PRIMARY KEY,
+                delegator_username VARCHAR(64) NOT NULL,
+                delegate_username VARCHAR(64) NOT NULL,
+                app_id VARCHAR(64),
+                starts_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                reason TEXT,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_wf_delegations_delegate ON sys_workflow_delegations(LOWER(delegate_username), is_active, starts_at, expires_at);
+
+            ALTER TABLE app_records ADD COLUMN IF NOT EXISTS step_approvals JSONB NOT NULL DEFAULT '[]'::jsonb;
+            ALTER TABLE sys_tables ADD COLUMN IF NOT EXISTS public_form_expires_at TIMESTAMPTZ;
+            ALTER TABLE sys_tables ADD COLUMN IF NOT EXISTS public_form_max_submissions INT;
+            """),
+        new(
+            "0013",
+            "0013_phase3_ai_ecosystem",
+            """
+            CREATE TABLE IF NOT EXISTS app_idempotency_keys (
+                idempotency_key VARCHAR(128) PRIMARY KEY,
+                actor VARCHAR(64) NOT NULL,
+                method VARCHAR(16) NOT NULL DEFAULT 'POST',
+                path VARCHAR(255) NOT NULL DEFAULT '',
+                response_status INT NOT NULL DEFAULT 200,
+                response_body JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_app_idempotency_created ON app_idempotency_keys(created_at);
             """)
     ];
 

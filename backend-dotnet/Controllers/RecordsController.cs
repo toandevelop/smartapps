@@ -126,7 +126,9 @@ public class RecordsController : ControllerBase
                 ownerFilter = user.Username;
                 ownerEmail = user.Email;
                 ownerEmpCode = user.EmployeeCode;
-                ownerDepartment = string.IsNullOrWhiteSpace(user.Department) ? "__UNASSIGNED__" : user.Department;
+                ownerDepartment = string.IsNullOrWhiteSpace(user.Department)
+                    ? (string.IsNullOrWhiteSpace(user.OrgUnitId) ? "__UNASSIGNED__" : user.OrgUnitId)
+                    : user.Department;
             }
         }
 
@@ -221,6 +223,87 @@ public class RecordsController : ControllerBase
         return Ok(new { success = true, data = items });
     }
 
+    [HttpGet("global-search")]
+    public async Task<IActionResult> GlobalSearch([FromQuery] string q, [FromQuery] int limit = 6)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+        if (string.IsNullOrWhiteSpace(q) || q.Trim().Length < 2)
+            return Ok(new { success = true, data = new GlobalSearchResultDto { Query = q ?? string.Empty } });
+
+        var data = await _records.GlobalSearchAsync(user, q, limit);
+        return Ok(new { success = true, data });
+    }
+
+    [HttpPost("{id}/restore-fields")]
+    public async Task<IActionResult> RestoreRecordFields(string id, [FromBody] RestoreRecordFieldsRequest req)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+
+        var loc = await _records.GetRecordLocationAsync(id);
+        if (loc == null) return NotFound(new { success = false, message = "Không tìm thấy bản ghi." });
+        var appCode = await ResolveAppCodeAsync(loc.Value.AppId, loc.Value.TableId);
+        if (!AuthService.CanAccessTable(user, appCode, loc.Value.TableId, "edit"))
+            return StatusCode(403, new { success = false, message = "Bạn không có quyền chỉnh sửa bản ghi này." });
+
+        var tables = await _metadata.GetTablesAsync(null, null);
+        var tbl = tables.FirstOrDefault(t => t.Id == loc.Value.TableId);
+        var rowScope = AuthService.ResolveRowScope(user, appCode, loc.Value.TableId, tbl?.RowScope, false);
+        if (rowScope != "ALL" && !await _records.IsRecordOwnedByUserAsync(id, user, rowScope))
+            return StatusCode(403, new { success = false, message = "Bản ghi nằm ngoài phạm vi truy cập của bạn." });
+
+        var isAdmin = AuthService.IsAdminUser(user);
+        var cols = await _metadata.GetColumnsAsync(loc.Value.TableId);
+        var userRoles = user.RoleCodes.Count > 0 ? user.RoleCodes : new List<string> { user.RoleCode };
+        var serverManaged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allowedFields = new List<string>();
+
+        foreach (var col in cols)
+        {
+            if (col.DataType.Equals("AUTO_NUMBER", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrWhiteSpace(col.Formula))
+                continue;
+            if (!isAdmin && (
+                    col.HiddenForRoles.Any(hr => userRoles.Contains(hr, StringComparer.OrdinalIgnoreCase)) ||
+                    col.ReadOnlyForRoles.Any(rr => userRoles.Contains(rr, StringComparer.OrdinalIgnoreCase))))
+            {
+                serverManaged.Add(col.ColumnCode);
+                continue;
+            }
+            if ((req.Fields ?? new()).Any(f => f.Equals(col.ColumnCode, StringComparison.OrdinalIgnoreCase)))
+                allowedFields.Add(col.ColumnCode);
+        }
+
+        if (allowedFields.Count == 0)
+            return BadRequest(new { success = false, message = "Không có trường hợp lệ hoặc được phép khôi phục." });
+
+        try
+        {
+            var (updated, err) = await _records.RestoreRecordFieldsAsync(
+                id,
+                req.AuditId,
+                allowedFields,
+                req.ExpectedVersion,
+                user.Username,
+                isAdmin,
+                serverManaged);
+            if (err != null) return BadRequest(new { success = false, message = err });
+            return Ok(new { success = true, data = updated });
+        }
+        catch (RecordLockedException ex)
+        {
+            return StatusCode(423, new { success = false, message = ex.Message });
+        }
+        catch (RecordConflictException ex)
+        {
+            return Conflict(new { success = false, message = ex.Message });
+        }
+        catch (DuplicateIdentityKeyException ex)
+        {
+            return Conflict(new { success = false, message = ex.Message });
+        }
+    }
+
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)
     {
@@ -281,6 +364,176 @@ public class RecordsController : ControllerBase
 
         var (summary, engine) = await _ai.SummarizeRecordAsync(rec, tbl?.DisplayName ?? rec.TableId, cols, user.Username);
         return Ok(new { success = true, data = new { summary, engine } });
+    }
+
+    [HttpPost("ai-import-map")]
+    public async Task<IActionResult> AiImportMap([FromBody] AiImportMapRequest req)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+        if (string.IsNullOrWhiteSpace(req.TableId) || req.Headers.Count == 0)
+            return BadRequest(new { success = false, message = "TableId và danh sách tiêu đề cột là bắt buộc." });
+
+        var appCode = await ResolveAppCodeAsync(null, req.TableId);
+        if (!AuthService.CanAccessTable(user, appCode, req.TableId, "create")
+            && !AuthService.CanAccessTable(user, appCode, req.TableId, "edit"))
+            return StatusCode(403, new { success = false, message = "Không có quyền nhập dữ liệu vào bảng này." });
+
+        var cols = await FilterVisibleColumnsAsync(req.TableId, user);
+        var result = await _ai.SuggestExcelMappingsAsync(req, cols, user.Username);
+        return Ok(new { success = true, data = result });
+    }
+
+    [HttpPost("ai-doc-ocr")]
+    public async Task<IActionResult> AiDocOcr([FromBody] AiDocOcrRequest req)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+        if (string.IsNullOrWhiteSpace(req.TableId))
+            return BadRequest(new { success = false, message = "TableId là bắt buộc." });
+        if (string.IsNullOrWhiteSpace(req.RawText) && string.IsNullOrWhiteSpace(req.ImageBase64))
+            return BadRequest(new { success = false, message = "Vui lòng cung cấp ảnh/chứng từ hoặc nội dung văn bản để trích xuất." });
+
+        var appCode = await ResolveAppCodeAsync(null, req.TableId);
+        if (!AuthService.CanAccessTable(user, appCode, req.TableId, "create")
+            && !AuthService.CanAccessTable(user, appCode, req.TableId, "edit"))
+            return StatusCode(403, new { success = false, message = "Không có quyền thao tác trên bảng này." });
+
+        var cols = await FilterVisibleColumnsAsync(req.TableId, user);
+        var result = await _ai.ExtractDocumentFieldsAsync(req, cols, user.Username);
+        return Ok(new { success = true, data = result });
+    }
+
+    [HttpPost("{id}/ai-triage")]
+    public async Task<IActionResult> AiWorkflowTriage(string id)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+
+        var rec = await _records.GetRecordByIdAsync(id);
+        if (rec == null) return NotFound(new { success = false, message = "Không tìm thấy bản ghi." });
+
+        var appCode = await ResolveAppCodeAsync(rec.AppId, rec.TableId);
+        if (appCode == null || !AuthService.CanAccessApp(user, appCode) || !AuthService.CanAccessTable(user, appCode, rec.TableId, "view"))
+            return StatusCode(403, new { success = false, message = "Không có quyền xem bản ghi này." });
+
+        var tbl = (await _metadata.GetTablesAsync(null, null)).FirstOrDefault(t => t.Id == rec.TableId);
+        var rowScope = AuthService.ResolveRowScope(user, appCode, rec.TableId, tbl?.RowScope, false);
+        if (rowScope != "ALL" && !await _records.IsRecordOwnedByUserAsync(id, user, rowScope))
+            return StatusCode(403, new { success = false });
+
+        var visibleCols = await FilterVisibleColumnsAsync(rec.TableId, user, rec);
+        var (ownerFilter, ownerEmail, ownerEmpCode, ownerDept) = BuildOwnerScopeParams(user, rowScope);
+        var (history, _) = await _records.QueryRecordsAsync(
+            null, null, rec.TableId, null, "ALL", 1, 50,
+            ownerFilter, null, "created_at", "DESC", ownerEmail, ownerEmpCode, ownerDept);
+
+        var triage = await _ai.TriageWorkflowRecordAsync(rec, tbl?.DisplayName ?? rec.TableId, visibleCols, history, user.Username);
+        return Ok(new { success = true, data = triage });
+    }
+
+    [HttpPost("ai-insights")]
+    public async Task<IActionResult> AiDashboardInsights([FromBody] AiDashboardInsightsRequest req)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+        if (string.IsNullOrWhiteSpace(req.TableId) || string.IsNullOrWhiteSpace(req.Question))
+            return BadRequest(new { success = false, message = "TableId và Question là bắt buộc." });
+
+        var appCode = await ResolveAppCodeAsync(null, req.TableId);
+        if (appCode == null || !AuthService.CanAccessApp(user, appCode) || !AuthService.CanAccessTable(user, appCode, req.TableId, "view"))
+            return StatusCode(403, new { success = false, message = "Không có quyền phân tích dữ liệu bảng này." });
+
+        var tbl = (await _metadata.GetTablesAsync(null, null)).FirstOrDefault(t => t.Id == req.TableId);
+        var rowScope = AuthService.ResolveRowScope(user, appCode, req.TableId, tbl?.RowScope, false);
+        var (ownerFilter, ownerEmail, ownerEmpCode, ownerDept) = BuildOwnerScopeParams(user, rowScope);
+        var visibleCols = await FilterVisibleColumnsAsync(req.TableId, user);
+
+        var (plan, planEngine) = await _ai.BuildNl2QueryPlanAsync(req.Question, visibleCols, user.Username);
+        string? filtersJson = plan.Conditions.Count > 0
+            ? System.Text.Json.JsonSerializer.Serialize(new
+            {
+                logic = plan.Logic,
+                conditions = plan.Conditions.Select(c => new { field = c.Field, op = c.Op, value = c.Value, value2 = c.Value2 })
+            })
+            : null;
+
+        var (items, total) = await _records.QueryRecordsAsync(
+            null, null, req.TableId, plan.Search, plan.Status, 1, 200,
+            ownerFilter, filtersJson, plan.SortField, plan.SortDir, ownerEmail, ownerEmpCode, ownerDept);
+
+        if (!AuthService.IsAdminUser(user))
+        {
+            var visibleSet = visibleCols.Select(c => c.ColumnCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in items)
+            {
+                foreach (var k in item.Data.Keys.Where(k => !visibleSet.Contains(k)).ToList())
+                    item.Data.Remove(k);
+            }
+        }
+
+        var result = await _ai.SummarizeDashboardQueryResultAsync(req.Question, plan, planEngine, visibleCols, items, total, user.Username);
+        return Ok(new { success = true, data = result });
+    }
+
+    private async Task<List<SysColumnDto>> FilterVisibleColumnsAsync(string tableId, SysUserDto user, AppRecordDto? stripRecord = null)
+    {
+        var cols = await _metadata.GetColumnsAsync(tableId);
+        if (AuthService.IsAdminUser(user)) return cols;
+        var userRoles = user.RoleCodes.Count > 0 ? user.RoleCodes : new List<string> { user.RoleCode };
+        var visible = new List<SysColumnDto>();
+        foreach (var c in cols)
+        {
+            if (c.HiddenForRoles.Any(hr => userRoles.Contains(hr, StringComparer.OrdinalIgnoreCase)))
+                stripRecord?.Data.Remove(c.ColumnCode);
+            else
+                visible.Add(c);
+        }
+        return visible;
+    }
+
+    private static (string? OwnerFilter, string? OwnerEmail, string? OwnerEmpCode, string? OwnerDepartment) BuildOwnerScopeParams(
+        SysUserDto user,
+        string rowScope)
+    {
+        if (rowScope == "OWNER_ONLY")
+            return (user.Username, user.Email, user.EmployeeCode, null);
+        if (rowScope == "DEPARTMENT")
+        {
+            var dept = string.IsNullOrWhiteSpace(user.Department)
+                ? (string.IsNullOrWhiteSpace(user.OrgUnitId) ? "__UNASSIGNED__" : user.OrgUnitId)
+                : user.Department;
+            return (user.Username, user.Email, user.EmployeeCode, dept);
+        }
+        return (null, null, null, null);
+    }
+
+    private async Task<IActionResult> ExecuteIdempotentAsync(string actor, Func<Task<IActionResult>> operation)
+    {
+        var idempKey = Request.Headers["Idempotency-Key"].FirstOrDefault()?.Trim();
+        if (!string.IsNullOrWhiteSpace(idempKey))
+        {
+            var cached = await _records.TryGetIdempotentResultAsync(idempKey, actor);
+            if (cached != null)
+            {
+                return new ContentResult
+                {
+                    StatusCode = cached.Value.Status,
+                    Content = cached.Value.BodyJson,
+                    ContentType = "application/json"
+                };
+            }
+        }
+
+        var result = await operation();
+        if (!string.IsNullOrWhiteSpace(idempKey) && result is OkObjectResult ok && ok.Value != null)
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(
+                ok.Value,
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            await _records.SaveIdempotentResultAsync(idempKey, actor, Request.Method, Request.Path.Value ?? string.Empty, 200, json);
+        }
+        return result;
     }
 
     [HttpGet("{id}/relations")]
@@ -406,9 +659,12 @@ public class RecordsController : ControllerBase
 
         try
         {
-            var isAdmin = AuthService.IsAdminUser(user);
-            var (record, triggered) = await _records.UpsertRecordAsync(req, user.Username, isAdmin, serverManagedFields);
-            return Ok(new { success = true, data = record, triggeredAutomations = triggered });
+            return await ExecuteIdempotentAsync(user.Username, async () =>
+            {
+                var isAdmin = AuthService.IsAdminUser(user);
+                var (record, triggered) = await _records.UpsertRecordAsync(req, user.Username, isAdmin, serverManagedFields);
+                return Ok(new { success = true, data = record, triggeredAutomations = triggered });
+            });
         }
         catch (DuplicateIdentityKeyException ex)
         {
@@ -476,8 +732,11 @@ public class RecordsController : ControllerBase
 
         try
         {
-            var (record, triggered) = await _records.UpsertRecordWithRelationsAsync(req, user.Username, isAdmin, parentManaged);
-            return Ok(new { success = true, data = record, triggeredAutomations = triggered });
+            return await ExecuteIdempotentAsync(user.Username, async () =>
+            {
+                var (record, triggered) = await _records.UpsertRecordWithRelationsAsync(req, user.Username, isAdmin, parentManaged);
+                return Ok(new { success = true, data = record, triggeredAutomations = triggered });
+            });
         }
         catch (DuplicateIdentityKeyException ex)
         {
@@ -604,10 +863,13 @@ public class RecordsController : ControllerBase
 
         try
         {
-            var isAdmin = AuthService.IsAdminUser(user);
-            var (record, triggered) = await _records.PatchCellAsync(id, req, user.Username, isAdmin);
-            if (record == null) return NotFound(new { success = false, message = "Không tìm thấy bản ghi." });
-            return Ok(new { success = true, data = record, triggeredAutomations = triggered });
+            return await ExecuteIdempotentAsync(user.Username, async () =>
+            {
+                var isAdmin = AuthService.IsAdminUser(user);
+                var (record, triggered) = await _records.PatchCellAsync(id, req, user.Username, isAdmin);
+                if (record == null) return NotFound(new { success = false, message = "Không tìm thấy bản ghi." });
+                return Ok(new { success = true, data = record, triggeredAutomations = triggered });
+            });
         }
         catch (DuplicateIdentityKeyException ex)
         {
@@ -695,7 +957,7 @@ public class RecordsController : ControllerBase
 
         try
         {
-            var (updated, err) = await _records.ProcessApprovalAsync(id, user, req.Approve, req.Reason, req.ExpectedVersion, req.ExpectedStepOrder);
+            var (updated, err) = await _records.ProcessApprovalAsync(id, user, req.Approve, req.Reason, req.ExpectedVersion, req.ExpectedStepOrder, req.Action);
             if (err != null) return StatusCode(403, new { success = false, message = err });
             return Ok(new { success = true, data = updated });
         }

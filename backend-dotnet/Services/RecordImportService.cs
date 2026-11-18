@@ -278,7 +278,20 @@ public partial class RecordService
         // Commit always rebuilds the plan under a transaction and rechecks rights and validation.
         preview.Fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new {
             request.AppId, request.ModuleId, request.TableId, request.UpsertByIdentityKey, request.Rows, request.RowNumbers,
-            request.NumberFormat, request.DateFormat, User = user, Table = table, Columns = columns, Categories = categories,
+            request.NumberFormat, request.DateFormat,
+            User = new
+            {
+                user.Id,
+                user.Username,
+                Roles = roles.Order(StringComparer.Ordinal).ToArray(),
+                Admin = admin,
+                RowScope = rowScope,
+                CanEdit = AuthService.CanAccessTable(user, app.Code, table.Id, "edit"),
+                user.Department,
+                user.OrgUnitId,
+                user.EmployeeCode
+            },
+            Table = table, Columns = columns, Categories = categories,
             Targets = existing.Select(r => new { r.Id, r.UpdatedAt, r.ApprovalStatus, r.Data }), PreviewRows = preview.Rows
         })));
         return new ImportPlan(preview, writes, table, maxAutoNumbers);

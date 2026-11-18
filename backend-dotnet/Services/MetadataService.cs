@@ -79,10 +79,38 @@ public class MetadataService
         return await r.ReadAsync() ? ReadApp(r) : null;
     }
 
-    public async Task<AppRuntimeTreeDto?> GetAppRuntimeTreeAsync(string codeOrId)
+    public async Task<AppRuntimeTreeDto?> GetAppRuntimeTreeAsync(string codeOrId, bool usePublishedSnapshot = false)
     {
         var app = await GetAppByCodeOrIdAsync(codeOrId);
         if (app == null) return null;
+
+        if (usePublishedSnapshot)
+        {
+            var latestSnap = await GetLatestPublishedBlueprintAsync(app.Id);
+            if (latestSnap != null)
+            {
+                var liveTables = await GetTablesAsync(app.Id, null);
+                var countByTable = liveTables.ToDictionary(t => t.Id, t => t.RecordCount, StringComparer.Ordinal);
+                foreach (var mod in latestSnap.Modules)
+                {
+                    var modRecTotal = 0;
+                    foreach (var tbl in mod.Tables)
+                    {
+                        if (countByTable.TryGetValue(tbl.Table.Id, out var cnt))
+                        {
+                            tbl.Table.RecordCount = cnt;
+                            modRecTotal += cnt;
+                        }
+                    }
+                    mod.Module.RecordCount = modRecTotal;
+                }
+                return new AppRuntimeTreeDto
+                {
+                    App = app,
+                    Modules = latestSnap.Modules
+                };
+            }
+        }
 
         var modules = await GetModulesAsync(app.Id);
         var tables = await GetTablesAsync(app.Id, null);
@@ -100,6 +128,24 @@ public class MetadataService
             tree.Modules.Add(modNode);
         }
         return tree;
+    }
+
+    private async Task<AppBlueprintDto?> GetLatestPublishedBlueprintAsync(string appId)
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("""
+            SELECT snapshot::text
+            FROM sys_app_releases
+            WHERE app_id = @appId
+            ORDER BY version_number DESC
+            LIMIT 1
+            """, conn);
+        cmd.Parameters.AddWithValue("appId", appId);
+        var snapJson = await cmd.ExecuteScalarAsync() as string;
+        if (string.IsNullOrWhiteSpace(snapJson)) return null;
+        return JsonSerializer.Deserialize<AppBlueprintDto>(snapJson,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
     }
 
     public async Task<SysAppDto> UpsertAppAsync(UpsertAppRequest req)
@@ -163,7 +209,8 @@ public class MetadataService
                    (SELECT COUNT(*) FROM sys_tables t WHERE t.module_id = m.id AND t.is_active = TRUE) AS table_count,
                    (SELECT COUNT(*) FROM app_records r WHERE r.module_id = m.id) AS record_count
             FROM sys_modules m
-            WHERE (@appId IS NULL OR m.app_id = @appId)
+            WHERE COALESCE(m.is_active, TRUE) = TRUE
+              AND (@appId IS NULL OR m.app_id = @appId)
             ORDER BY m.order_index ASC, m.created_at ASC
             """;
 
@@ -249,7 +296,9 @@ public class MetadataService
                    (SELECT COUNT(*) FROM app_records r WHERE r.table_id = t.id AND r.deleted_at IS NULL) AS rec_count,
                    COALESCE(t.approval_enabled, FALSE), COALESCE(t.approval_field, 'trang_thai_duyet'),
                    COALESCE(t.approver_roles::text, '["ADMIN","HR_MANAGER","ASSET_LEAD"]'),
-                   COALESCE(t.public_form_enabled, FALSE)
+                   COALESCE(t.public_form_enabled, FALSE),
+                   t.public_form_expires_at,
+                   t.public_form_max_submissions
             FROM sys_tables t
             WHERE t.is_active = TRUE
               AND (@appId IS NULL OR t.app_id = @appId)
@@ -283,7 +332,9 @@ public class MetadataService
                 ApprovalEnabled = r.GetBoolean(13),
                 ApprovalField = r.IsDBNull(14) ? "trang_thai_duyet" : r.GetString(14),
                 ApproverRoles = JsonSerializer.Deserialize<List<string>>(r.GetString(15)) ?? new() { "ADMIN", "HR_MANAGER", "ASSET_LEAD" },
-                PublicFormEnabled = r.GetBoolean(16)
+                PublicFormEnabled = r.GetBoolean(16),
+                PublicFormExpiresAt = r.FieldCount > 17 && !r.IsDBNull(17) ? r.GetDateTime(17) : null,
+                PublicFormMaxSubmissions = r.FieldCount > 18 && !r.IsDBNull(18) ? r.GetInt32(18) : null
             });
         }
         return list;
@@ -303,8 +354,9 @@ public class MetadataService
 
         var sql = """
             INSERT INTO sys_tables (id, app_id, module_id, table_name, display_name, description, primary_view, row_scope,
-                approval_enabled, approval_field, approver_roles, public_form_enabled, order_index, is_active, ui_config, updated_at)
-            VALUES (@id, @appId, @modId, @tn, @dn, @desc, @pv, @rs, @ae, @af, @ar::jsonb, @pfe, @ord, @act, COALESCE(@ui::jsonb,'{}'::jsonb), CURRENT_TIMESTAMP)
+                approval_enabled, approval_field, approver_roles, public_form_enabled,
+                public_form_expires_at, public_form_max_submissions, order_index, is_active, ui_config, updated_at)
+            VALUES (@id, @appId, @modId, @tn, @dn, @desc, @pv, @rs, @ae, @af, @ar::jsonb, @pfe, @pfea, @pfms, @ord, @act, COALESCE(@ui::jsonb,'{}'::jsonb), CURRENT_TIMESTAMP)
             ON CONFLICT (id) DO UPDATE SET
                 table_name = EXCLUDED.table_name,
                 display_name = EXCLUDED.display_name,
@@ -315,6 +367,8 @@ public class MetadataService
                 approval_field = EXCLUDED.approval_field,
                 approver_roles = EXCLUDED.approver_roles,
                 public_form_enabled = EXCLUDED.public_form_enabled,
+                public_form_expires_at = EXCLUDED.public_form_expires_at,
+                public_form_max_submissions = EXCLUDED.public_form_max_submissions,
                 order_index = EXCLUDED.order_index,
                 is_active = EXCLUDED.is_active,
                 ui_config = CASE WHEN @ui IS NULL THEN sys_tables.ui_config ELSE sys_tables.ui_config || EXCLUDED.ui_config END,
@@ -334,6 +388,8 @@ public class MetadataService
         cmd.Parameters.AddWithValue("af", string.IsNullOrWhiteSpace(req.ApprovalField) ? "trang_thai_duyet" : req.ApprovalField.Trim());
         cmd.Parameters.AddWithValue("ar", JsonSerializer.Serialize(req.ApproverRoles?.Count > 0 ? req.ApproverRoles : new List<string> { "ADMIN", "HR_MANAGER", "ASSET_LEAD" }));
         cmd.Parameters.AddWithValue("pfe", req.PublicFormEnabled);
+        cmd.Parameters.AddWithValue("pfea", req.PublicFormExpiresAt.HasValue ? DateTime.SpecifyKind(req.PublicFormExpiresAt.Value, DateTimeKind.Utc) : DBNull.Value);
+        cmd.Parameters.AddWithValue("pfms", req.PublicFormMaxSubmissions.HasValue ? req.PublicFormMaxSubmissions.Value : DBNull.Value);
         cmd.Parameters.AddWithValue("ord", req.OrderIndex);
         cmd.Parameters.AddWithValue("act", req.IsActive);
         cmd.Parameters.Add(new NpgsqlParameter("ui", NpgsqlDbType.Jsonb) { Value = req.FormRules == null ? DBNull.Value : JsonSerializer.Serialize(new { formRules = req.FormRules }) });
@@ -423,14 +479,28 @@ public class MetadataService
 
     public async Task<SysColumnDto> UpsertColumnAsync(UpsertColumnRequest req)
     {
+        var colCodeNorm = req.ColumnCode.Trim().ToLowerInvariant().Replace(" ", "_");
+        var dtNorm = req.DataType.Trim().ToUpperInvariant();
+        var proposed = await GetColumnsAsync(req.TableId);
+        proposed.RemoveAll(c => (!string.IsNullOrWhiteSpace(req.Id) && c.Id == req.Id) ||
+                                c.ColumnCode.Equals(colCodeNorm, StringComparison.OrdinalIgnoreCase));
+        proposed.Add(new SysColumnDto
+        {
+            Id = req.Id ?? "new",
+            ColumnCode = colCodeNorm,
+            ColumnName = req.ColumnName.Trim(),
+            DataType = dtNorm,
+            ShowInForm = req.ShowInForm,
+            Formula = req.Formula,
+            DefaultValue = req.DefaultValue,
+            HiddenForRoles = req.HiddenForRoles ?? new()
+        });
+
+        DynamicComputeService.ValidateFormulaGraph(proposed);
+
         var tableRules = (await GetTablesAsync(null, null)).FirstOrDefault(t => t.Id == req.TableId)?.FormRules ?? new();
         if (tableRules.Count > 0)
         {
-            var proposed = await GetColumnsAsync(req.TableId);
-            proposed.RemoveAll(c => c.Id == req.Id);
-            proposed.Add(new SysColumnDto { Id = req.Id ?? "new", ColumnCode = req.ColumnCode.Trim().ToLowerInvariant().Replace(" ", "_"),
-                DataType = req.DataType.Trim().ToUpperInvariant(), ShowInForm = req.ShowInForm, Formula = req.Formula,
-                HiddenForRoles = req.HiddenForRoles ?? new() });
             FormRuleService.ValidateDefinition(tableRules, proposed);
         }
         await using var conn = new NpgsqlConnection(_connStr);
@@ -473,6 +543,7 @@ public class MetadataService
                 hidden_for_roles = EXCLUDED.hidden_for_roles,
                 read_only_for_roles = EXCLUDED.read_only_for_roles,
                 order_index = EXCLUDED.order_index,
+                is_active = TRUE,
                 updated_at = CURRENT_TIMESTAMP
             """;
 
@@ -1292,6 +1363,106 @@ public class MetadataService
         return list;
     }
 
+    public static AppSchemaDiffDto ComputeBlueprintSchemaDiff(
+        AppRuntimeTreeDto draftTree,
+        AppBlueprintDto? publishedSnapshot,
+        int? publishedVersion)
+    {
+        var diff = new AppSchemaDiffDto
+        {
+            HasPublishedRelease = publishedSnapshot != null,
+            PublishedVersion = publishedVersion,
+            PublishStatus = draftTree.App.PublishStatus ?? "DRAFT"
+        };
+
+        var draftTables = draftTree.Modules
+            .SelectMany(m => m.Tables)
+            .ToDictionary(t => t.Table.Id, t => t, StringComparer.Ordinal);
+        var pubTables = (publishedSnapshot?.Modules ?? new List<ModuleWithTablesDto>())
+            .SelectMany(m => m.Tables)
+            .ToDictionary(t => t.Table.Id, t => t, StringComparer.Ordinal);
+
+        foreach (var (tid, tNode) in draftTables)
+        {
+            if (!pubTables.ContainsKey(tid))
+            {
+                diff.AddedTables.Add($"{tNode.Table.DisplayName} ({tNode.Table.TableName})");
+                foreach (var c in tNode.Columns)
+                    diff.AddedColumns.Add($"{tNode.Table.DisplayName}: {c.ColumnName} ({c.ColumnCode})");
+                continue;
+            }
+
+            var prevNode = pubTables[tid];
+            var prevCols = prevNode.Columns.ToDictionary(c => c.ColumnCode, c => c, StringComparer.OrdinalIgnoreCase);
+            var currCols = tNode.Columns.ToDictionary(c => c.ColumnCode, c => c, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (code, col) in currCols)
+            {
+                if (!prevCols.TryGetValue(code, out var oldCol))
+                {
+                    diff.AddedColumns.Add($"{tNode.Table.DisplayName}: {col.ColumnName} ({col.ColumnCode})");
+                }
+                else
+                {
+                    var changes = new List<string>();
+                    if (!string.Equals(oldCol.DataType, col.DataType, StringComparison.OrdinalIgnoreCase))
+                        changes.Add($"kiểu {oldCol.DataType} → {col.DataType}");
+                    if (oldCol.IsRequired != col.IsRequired)
+                        changes.Add(col.IsRequired ? "bắt buộc" : "không bắt buộc");
+                    if (!string.Equals(oldCol.Formula ?? "", col.Formula ?? "", StringComparison.Ordinal))
+                        changes.Add("công thức");
+                    if (!string.Equals(oldCol.RefTableId ?? "", col.RefTableId ?? "", StringComparison.Ordinal))
+                        changes.Add("bảng lookup");
+                    if (changes.Count > 0)
+                        diff.ModifiedColumns.Add($"{tNode.Table.DisplayName}.{col.ColumnCode}: {string.Join(", ", changes)}");
+                }
+            }
+
+            foreach (var (code, oldCol) in prevCols)
+            {
+                if (!currCols.ContainsKey(code))
+                    diff.RemovedColumns.Add($"{tNode.Table.DisplayName}: {oldCol.ColumnName} ({oldCol.ColumnCode})");
+            }
+        }
+
+        foreach (var (tid, oldNode) in pubTables)
+        {
+            if (!draftTables.ContainsKey(tid))
+                diff.RemovedTables.Add($"{oldNode.Table.DisplayName} ({oldNode.Table.TableName})");
+        }
+
+        return diff;
+    }
+
+    public async Task<AppSchemaDiffDto?> ComputeSchemaDiffAsync(string appId)
+    {
+        var draft = await GetAppRuntimeTreeAsync(appId, usePublishedSnapshot: false);
+        if (draft == null) return null;
+
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("""
+            SELECT version_number, snapshot::text
+            FROM sys_app_releases
+            WHERE app_id = @appId
+            ORDER BY version_number DESC
+            LIMIT 1
+            """, conn);
+        cmd.Parameters.AddWithValue("appId", draft.App.Id);
+
+        int? pubVer = null;
+        AppBlueprintDto? pubSnap = null;
+        await using var r = await cmd.ExecuteReaderAsync();
+        if (await r.ReadAsync())
+        {
+            pubVer = r.GetInt32(0);
+            pubSnap = JsonSerializer.Deserialize<AppBlueprintDto>(r.GetString(1),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+
+        return ComputeBlueprintSchemaDiff(draft, pubSnap, pubVer);
+    }
+
     public async Task<AppReleaseDto?> RollbackAppReleaseAsync(string appId, int versionNumber, string actor)
     {
         var app = await GetAppByCodeOrIdAsync(appId);
@@ -1299,92 +1470,230 @@ public class MetadataService
 
         await using var conn = new NpgsqlConnection(_connStr);
         await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand("""
+        await using var tx = await conn.BeginTransactionAsync();
+
+        string? snapJson;
+        await using (var cmd = new NpgsqlCommand("""
             SELECT snapshot::text FROM sys_app_releases
             WHERE app_id = @appId AND version_number = @ver
             LIMIT 1
-            """, conn);
-        cmd.Parameters.AddWithValue("appId", app.Id);
-        cmd.Parameters.AddWithValue("ver", versionNumber);
-        var snapJson = await cmd.ExecuteScalarAsync() as string;
+            """, conn, tx))
+        {
+            cmd.Parameters.AddWithValue("appId", app.Id);
+            cmd.Parameters.AddWithValue("ver", versionNumber);
+            snapJson = await cmd.ExecuteScalarAsync() as string;
+        }
         if (string.IsNullOrWhiteSpace(snapJson)) return null;
 
         var blueprint = JsonSerializer.Deserialize<AppBlueprintDto>(snapJson,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         if (blueprint == null) return null;
 
-        // Restore metadata safely without deleting existing app_records
-        var snapTableIds = blueprint.Modules.SelectMany(m => m.Tables).Select(t => t.Table.Id).ToHashSet(StringComparer.Ordinal);
-        await using (var deact = new NpgsqlCommand("UPDATE sys_tables SET is_active = FALSE WHERE app_id = @appId", conn))
+        // Deactivate modules, tables, and columns atomically so post-release additions are rolled back cleanly
+        await using (var deactCols = new NpgsqlCommand("""
+            UPDATE sys_columns
+            SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+            WHERE table_id IN (SELECT id FROM sys_tables WHERE app_id = @appId)
+            """, conn, tx))
         {
-            deact.Parameters.AddWithValue("appId", app.Id);
-            await deact.ExecuteNonQueryAsync();
+            deactCols.Parameters.AddWithValue("appId", app.Id);
+            await deactCols.ExecuteNonQueryAsync();
+        }
+        await using (var deactTbls = new NpgsqlCommand(
+            "UPDATE sys_tables SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE app_id = @appId", conn, tx))
+        {
+            deactTbls.Parameters.AddWithValue("appId", app.Id);
+            await deactTbls.ExecuteNonQueryAsync();
+        }
+        await using (var deactMods = new NpgsqlCommand(
+            "UPDATE sys_modules SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE app_id = @appId", conn, tx))
+        {
+            deactMods.Parameters.AddWithValue("appId", app.Id);
+            await deactMods.ExecuteNonQueryAsync();
         }
 
         foreach (var modNode in blueprint.Modules)
         {
-            await UpsertModuleAsync(new UpsertModuleRequest
+            await using (var mCmd = new NpgsqlCommand("""
+                INSERT INTO sys_modules (id, app_id, code, name, icon, order_index, is_active, description, updated_at)
+                VALUES (@id, @appId, @code, @name, @icon, @ord, TRUE, @desc, CURRENT_TIMESTAMP)
+                ON CONFLICT (id) DO UPDATE SET
+                    code = EXCLUDED.code,
+                    name = EXCLUDED.name,
+                    icon = EXCLUDED.icon,
+                    order_index = EXCLUDED.order_index,
+                    is_active = TRUE,
+                    description = EXCLUDED.description,
+                    updated_at = CURRENT_TIMESTAMP
+                """, conn, tx))
             {
-                Id = modNode.Module.Id,
-                AppId = app.Id,
-                Code = modNode.Module.Code,
-                Name = modNode.Module.Name,
-                Icon = modNode.Module.Icon,
-                OrderIndex = modNode.Module.OrderIndex,
-                Description = modNode.Module.Description
-            });
+                mCmd.Parameters.AddWithValue("id", modNode.Module.Id);
+                mCmd.Parameters.AddWithValue("appId", app.Id);
+                mCmd.Parameters.AddWithValue("code", modNode.Module.Code.Trim().ToUpperInvariant());
+                mCmd.Parameters.AddWithValue("name", modNode.Module.Name.Trim());
+                mCmd.Parameters.AddWithValue("icon", string.IsNullOrWhiteSpace(modNode.Module.Icon) ? "Layers" : modNode.Module.Icon.Trim());
+                mCmd.Parameters.AddWithValue("ord", modNode.Module.OrderIndex);
+                mCmd.Parameters.AddWithValue("desc", (object?)modNode.Module.Description ?? DBNull.Value);
+                await mCmd.ExecuteNonQueryAsync();
+            }
 
             foreach (var tblNode in modNode.Tables)
             {
-                await UpsertTableAsync(new UpsertTableRequest
+                var roles = tblNode.Table.ApproverRoles?.Count > 0
+                    ? tblNode.Table.ApproverRoles
+                    : new List<string> { "ADMIN", "HR_MANAGER", "ASSET_LEAD" };
+                await using (var tCmd = new NpgsqlCommand("""
+                    INSERT INTO sys_tables (id, app_id, module_id, table_name, display_name, description, primary_view, row_scope,
+                        approval_enabled, approval_field, approver_roles, public_form_enabled, order_index, is_active, ui_config, updated_at)
+                    VALUES (@id, @appId, @modId, @tn, @dn, @desc, @pv, @rs, @ae, @af, @ar::jsonb, @pfe, @ord, TRUE, COALESCE(@ui::jsonb,'{}'::jsonb), CURRENT_TIMESTAMP)
+                    ON CONFLICT (id) DO UPDATE SET
+                        module_id = EXCLUDED.module_id,
+                        table_name = EXCLUDED.table_name,
+                        display_name = EXCLUDED.display_name,
+                        description = EXCLUDED.description,
+                        primary_view = EXCLUDED.primary_view,
+                        row_scope = EXCLUDED.row_scope,
+                        approval_enabled = EXCLUDED.approval_enabled,
+                        approval_field = EXCLUDED.approval_field,
+                        approver_roles = EXCLUDED.approver_roles,
+                        public_form_enabled = EXCLUDED.public_form_enabled,
+                        order_index = EXCLUDED.order_index,
+                        is_active = TRUE,
+                        ui_config = COALESCE(sys_tables.ui_config, '{}'::jsonb) || EXCLUDED.ui_config,
+                        updated_at = CURRENT_TIMESTAMP
+                    """, conn, tx))
                 {
-                    Id = tblNode.Table.Id,
-                    AppId = app.Id,
-                    ModuleId = modNode.Module.Id,
-                    TableName = tblNode.Table.TableName,
-                    DisplayName = tblNode.Table.DisplayName,
-                    Description = tblNode.Table.Description,
-                    PrimaryView = tblNode.Table.PrimaryView,
-                    RowScope = tblNode.Table.RowScope,
-                    OrderIndex = tblNode.Table.OrderIndex,
-                    ApprovalEnabled = tblNode.Table.ApprovalEnabled,
-                    ApprovalField = tblNode.Table.ApprovalField,
-                    ApproverRoles = tblNode.Table.ApproverRoles,
-                    PublicFormEnabled = tblNode.Table.PublicFormEnabled,
-                    FormRules = tblNode.Table.FormRules
-                });
+                    tCmd.Parameters.AddWithValue("id", tblNode.Table.Id);
+                    tCmd.Parameters.AddWithValue("appId", app.Id);
+                    tCmd.Parameters.AddWithValue("modId", modNode.Module.Id);
+                    tCmd.Parameters.AddWithValue("tn", tblNode.Table.TableName);
+                    tCmd.Parameters.AddWithValue("dn", tblNode.Table.DisplayName);
+                    tCmd.Parameters.AddWithValue("desc", (object?)tblNode.Table.Description ?? DBNull.Value);
+                    tCmd.Parameters.AddWithValue("pv", string.IsNullOrWhiteSpace(tblNode.Table.PrimaryView) ? "table" : tblNode.Table.PrimaryView);
+                    tCmd.Parameters.AddWithValue("rs", string.IsNullOrWhiteSpace(tblNode.Table.RowScope) ? "ALL" : tblNode.Table.RowScope);
+                    tCmd.Parameters.AddWithValue("ae", tblNode.Table.ApprovalEnabled);
+                    tCmd.Parameters.AddWithValue("af", string.IsNullOrWhiteSpace(tblNode.Table.ApprovalField) ? "trang_thai_duyet" : tblNode.Table.ApprovalField);
+                    tCmd.Parameters.AddWithValue("ar", JsonSerializer.Serialize(roles));
+                    tCmd.Parameters.AddWithValue("pfe", tblNode.Table.PublicFormEnabled);
+                    tCmd.Parameters.AddWithValue("ord", tblNode.Table.OrderIndex);
+                    tCmd.Parameters.AddWithValue("ui", JsonSerializer.Serialize(new { formRules = tblNode.Table.FormRules ?? new List<FormRuleDto>() }));
+                    await tCmd.ExecuteNonQueryAsync();
+                }
 
                 foreach (var col in tblNode.Columns)
                 {
-                    await UpsertColumnAsync(new UpsertColumnRequest
-                    {
-                        Id = col.Id,
-                        TableId = tblNode.Table.Id,
-                        ColumnCode = col.ColumnCode,
-                        ColumnName = col.ColumnName,
-                        ExcelHeader = col.ExcelHeader,
-                        DataType = col.DataType,
-                        IsRequired = col.IsRequired,
-                        IsIdentityKey = col.IsIdentityKey,
-                        DefaultValue = col.DefaultValue,
-                        Formula = col.Formula,
-                        Width = col.Width,
-                        RefAppId = col.RefAppId,
-                        RefTableId = col.RefTableId,
-                        RefValueField = col.RefValueField,
-                        RefDisplayField = col.RefDisplayField,
-                        RefCategoryCode = col.RefCategoryCode,
-                        LookupFilterField = col.LookupFilterField,
-                        LookupSourceField = col.LookupSourceField,
-                        HiddenForRoles = col.HiddenForRoles,
-                        ReadOnlyForRoles = col.ReadOnlyForRoles,
-                        OrderIndex = col.OrderIndex
-                    });
+                    await using var cCmd = new NpgsqlCommand("""
+                        INSERT INTO sys_columns (id, table_id, column_code, column_name, excel_header, data_type,
+                            is_required, is_identity_key, show_in_table, show_in_form, width,
+                            validation_regex, ref_category_code, ref_app_id, ref_table_id, ref_value_field, ref_display_field,
+                            lookup_filter_field, lookup_source_field, show_in_parent_form, allow_quick_create,
+                            formula, default_value, hidden_for_roles, read_only_for_roles, order_index, is_active, updated_at)
+                        VALUES (@id, @tbl, @code, @name, @excel, @dt, @req, @key, @sit, @sif, @w, @rx, @ref, @ra, @rt, @rv, @rd, @lff, @lsf, @sipf, @aqc, @fm, @def, @hfr::jsonb, @ror::jsonb, @ord, TRUE, CURRENT_TIMESTAMP)
+                        ON CONFLICT (id) DO UPDATE SET
+                            column_code = EXCLUDED.column_code,
+                            column_name = EXCLUDED.column_name,
+                            excel_header = EXCLUDED.excel_header,
+                            data_type = EXCLUDED.data_type,
+                            is_required = EXCLUDED.is_required,
+                            is_identity_key = EXCLUDED.is_identity_key,
+                            show_in_table = EXCLUDED.show_in_table,
+                            show_in_form = EXCLUDED.show_in_form,
+                            width = EXCLUDED.width,
+                            validation_regex = EXCLUDED.validation_regex,
+                            ref_category_code = EXCLUDED.ref_category_code,
+                            ref_app_id = EXCLUDED.ref_app_id,
+                            ref_table_id = EXCLUDED.ref_table_id,
+                            ref_value_field = EXCLUDED.ref_value_field,
+                            ref_display_field = EXCLUDED.ref_display_field,
+                            lookup_filter_field = EXCLUDED.lookup_filter_field,
+                            lookup_source_field = EXCLUDED.lookup_source_field,
+                            show_in_parent_form = EXCLUDED.show_in_parent_form,
+                            allow_quick_create = EXCLUDED.allow_quick_create,
+                            formula = EXCLUDED.formula,
+                            default_value = EXCLUDED.default_value,
+                            hidden_for_roles = EXCLUDED.hidden_for_roles,
+                            read_only_for_roles = EXCLUDED.read_only_for_roles,
+                            order_index = EXCLUDED.order_index,
+                            is_active = TRUE,
+                            updated_at = CURRENT_TIMESTAMP
+                        """, conn, tx);
+                    cCmd.Parameters.AddWithValue("id", col.Id);
+                    cCmd.Parameters.AddWithValue("tbl", tblNode.Table.Id);
+                    cCmd.Parameters.AddWithValue("code", col.ColumnCode);
+                    cCmd.Parameters.AddWithValue("name", col.ColumnName);
+                    cCmd.Parameters.AddWithValue("excel", string.IsNullOrWhiteSpace(col.ExcelHeader) ? col.ColumnName : col.ExcelHeader);
+                    cCmd.Parameters.AddWithValue("dt", col.DataType);
+                    cCmd.Parameters.AddWithValue("req", col.IsRequired);
+                    cCmd.Parameters.AddWithValue("key", col.IsIdentityKey);
+                    cCmd.Parameters.AddWithValue("sit", col.ShowInTable);
+                    cCmd.Parameters.AddWithValue("sif", col.ShowInForm);
+                    cCmd.Parameters.AddWithValue("w", col.Width <= 0 ? 170 : col.Width);
+                    cCmd.Parameters.AddWithValue("rx", (object?)col.ValidationRegex ?? DBNull.Value);
+                    cCmd.Parameters.AddWithValue("ref", (object?)col.RefCategoryCode ?? DBNull.Value);
+                    cCmd.Parameters.AddWithValue("ra", (object?)col.RefAppId ?? DBNull.Value);
+                    cCmd.Parameters.AddWithValue("rt", (object?)col.RefTableId ?? DBNull.Value);
+                    cCmd.Parameters.AddWithValue("rv", (object?)col.RefValueField ?? DBNull.Value);
+                    cCmd.Parameters.AddWithValue("rd", (object?)col.RefDisplayField ?? DBNull.Value);
+                    cCmd.Parameters.AddWithValue("lff", (object?)col.LookupFilterField ?? DBNull.Value);
+                    cCmd.Parameters.AddWithValue("lsf", (object?)col.LookupSourceField ?? DBNull.Value);
+                    cCmd.Parameters.AddWithValue("sipf", col.ShowInParentForm);
+                    cCmd.Parameters.AddWithValue("aqc", col.AllowQuickCreate);
+                    cCmd.Parameters.AddWithValue("fm", (object?)col.Formula ?? DBNull.Value);
+                    cCmd.Parameters.AddWithValue("def", (object?)col.DefaultValue ?? DBNull.Value);
+                    cCmd.Parameters.AddWithValue("hfr", JsonSerializer.Serialize(col.HiddenForRoles ?? new List<string>()));
+                    cCmd.Parameters.AddWithValue("ror", JsonSerializer.Serialize(col.ReadOnlyForRoles ?? new List<string>()));
+                    cCmd.Parameters.AddWithValue("ord", col.OrderIndex);
+                    await cCmd.ExecuteNonQueryAsync();
                 }
             }
         }
 
-        return await PublishAppAsync(app.Id, actor, $"Khôi phục về phiên bản v{versionNumber}");
+        int nextVersion;
+        await using (var verCmd = new NpgsqlCommand("""
+            UPDATE sys_apps
+            SET published_version = COALESCE(published_version, 0) + 1,
+                publish_status = 'PUBLISHED',
+                published_at = CURRENT_TIMESTAMP,
+                published_by = @actor,
+                version = CONCAT((COALESCE(published_version, 0) + 1)::text, '.0.0'),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = @id
+            RETURNING published_version
+            """, conn, tx))
+        {
+            verCmd.Parameters.AddWithValue("id", app.Id);
+            verCmd.Parameters.AddWithValue("actor", actor);
+            nextVersion = Convert.ToInt32(await verCmd.ExecuteScalarAsync());
+        }
+
+        var notes = $"Khôi phục về phiên bản v{versionNumber}";
+        var releaseId = $"rel_{Guid.NewGuid().ToString("N")[..12]}";
+        await using (var relCmd = new NpgsqlCommand("""
+            INSERT INTO sys_app_releases (id, app_id, version_number, notes, snapshot, published_by)
+            VALUES (@id, @appId, @ver, @notes, @snap::jsonb, @actor)
+            """, conn, tx))
+        {
+            relCmd.Parameters.AddWithValue("id", releaseId);
+            relCmd.Parameters.AddWithValue("appId", app.Id);
+            relCmd.Parameters.AddWithValue("ver", nextVersion);
+            relCmd.Parameters.AddWithValue("notes", notes);
+            relCmd.Parameters.AddWithValue("snap", snapJson);
+            relCmd.Parameters.AddWithValue("actor", actor);
+            await relCmd.ExecuteNonQueryAsync();
+        }
+
+        await tx.CommitAsync();
+        return new AppReleaseDto
+        {
+            Id = releaseId,
+            AppId = app.Id,
+            VersionNumber = nextVersion,
+            Notes = notes,
+            PublishedBy = actor,
+            PublishedAt = DateTime.UtcNow,
+            TableCount = blueprint.Modules.Sum(m => m.Tables.Count),
+            ColumnCount = blueprint.Modules.SelectMany(m => m.Tables).Sum(t => t.Columns.Count)
+        };
     }
 
     // ─── Print Templates ───────────────────────────────────────────────────────
@@ -1534,6 +1843,27 @@ public class MetadataService
         };
     }
 
+    public static (string? RefAppId, string? RefTableId) RemapBlueprintColumnLookup(
+        SysColumnDto col,
+        string? sourceAppId,
+        string targetAppId,
+        IReadOnlyDictionary<string, string> tableIdMap)
+    {
+        var refTbl = col.RefTableId?.Trim();
+        var refApp = col.RefAppId?.Trim();
+        if (!string.IsNullOrWhiteSpace(refTbl) && tableIdMap.TryGetValue(refTbl, out var mappedTbl))
+        {
+            return (targetAppId, mappedTbl);
+        }
+        if (!string.IsNullOrWhiteSpace(refApp) &&
+            !string.IsNullOrWhiteSpace(sourceAppId) &&
+            string.Equals(refApp, sourceAppId.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return (targetAppId, col.RefTableId);
+        }
+        return (col.RefAppId, col.RefTableId);
+    }
+
     public async Task<SysAppDto> ImportAppBlueprintAsync(AppBlueprintDto bp, string? overrideCode = null, string? overrideName = null)
     {
         var code = string.IsNullOrWhiteSpace(overrideCode) ? bp.App.Code : overrideCode.Trim().ToUpperInvariant();
@@ -1555,7 +1885,9 @@ public class MetadataService
             OrderIndex = bp.App.OrderIndex
         });
 
-        var tableIdMap = new Dictionary<string, string>();
+        // Pass 1: Create modules & tables so tableIdMap is complete before column lookups are remapped
+        var tableIdMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var pendingTables = new List<(TableWithColumnsDto Source, SysTableDto Target)>();
         foreach (var modNode in bp.Modules)
         {
             var newMod = await UpsertModuleAsync(new UpsertModuleRequest
@@ -1586,36 +1918,46 @@ public class MetadataService
                     OrderIndex = tblNode.Table.OrderIndex
                 });
                 tableIdMap[tblNode.Table.Id] = newTbl.Id;
-
-                foreach (var col in tblNode.Columns)
-                {
-                    await UpsertColumnAsync(new UpsertColumnRequest
-                    {
-                        TableId = newTbl.Id,
-                        ColumnCode = col.ColumnCode,
-                        ColumnName = col.ColumnName,
-                        ExcelHeader = col.ExcelHeader,
-                        DataType = col.DataType,
-                        IsRequired = col.IsRequired,
-                        IsIdentityKey = col.IsIdentityKey,
-                        ShowInTable = col.ShowInTable,
-                        ShowInForm = col.ShowInForm,
-                        Width = col.Width,
-                        ValidationRegex = col.ValidationRegex,
-                        RefCategoryCode = col.RefCategoryCode,
-                        RefAppId = col.RefAppId,
-                        RefTableId = col.RefTableId,
-                        RefValueField = col.RefValueField,
-                        RefDisplayField = col.RefDisplayField,
-                        Formula = col.Formula,
-                        DefaultValue = col.DefaultValue,
-                        HiddenForRoles = col.HiddenForRoles,
-                        ReadOnlyForRoles = col.ReadOnlyForRoles,
-                        OrderIndex = col.OrderIndex
-                    });
-                }
-                await SetFormRulesAsync(newTbl.Id, tblNode.Table.FormRules);
+                pendingTables.Add((tblNode, newTbl));
             }
+        }
+
+        // Pass 2: Upsert columns with remapped internal RefAppId / RefTableId and attach FormRules
+        foreach (var (tblNode, newTbl) in pendingTables)
+        {
+            foreach (var col in tblNode.Columns)
+            {
+                var (remappedAppId, remappedTableId) = RemapBlueprintColumnLookup(col, bp.App.Id, newApp.Id, tableIdMap);
+                await UpsertColumnAsync(new UpsertColumnRequest
+                {
+                    TableId = newTbl.Id,
+                    ColumnCode = col.ColumnCode,
+                    ColumnName = col.ColumnName,
+                    ExcelHeader = col.ExcelHeader,
+                    DataType = col.DataType,
+                    IsRequired = col.IsRequired,
+                    IsIdentityKey = col.IsIdentityKey,
+                    ShowInTable = col.ShowInTable,
+                    ShowInForm = col.ShowInForm,
+                    ShowInParentForm = col.ShowInParentForm,
+                    AllowQuickCreate = col.AllowQuickCreate,
+                    Width = col.Width,
+                    ValidationRegex = col.ValidationRegex,
+                    RefCategoryCode = col.RefCategoryCode,
+                    RefAppId = remappedAppId,
+                    RefTableId = remappedTableId,
+                    RefValueField = col.RefValueField,
+                    RefDisplayField = col.RefDisplayField,
+                    LookupFilterField = col.LookupFilterField,
+                    LookupSourceField = col.LookupSourceField,
+                    Formula = col.Formula,
+                    DefaultValue = col.DefaultValue,
+                    HiddenForRoles = col.HiddenForRoles,
+                    ReadOnlyForRoles = col.ReadOnlyForRoles,
+                    OrderIndex = col.OrderIndex
+                });
+            }
+            await SetFormRulesAsync(newTbl.Id, tblNode.Table.FormRules);
         }
 
         await using var conn = new NpgsqlConnection(_connStr);
@@ -1656,7 +1998,8 @@ public class MetadataService
         var existingTbls = await GetTablesAsync(existingApp.Id, null);
 
         var result = new BlueprintUpgradeResultDto { AppId = existingApp.Id, AppCode = existingApp.Code };
-        var tableIdMap = new Dictionary<string, string>();
+        var tableIdMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var pendingTables = new List<(TableWithColumnsDto Source, SysTableDto Target)>();
 
         foreach (var modNode in bp.Modules)
         {
@@ -1696,41 +2039,50 @@ public class MetadataService
                 });
                 tableIdMap[tblNode.Table.Id] = savedTbl.Id;
                 result.TablesUpserted++;
-
-                var existingCols = await GetColumnsAsync(savedTbl.Id);
-                foreach (var col in tblNode.Columns)
-                {
-                    var matchedCol = existingCols.FirstOrDefault(c =>
-                        c.ColumnCode.Equals(col.ColumnCode, StringComparison.OrdinalIgnoreCase));
-                    await UpsertColumnAsync(new UpsertColumnRequest
-                    {
-                        Id = matchedCol?.Id,
-                        TableId = savedTbl.Id,
-                        ColumnCode = col.ColumnCode,
-                        ColumnName = col.ColumnName,
-                        ExcelHeader = col.ExcelHeader,
-                        DataType = col.DataType,
-                        IsRequired = col.IsRequired,
-                        IsIdentityKey = col.IsIdentityKey,
-                        ShowInTable = col.ShowInTable,
-                        ShowInForm = col.ShowInForm,
-                        Width = col.Width,
-                        ValidationRegex = col.ValidationRegex,
-                        RefCategoryCode = col.RefCategoryCode,
-                        RefAppId = col.RefAppId,
-                        RefTableId = col.RefTableId,
-                        RefValueField = col.RefValueField,
-                        RefDisplayField = col.RefDisplayField,
-                        Formula = col.Formula,
-                        DefaultValue = col.DefaultValue,
-                        HiddenForRoles = col.HiddenForRoles,
-                        ReadOnlyForRoles = col.ReadOnlyForRoles,
-                        OrderIndex = col.OrderIndex
-                    });
-                    result.ColumnsUpserted++;
-                }
-                await SetFormRulesAsync(savedTbl.Id, tblNode.Table.FormRules);
+                pendingTables.Add((tblNode, savedTbl));
             }
+        }
+
+        foreach (var (tblNode, savedTbl) in pendingTables)
+        {
+            var existingCols = await GetColumnsAsync(savedTbl.Id);
+            foreach (var col in tblNode.Columns)
+            {
+                var matchedCol = existingCols.FirstOrDefault(c =>
+                    c.ColumnCode.Equals(col.ColumnCode, StringComparison.OrdinalIgnoreCase));
+                var (remappedAppId, remappedTableId) = RemapBlueprintColumnLookup(col, bp.App.Id, existingApp.Id, tableIdMap);
+                await UpsertColumnAsync(new UpsertColumnRequest
+                {
+                    Id = matchedCol?.Id,
+                    TableId = savedTbl.Id,
+                    ColumnCode = col.ColumnCode,
+                    ColumnName = col.ColumnName,
+                    ExcelHeader = col.ExcelHeader,
+                    DataType = col.DataType,
+                    IsRequired = col.IsRequired,
+                    IsIdentityKey = col.IsIdentityKey,
+                    ShowInTable = col.ShowInTable,
+                    ShowInForm = col.ShowInForm,
+                    ShowInParentForm = col.ShowInParentForm,
+                    AllowQuickCreate = col.AllowQuickCreate,
+                    Width = col.Width,
+                    ValidationRegex = col.ValidationRegex,
+                    RefCategoryCode = col.RefCategoryCode,
+                    RefAppId = remappedAppId,
+                    RefTableId = remappedTableId,
+                    RefValueField = col.RefValueField,
+                    RefDisplayField = col.RefDisplayField,
+                    LookupFilterField = col.LookupFilterField,
+                    LookupSourceField = col.LookupSourceField,
+                    Formula = col.Formula,
+                    DefaultValue = col.DefaultValue,
+                    HiddenForRoles = col.HiddenForRoles,
+                    ReadOnlyForRoles = col.ReadOnlyForRoles,
+                    OrderIndex = col.OrderIndex
+                });
+                result.ColumnsUpserted++;
+            }
+            await SetFormRulesAsync(savedTbl.Id, tblNode.Table.FormRules);
         }
 
         return result;

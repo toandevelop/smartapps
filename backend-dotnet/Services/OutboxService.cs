@@ -221,6 +221,21 @@ public sealed class OutboxService
         cmd.Parameters.AddWithValue("id", id);
         return await cmd.ExecuteNonQueryAsync() > 0;
     }
+
+    public async Task<int> RetryDeadLettersAsync()
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("""
+            UPDATE app_outbox_events
+            SET status = 'PENDING',
+                attempt_count = 0,
+                next_attempt_at = CURRENT_TIMESTAMP,
+                last_error = NULL
+            WHERE status = 'DEAD_LETTER'
+            """, conn);
+        return await cmd.ExecuteNonQueryAsync();
+    }
 }
 
 public sealed class OutboxWorkerService : BackgroundService

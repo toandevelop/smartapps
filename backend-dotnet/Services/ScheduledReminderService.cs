@@ -11,18 +11,21 @@ public class ScheduledReminderService : BackgroundService
     private readonly string _connStr;
     private readonly NotificationService _notifications;
     private readonly AutomationService _automations;
+    private readonly BusinessCalendarService _calendar;
     private readonly ILogger<ScheduledReminderService> _logger;
 
     public ScheduledReminderService(
         IConfiguration config,
         NotificationService notifications,
         AutomationService automations,
+        BusinessCalendarService calendar,
         ILogger<ScheduledReminderService> logger)
     {
         _connStr = config.GetConnectionString("Postgres")
             ?? throw new InvalidOperationException("Missing Postgres connection string");
         _notifications = notifications;
         _automations = automations;
+        _calendar = calendar;
         _logger = logger;
     }
 
@@ -35,9 +38,7 @@ public class ScheduledReminderService : BackgroundService
         {
             try
             {
-                await CheckPendingApprovalsAsync(stoppingToken);
-                await CheckDueTasksAsync(stoppingToken);
-                await _automations.RunScheduledDateTriggersAsync(stoppingToken);
+                await RunLockedTickAsync(stoppingToken);
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
@@ -45,6 +46,32 @@ public class ScheduledReminderService : BackgroundService
             }
 
             await Task.Delay(TimeSpan.FromHours(6), stoppingToken);
+        }
+    }
+
+    private async Task RunLockedTickAsync(CancellationToken ct)
+    {
+        await using var lockConn = new NpgsqlConnection(_connStr);
+        await lockConn.OpenAsync(ct);
+
+        await using var tryCmd = new NpgsqlCommand("SELECT pg_try_advisory_lock(hashtextextended('smartapps_scheduled_reminder_tick', 0))", lockConn);
+        var acquired = Convert.ToBoolean(await tryCmd.ExecuteScalarAsync(ct));
+        if (!acquired)
+        {
+            _logger.LogDebug("ScheduledReminderService advisory lock held by peer instance; skipping tick.");
+            return;
+        }
+
+        try
+        {
+            await CheckPendingApprovalsAsync(ct);
+            await CheckDueTasksAsync(ct);
+            await _automations.RunScheduledDateTriggersAsync(ct);
+        }
+        finally
+        {
+            await using var unlockCmd = new NpgsqlCommand("SELECT pg_advisory_unlock(hashtextextended('smartapps_scheduled_reminder_tick', 0))", lockConn);
+            await unlockCmd.ExecuteNonQueryAsync(CancellationToken.None);
         }
     }
 
@@ -119,6 +146,10 @@ public class ScheduledReminderService : BackgroundService
             }
         }
 
+        var (exactHolidays, recurringHolidays) = await _calendar.LoadHolidaySetsAsync(ct);
+        var vnToday = DateOnly.FromDateTime(BusinessCalendarService.ToVietnamTime(DateTime.UtcNow));
+        var isWorkingDay = BusinessCalendarService.IsVietnamWorkingDate(vnToday, exactHolidays, recurringHolidays);
+
         var countByApprover = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         var overdueApprovers = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in pendingList)
@@ -135,18 +166,28 @@ public class ScheduledReminderService : BackgroundService
             }
             if (targets.Count == 0) targets.Add("admin");
 
+            long overdueCnt = 0;
             await using var slaCmd = new NpgsqlCommand("""
-                SELECT COUNT(*) FROM app_records
+                SELECT updated_at FROM app_records
                 WHERE table_id = @tbl
                   AND deleted_at IS NULL
                   AND approval_status = 'PENDING'
                   AND COALESCE(current_step_order, 1) = @step
-                  AND updated_at + make_interval(hours => @sla) < CURRENT_TIMESTAMP
                 """, conn);
             slaCmd.Parameters.AddWithValue("tbl", item.TableId);
             slaCmd.Parameters.AddWithValue("step", item.StepOrder);
-            slaCmd.Parameters.AddWithValue("sla", matched.SlaHours);
-            var overdueCnt = Convert.ToInt64(await slaCmd.ExecuteScalarAsync(ct));
+            await using (var sr = await slaCmd.ExecuteReaderAsync(ct))
+            {
+                var nowUtc = DateTime.UtcNow;
+                while (await sr.ReadAsync(ct))
+                {
+                    var upd = sr.GetDateTime(0);
+                    if (BusinessCalendarService.CalculateBusinessElapsedHours(upd, nowUtc, exactHolidays, recurringHolidays) >= matched.SlaHours)
+                    {
+                        overdueCnt++;
+                    }
+                }
+            }
 
             foreach (var t in targets)
             {
@@ -154,6 +195,12 @@ public class ScheduledReminderService : BackgroundService
                 if (overdueCnt > 0)
                     overdueApprovers[t] = overdueApprovers.GetValueOrDefault(t) + overdueCnt;
             }
+        }
+
+        if (!isWorkingDay)
+        {
+            // Skip daily reminder broadcasts on weekends and Vietnam public holidays
+            return;
         }
 
         if (overdueApprovers.Count > 0)

@@ -8,6 +8,7 @@ builder.Services.AddOpenApi();
 builder.Services.AddHttpClient();
 
 builder.Services.AddSingleton<RealtimeEventService>();
+builder.Services.AddSingleton<PlatformMetricsService>();
 builder.Services.AddSingleton<AiService>();
 builder.Services.AddSingleton<MetadataService>();
 builder.Services.AddSingleton<DynamicComputeService>();
@@ -33,21 +34,45 @@ builder.Services.AddSingleton<IFileStorageAdapter>(sp =>
     return new LocalFileStorageAdapter(sp.GetRequiredService<IWebHostEnvironment>());
 });
 builder.Services.AddSingleton<OrgUnitService>();
+builder.Services.AddSingleton<BusinessCalendarService>();
 builder.Services.AddSingleton<BackupService>();
 builder.Services.AddSingleton<SettingsService>();
 builder.Services.AddSingleton<TaskService>();
 builder.Services.AddSingleton<ChatService>();
+builder.Services.AddHostedService<RealtimePostgresListenerService>();
 builder.Services.AddHostedService<ScheduledReminderService>();
 builder.Services.AddHostedService<OutboxWorkerService>();
 builder.Services.AddHostedService<BackupSchedulerService>();
 
+var allowedOriginsRaw = builder.Configuration["Cors:AllowedOrigins"]
+    ?? Environment.GetEnvironmentVariable("Cors__AllowedOrigins");
+var allowedOrigins = string.IsNullOrWhiteSpace(allowedOriginsRaw)
+    ? Array.Empty<string>()
+    : allowedOriginsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddPolicy("AppCors", policy =>
     {
-        policy.AllowAnyOrigin()
-              .AllowAnyMethod()
-              .AllowAnyHeader();
+        if (allowedOrigins.Length > 0 && !allowedOrigins.Contains("*"))
+        {
+            policy.WithOrigins(allowedOrigins)
+                  .AllowAnyMethod()
+                  .AllowAnyHeader()
+                  .AllowCredentials();
+        }
+        else if (builder.Environment.IsDevelopment() || allowedOrigins.Contains("*"))
+        {
+            policy.AllowAnyOrigin()
+                  .AllowAnyMethod()
+                  .AllowAnyHeader();
+        }
+        else
+        {
+            // Production without explicit Cors:AllowedOrigins: deny cross-origin browser requests by default
+            // (same-origin requests via Next.js /api rewrite continue to work without CORS headers).
+            policy.SetIsOriginAllowed(_ => false);
+        }
     });
 });
 
@@ -65,7 +90,7 @@ if (isMigrateOnly)
 }
 
 app.MapOpenApi();
-app.UseCors("AllowAll");
+app.UseCors("AppCors");
 app.Use(async (context, next) =>
 {
     var traceId = context.Request.Headers["X-Trace-Id"].FirstOrDefault();
@@ -73,10 +98,14 @@ app.Use(async (context, next) =>
         traceId = System.Diagnostics.Activity.Current?.Id ?? context.TraceIdentifier;
     context.Response.Headers["X-Trace-Id"] = traceId;
     var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("RequestTrace");
+    var metrics = context.RequestServices.GetRequiredService<PlatformMetricsService>();
+    var sw = System.Diagnostics.Stopwatch.StartNew();
     using (logger.BeginScope(new Dictionary<string, object> { ["TraceId"] = traceId }))
     {
         await next();
     }
+    sw.Stop();
+    metrics.RecordHttpRequest(context.Response.StatusCode, sw.ElapsedMilliseconds);
 });
 app.UseAuthorization();
 
@@ -101,6 +130,16 @@ app.MapGet("/health/ready", async () =>
     {
         return Results.Json(new { status = "Unavailable", database = "Error", detail = ex.Message }, statusCode: 503);
     }
+});
+
+app.MapGet("/metrics", async (HttpRequest req, PlatformMetricsService metrics, CancellationToken ct) =>
+{
+    var snap = await metrics.GetSnapshotAsync(ct);
+    var wantProm = string.Equals(req.Query["format"], "prometheus", StringComparison.OrdinalIgnoreCase)
+        || req.Headers.Accept.Any(a => a != null && a.Contains("text/plain", StringComparison.OrdinalIgnoreCase));
+    return wantProm
+        ? Results.Text(PlatformMetricsService.ToPrometheusText(snap), "text/plain; version=0.0.4; charset=utf-8")
+        : Results.Json(snap);
 });
 
 app.MapGet("/", () => Results.Json(new

@@ -52,6 +52,18 @@ public class PublishAppRequest
     public string? Notes { get; set; }
 }
 
+public class AppSchemaDiffDto
+{
+    public bool HasPublishedRelease { get; set; }
+    public int? PublishedVersion { get; set; }
+    public string PublishStatus { get; set; } = "DRAFT";
+    public List<string> AddedTables { get; set; } = new();
+    public List<string> RemovedTables { get; set; } = new();
+    public List<string> AddedColumns { get; set; } = new();
+    public List<string> RemovedColumns { get; set; } = new();
+    public List<string> ModifiedColumns { get; set; } = new();
+}
+
 public class UpsertAppRequest
 {
     public string? Id { get; set; }
@@ -107,6 +119,8 @@ public class SysTableDto
     public string? ApprovalField { get; set; } = "trang_thai_duyet";
     public List<string> ApproverRoles { get; set; } = new() { "ADMIN", "HR_MANAGER", "ASSET_LEAD" };
     public bool PublicFormEnabled { get; set; }
+    public DateTime? PublicFormExpiresAt { get; set; }
+    public int? PublicFormMaxSubmissions { get; set; }
     public int OrderIndex { get; set; } = 1;
     public bool IsActive { get; set; } = true;
     public JsonElement UiConfig { get; set; }
@@ -129,6 +143,8 @@ public class UpsertTableRequest
     public string? ApprovalField { get; set; } = "trang_thai_duyet";
     public List<string> ApproverRoles { get; set; } = new() { "ADMIN", "HR_MANAGER", "ASSET_LEAD" };
     public bool PublicFormEnabled { get; set; }
+    public DateTime? PublicFormExpiresAt { get; set; }
+    public int? PublicFormMaxSubmissions { get; set; }
     public int OrderIndex { get; set; } = 1;
     public bool IsActive { get; set; } = true;
     public List<FormRuleDto>? FormRules { get; set; }
@@ -289,6 +305,7 @@ public class AppRecordDto
     public List<string> CurrentStepApproverRoles { get; set; } = new();
     public List<WorkflowHistoryEntryDto> WorkflowHistory { get; set; } = new();
     public List<WorkflowStepDto>? WorkflowSnapshot { get; set; }
+    public List<WorkflowStepApprovalVoteDto> StepApprovals { get; set; } = new();
     public DateTime? DeletedAt { get; set; }
     public string? DeletedBy { get; set; }
     public List<ValidationErrorItem> ValidationErrors { get; set; } = new();
@@ -375,6 +392,7 @@ public class ImportPreviewDto
 public class ApprovalActionRequest
 {
     public bool Approve { get; set; }
+    public string? Action { get; set; } // APPROVE | REJECT | RETURN
     public string? Reason { get; set; }
     public int? ExpectedVersion { get; set; }
     public int? ExpectedStepOrder { get; set; }
@@ -710,6 +728,7 @@ public class SysUserDto
     public string? Email { get; set; }
     public string? EmployeeCode { get; set; }
     public string Department { get; set; } = "Toàn công ty";
+    public string? OrgUnitId { get; set; }
     public string RoleCode { get; set; } = "STAFF";
     public List<string> RoleCodes { get; set; } = new();
     public List<string> RoleNames { get; set; } = new();
@@ -785,6 +804,7 @@ public class OidcDiscoveryResultDto
     public string AuthorizationUrl { get; set; } = string.Empty;
     public string TokenUrl { get; set; } = string.Empty;
     public string? UserinfoUrl { get; set; }
+    public string? JwksUri { get; set; }
 }
 
 public class LoginRequest
@@ -801,6 +821,7 @@ public class UpsertUserRequest
     public string? Email { get; set; }
     public string? EmployeeCode { get; set; }
     public string Department { get; set; } = "Toàn công ty";
+    public string? OrgUnitId { get; set; }
     public string RoleCode { get; set; } = "STAFF";
     public List<string>? RoleCodes { get; set; }
     public string? Password { get; set; }
@@ -867,7 +888,7 @@ public class SysSavedViewDto
     public string AppId { get; set; } = string.Empty;
     public string TableId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
-    public Dictionary<string, string> Filters { get; set; } = new();
+    public JsonElement Filters { get; set; }
     public string? SortField { get; set; }
     public string SortDir { get; set; } = "DESC";
     public bool IsShared { get; set; } = true;
@@ -880,7 +901,7 @@ public class UpsertSavedViewRequest
     public string AppId { get; set; } = string.Empty;
     public string TableId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
-    public Dictionary<string, string> Filters { get; set; } = new();
+    public JsonElement? Filters { get; set; }
     public string? SortField { get; set; }
     public string SortDir { get; set; } = "DESC";
     public bool IsShared { get; set; } = true;
@@ -1471,6 +1492,86 @@ public class WorkflowStepDto
     public List<string> ApproverUsers { get; set; } = new();
     public int SlaHours { get; set; } = 24;
     public bool RequireCommentOnReject { get; set; }
+    public string ApprovalMode { get; set; } = "ANY"; // ANY | ALL | QUORUM
+    public int QuorumCount { get; set; } = 1;
+    public bool AllowReturnToPrevious { get; set; }
+}
+
+public class WorkflowStepApprovalVoteDto
+{
+    public int StepOrder { get; set; }
+    public string Actor { get; set; } = string.Empty;
+    public string? ActorRole { get; set; }
+    public string? DelegatedFrom { get; set; }
+    public DateTime At { get; set; } = DateTime.UtcNow;
+}
+
+public class SysWorkflowDelegationDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string DelegatorUsername { get; set; } = string.Empty;
+    public string DelegateUsername { get; set; } = string.Empty;
+    public string? AppId { get; set; }
+    public DateTime StartsAt { get; set; }
+    public DateTime ExpiresAt { get; set; }
+    public string? Reason { get; set; }
+    public bool IsActive { get; set; } = true;
+    public DateTime CreatedAt { get; set; }
+}
+
+public class UpsertWorkflowDelegationRequest
+{
+    public string? Id { get; set; }
+    public string? DelegatorUsername { get; set; }
+    public string DelegateUsername { get; set; } = string.Empty;
+    public string? AppId { get; set; }
+    public DateTime? StartsAt { get; set; }
+    public DateTime ExpiresAt { get; set; }
+    public string? Reason { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+public class BusinessHolidayDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string HolidayDate { get; set; } = string.Empty; // yyyy-MM-dd
+    public string Name { get; set; } = string.Empty;
+    public bool IsRecurring { get; set; }
+}
+
+public class UpsertBusinessHolidayRequest
+{
+    public string? Id { get; set; }
+    public string HolidayDate { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public bool IsRecurring { get; set; }
+}
+
+public class RestoreRecordFieldsRequest
+{
+    public string AuditId { get; set; } = string.Empty;
+    public List<string> Fields { get; set; } = new();
+    public int? ExpectedVersion { get; set; }
+}
+
+public class GlobalSearchHitDto
+{
+    public string Kind { get; set; } = string.Empty; // APP | RECORD | CHAT | ATTACHMENT
+    public string Id { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string Subtitle { get; set; } = string.Empty;
+    public string Url { get; set; } = string.Empty;
+    public string? Badge { get; set; }
+    public DateTime? Timestamp { get; set; }
+}
+
+public class GlobalSearchResultDto
+{
+    public string Query { get; set; } = string.Empty;
+    public List<GlobalSearchHitDto> Apps { get; set; } = new();
+    public List<GlobalSearchHitDto> Records { get; set; } = new();
+    public List<GlobalSearchHitDto> Chats { get; set; } = new();
+    public List<GlobalSearchHitDto> Attachments { get; set; } = new();
 }
 
 public class AppWorkflowDto
@@ -1514,6 +1615,9 @@ public class AiSystemSettingsDto
     public bool IsEnabled { get; set; } = true;
     public string? DefaultProviderId { get; set; } = "ai_gemini";
     public bool FallbackToRuleEngine { get; set; } = true;
+    public bool MaskPiiBeforeCloudLlm { get; set; } = true;
+    public int MonthlyTokenBudget { get; set; } = 0; // 0 = unlimited
+    public bool PreferLocalForSensitive { get; set; } = false;
     public double Temperature { get; set; } = 0.2;
     public int MaxTokens { get; set; } = 2048;
     public int TimeoutSeconds { get; set; } = 45;
@@ -1629,5 +1733,129 @@ public class AiStatusDto
     public string? ActiveProviderType { get; set; }
     public string? ActiveModel { get; set; }
     public bool FallbackToRuleEngine { get; set; } = true;
+    public bool MaskPiiBeforeCloudLlm { get; set; } = true;
+    public int MonthlyTokenBudget { get; set; }
+    public long MonthlyTokensUsed { get; set; }
+    public bool PreferLocalForSensitive { get; set; }
     public List<string> EnabledFeatures { get; set; } = new();
+}
+
+// =========================================================================
+// Phase 3: Enterprise AI Agents & Ecosystem DTOs
+// =========================================================================
+
+public class AiImportMapRequest
+{
+    public string TableId { get; set; } = string.Empty;
+    public List<string> Headers { get; set; } = new();
+    public List<List<string?>> SampleRows { get; set; } = new();
+}
+
+public class AiImportMappingSuggestion
+{
+    public string ExcelHeader { get; set; } = string.Empty;
+    public string? ColumnCode { get; set; }
+    public string? ColumnName { get; set; }
+    public double Confidence { get; set; }
+    public string TransformHint { get; set; } = "NONE"; // NONE | DATE_DMY | VND_INT | PHONE_VN | UPPERCASE | CATEGORY_FUZZY
+    public string? Reason { get; set; }
+}
+
+public class AiImportMapResult
+{
+    public List<AiImportMappingSuggestion> Mappings { get; set; } = new();
+    public string Engine { get; set; } = string.Empty;
+}
+
+public class AiDocOcrRequest
+{
+    public string TableId { get; set; } = string.Empty;
+    public string? RawText { get; set; }
+    public string? ImageBase64 { get; set; }
+    public string? MimeType { get; set; }
+    public string? FileName { get; set; }
+}
+
+public class AiDocOcrResult
+{
+    public Dictionary<string, object?> Fields { get; set; } = new();
+    public Dictionary<string, List<Dictionary<string, object?>>> SubTables { get; set; } = new();
+    public double Confidence { get; set; }
+    public List<string> Warnings { get; set; } = new();
+    public string Engine { get; set; } = string.Empty;
+}
+
+public class AiWorkflowTriageResult
+{
+    public string RiskLevel { get; set; } = "LOW"; // LOW | MEDIUM | HIGH
+    public int RiskScore { get; set; }
+    public string Recommendation { get; set; } = "APPROVE_FAST"; // APPROVE_FAST | REVIEW_CAREFULLY | REQUEST_CLARIFICATION
+    public string RecommendationLabel { get; set; } = string.Empty;
+    public List<string> SummaryBullets { get; set; } = new();
+    public List<string> Anomalies { get; set; } = new();
+    public int HistoricalSampleSize { get; set; }
+    public string Engine { get; set; } = string.Empty;
+}
+
+public class AiChatActionItem
+{
+    public string Title { get; set; } = string.Empty;
+    public string? AssigneeUsername { get; set; }
+    public string? DueDate { get; set; }
+    public string Priority { get; set; } = "MEDIUM";
+    public string? SourceMessageId { get; set; }
+}
+
+public class AiChatCopilotResult
+{
+    public string Summary { get; set; } = string.Empty;
+    public List<AiChatActionItem> ActionItems { get; set; } = new();
+    public int AnalyzedMessages { get; set; }
+    public string Engine { get; set; } = string.Empty;
+}
+
+public class AiNlFilterCondition
+{
+    public string Field { get; set; } = string.Empty;
+    public string Op { get; set; } = "contains";
+    public string Value { get; set; } = string.Empty;
+    public string? Value2 { get; set; }
+}
+
+public class AiNlFilterSpec
+{
+    public string? Search { get; set; }
+    public string? Status { get; set; }
+    public string Logic { get; set; } = "AND";
+    public List<AiNlFilterCondition> Conditions { get; set; } = new();
+    public string AggregateMetric { get; set; } = "COUNT"; // COUNT | SUM | AVG
+    public string? MetricField { get; set; }
+    public string? GroupByField { get; set; }
+    public string? SortField { get; set; }
+    public string SortDir { get; set; } = "DESC";
+}
+
+public class AiDashboardInsightsRequest
+{
+    public string TableId { get; set; } = string.Empty;
+    public string Question { get; set; } = string.Empty;
+}
+
+public class AiDashboardGroupStat
+{
+    public string Group { get; set; } = string.Empty;
+    public int Count { get; set; }
+    public decimal MetricValue { get; set; }
+}
+
+public class AiDashboardInsightsResult
+{
+    public string Question { get; set; } = string.Empty;
+    public string Answer { get; set; } = string.Empty;
+    public AiNlFilterSpec AppliedPlan { get; set; } = new();
+    public int MatchingRecords { get; set; }
+    public decimal? AggregateValue { get; set; }
+    public List<AiDashboardGroupStat> Breakdown { get; set; } = new();
+    public List<AppRecordDto> SampleRecords { get; set; } = new();
+    public string Engine { get; set; } = string.Empty;
 }

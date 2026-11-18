@@ -120,8 +120,24 @@ public class IntegrationsController : ControllerBase
     [HttpGet("api/integrations/apps/{appId}/plugins")]
     public async Task<IActionResult> ListAppPlugins(string appId, [FromQuery] bool enabledOnly = false)
     {
-        var (_, err) = await RequireIntegrationAdminAsync();
-        if (err != null) return err;
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+
+        var isIntegrationAdmin = AuthService.IsAdminUser(user)
+            || AuthService.HasPermission(user, "studio.manage")
+            || AuthService.HasPermission(user, "integration.manage");
+
+        if (!isIntegrationAdmin)
+        {
+            if (!enabledOnly)
+                return StatusCode(403, new { success = false, message = "Không có quyền quản lý cấu hình plugin ứng dụng." });
+
+            var app = await _metadata.GetAppByCodeOrIdAsync(appId);
+            if (app == null)
+                return NotFound(new { success = false, message = "Không tìm thấy ứng dụng." });
+            if (!AuthService.CanAccessApp(user, app.Code))
+                return StatusCode(403, new { success = false, message = "Không có quyền truy cập ứng dụng này." });
+        }
 
         var bindings = await _integrations.ListAppPluginBindingsAsync(appId, enabledOnly);
         return Ok(new { success = true, data = bindings });
@@ -173,20 +189,116 @@ public class IntegrationsController : ControllerBase
         return Ok(new { success = ok, message });
     }
 
+    [HttpPost("api/integrations/einvoice/parse-xml")]
+    public async Task<IActionResult> ParseEInvoiceXml([FromBody] Dictionary<string, string?> body)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+
+        var xml = body.GetValueOrDefault("xml") ?? string.Empty;
+        var tableId = body.GetValueOrDefault("tableId");
+        try
+        {
+            var parsed = VietnamIntegrationService.ParseVnInvoiceXml(xml);
+            if (!string.IsNullOrWhiteSpace(tableId))
+            {
+                var cols = await _metadata.GetColumnsAsync(tableId);
+                var (fields, subTables) = VietnamIntegrationService.MapVnInvoiceXmlToTableColumns(parsed, cols);
+                parsed["suggestedFields"] = fields;
+                parsed["suggestedSubTables"] = subTables;
+            }
+            return Ok(new { success = true, data = parsed });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { success = false, message = $"XML hóa đơn không hợp lệ: {ex.Message}" });
+        }
+    }
+
     [HttpPost("api/integrations/plugins/{code}/execute")]
     public async Task<IActionResult> ExecutePlugin(string code, [FromBody] Dictionary<string, object?> body)
     {
-        var (user, err) = await RequireIntegrationAdminAsync();
-        if (err != null) return err;
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
 
         var op = body.GetValueOrDefault("operation")?.ToString();
         if (string.IsNullOrWhiteSpace(op))
             return BadRequest(new { success = false, message = "Thiếu trường 'operation'." });
 
+        var isIntegrationAdmin = AuthService.IsAdminUser(user)
+            || AuthService.HasPermission(user, "studio.manage")
+            || AuthService.HasPermission(user, "integration.manage");
+
+        var recordId = body.GetValueOrDefault("recordId")?.ToString();
+        var bodyAppId = body.GetValueOrDefault("appId")?.ToString();
+        var bodyTableId = body.GetValueOrDefault("tableId")?.ToString();
+
+        AppRecordDto? record = null;
+        if (!string.IsNullOrWhiteSpace(recordId))
+        {
+            record = await _records.GetRecordByIdAsync(recordId);
+            if (record == null && !isIntegrationAdmin)
+                return NotFound(new { success = false, message = "Không tìm thấy bản ghi." });
+        }
+
+        var targetAppId = record?.AppId ?? bodyAppId;
+        var targetTableId = record?.TableId ?? bodyTableId;
+        AppPluginBindingDto? binding = null;
+
+        if (!string.IsNullOrWhiteSpace(targetAppId))
+        {
+            var bindings = await _integrations.ListAppPluginBindingsAsync(targetAppId, enabledOnly: true);
+            binding = bindings.FirstOrDefault(b =>
+                string.Equals(b.PluginCode, code, StringComparison.OrdinalIgnoreCase) &&
+                (string.IsNullOrWhiteSpace(b.TableId) || string.IsNullOrWhiteSpace(targetTableId) || string.Equals(b.TableId, targetTableId, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        if (!isIntegrationAdmin)
+        {
+            if (string.IsNullOrWhiteSpace(targetAppId) || string.IsNullOrWhiteSpace(targetTableId))
+                return StatusCode(403, new { success = false, message = "Thiếu ngữ cảnh bản ghi/ứng dụng để thực thi plugin." });
+
+            var app = await _metadata.GetAppByCodeOrIdAsync(targetAppId);
+            if (app == null || !AuthService.CanAccessApp(user, app.Code))
+                return StatusCode(403, new { success = false, message = "Không có quyền truy cập ứng dụng này." });
+
+            if (!AuthService.CanAccessTable(user, app.Code, targetTableId, "edit") &&
+                !AuthService.CanAccessTable(user, app.Code, targetTableId, "approve"))
+            {
+                return StatusCode(403, new { success = false, message = "Không có quyền sửa hoặc phê duyệt dữ liệu để chạy plugin." });
+            }
+
+            if (record != null)
+            {
+                var tbl = (await _metadata.GetTablesAsync(app.Id, null)).FirstOrDefault(t => t.Id == targetTableId);
+                var rowScope = AuthService.ResolveRowScope(user, app.Code, targetTableId, tbl?.RowScope);
+                if (!await _records.IsRecordOwnedByUserAsync(record.Id, user, rowScope))
+                    return StatusCode(403, new { success = false, message = "Không có quyền thao tác trên bản ghi này." });
+            }
+
+            if (binding == null)
+                return StatusCode(403, new { success = false, message = $"Plugin '{code}' chưa được kích hoạt cho bảng/ứng dụng này." });
+        }
+
         try
         {
-            var result = await _vietnam.ExecutePluginAsync(code, op, body, user!.Username);
-            return Ok(new { success = result.Success, data = result });
+            var result = await _vietnam.ExecutePluginAsync(code, op, body, user.Username);
+            AppRecordDto? updatedRecord = null;
+            Dictionary<string, object?> writtenFields = new();
+            string? writeBackWarning = null;
+            if (result.Success && record != null && binding != null)
+            {
+                (updatedRecord, writtenFields, writeBackWarning) = await _vietnam.TryWriteBackPluginResultAsync(
+                    record.Id, binding, result, user.Username, AuthService.IsAdminUser(user));
+            }
+            return Ok(new
+            {
+                success = result.Success,
+                data = result,
+                updatedRecord,
+                updatedFields = writtenFields,
+                writeBackWarning
+            });
         }
         catch (InvalidOperationException ex)
         {
@@ -199,7 +311,8 @@ public class IntegrationsController : ControllerBase
     {
         using var reader = new StreamReader(Request.Body, Encoding.UTF8);
         var rawBody = await reader.ReadToEndAsync();
-        var sigHeader = Request.Headers["X-SmartApps-Signature"].FirstOrDefault();
+        var sigHeader = Request.Headers["X-SmartApps-Signature"].FirstOrDefault()
+            ?? Request.Headers.Authorization.FirstOrDefault();
 
         Dictionary<string, object?> payload;
         try

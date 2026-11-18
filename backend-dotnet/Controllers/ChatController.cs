@@ -11,12 +11,14 @@ public class ChatController : ControllerBase
     private readonly ChatService _chat;
     private readonly TaskService _tasks;
     private readonly AuthService _auth;
+    private readonly AiService _ai;
 
-    public ChatController(ChatService chat, TaskService tasks, AuthService auth)
+    public ChatController(ChatService chat, TaskService tasks, AuthService auth, AiService ai)
     {
         _chat = chat;
         _tasks = tasks;
         _auth = auth;
+        _ai = ai;
     }
 
     [HttpGet("users")]
@@ -153,6 +155,26 @@ public class ChatController : ControllerBase
         var result = await _chat.ConvertMessageToTaskAsync(messageId, user.Username, req);
         if (result == null) return NotFound(new { success = false, message = "Không tìm thấy tin nhắn." });
         return Ok(new { success = true, data = new { task = result.Value.Task, message = result.Value.Message } });
+    }
+
+    [HttpPost("channels/{id}/ai-copilot")]
+    public async Task<IActionResult> AiCopilot(string id)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+
+        try
+        {
+            var page = await _chat.ListMessagePageAsync(id, user.Username, limit: 50);
+            var channels = await _chat.ListChannelsAsync(user.Username);
+            var ch = channels.FirstOrDefault(c => c.Id == id);
+            var result = await _ai.SummarizeChatThreadAsync(ch?.Name ?? id, page.Items, user.Username);
+            return Ok(new { success = true, data = result });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { success = false, message = ex.Message });
+        }
     }
 
     [HttpPost("messages/{messageId}/reactions")]

@@ -7,7 +7,7 @@ using SmartApps.Api.Models;
 
 namespace SmartApps.Api.Services;
 
-public class AiService
+public partial class AiService
 {
     private readonly string _connStr;
     private readonly IHttpClientFactory _httpFactory;
@@ -279,6 +279,9 @@ public class AiService
             IsEnabled = req.IsEnabled,
             DefaultProviderId = string.IsNullOrWhiteSpace(req.DefaultProviderId) ? "ai_gemini" : req.DefaultProviderId.Trim(),
             FallbackToRuleEngine = req.FallbackToRuleEngine,
+            MaskPiiBeforeCloudLlm = req.MaskPiiBeforeCloudLlm,
+            MonthlyTokenBudget = Math.Max(0, req.MonthlyTokenBudget),
+            PreferLocalForSensitive = req.PreferLocalForSensitive,
             Temperature = Math.Clamp(req.Temperature, 0.0, 2.0),
             MaxTokens = Math.Clamp(req.MaxTokens, 128, 32768),
             TimeoutSeconds = Math.Clamp(req.TimeoutSeconds, 5, 180),
@@ -471,6 +474,7 @@ public class AiService
         var sys = await GetAiSystemSettingsAsync();
         var providers = await LoadProvidersInternalAsync();
         var active = SelectActiveProvider(providers, sys, null);
+        var usedTokens = await GetMonthlyTokensUsedAsync();
         return new AiStatusDto
         {
             IsEnabled = sys.IsEnabled,
@@ -480,6 +484,10 @@ public class AiService
             ActiveProviderType = active?.ProviderType,
             ActiveModel = active?.Model,
             FallbackToRuleEngine = sys.FallbackToRuleEngine,
+            MaskPiiBeforeCloudLlm = sys.MaskPiiBeforeCloudLlm,
+            MonthlyTokenBudget = sys.MonthlyTokenBudget,
+            MonthlyTokensUsed = usedTokens,
+            PreferLocalForSensitive = sys.PreferLocalForSensitive,
             EnabledFeatures = sys.EnabledFeatures
         };
     }
@@ -556,10 +564,22 @@ public class AiService
         };
     }
 
-    public async Task<(bool Ok, string Content, string ProviderName, string Model, string? Error)> CompleteAsync(
+    public Task<(bool Ok, string Content, string ProviderName, string Model, string? Error)> CompleteAsync(
         string featureCode,
         string systemPrompt,
         string userPrompt,
+        string? username = null,
+        bool jsonMode = false,
+        string? overrideProviderId = null)
+        => CompleteWithMediaAsync(featureCode, systemPrompt, userPrompt, null, null, sensitive: false, username, jsonMode, overrideProviderId);
+
+    public async Task<(bool Ok, string Content, string ProviderName, string Model, string? Error)> CompleteWithMediaAsync(
+        string featureCode,
+        string systemPrompt,
+        string userPrompt,
+        string? imageBase64 = null,
+        string? imageMimeType = null,
+        bool sensitive = false,
         string? username = null,
         bool jsonMode = false,
         string? overrideProviderId = null)
@@ -575,13 +595,32 @@ public class AiService
             return (false, string.Empty, "Disabled", string.Empty, $"Chức năng {featureCode} đang bị tắt trong Cài đặt AI.");
         }
 
+        if (sys.MonthlyTokenBudget > 0)
+        {
+            var monthlyUsed = await GetMonthlyTokensUsedAsync();
+            if (monthlyUsed >= sys.MonthlyTokenBudget)
+            {
+                return (false, string.Empty, "BudgetExceeded", string.Empty,
+                    $"Đã vượt hạn mức AI tháng ({monthlyUsed:N0}/{sys.MonthlyTokenBudget:N0} tokens).");
+            }
+        }
+
         var providers = await LoadProvidersInternalAsync();
-        var provider = SelectActiveProvider(providers, sys, overrideProviderId);
+        AiProviderInternal? provider = null;
+        if (sensitive && sys.PreferLocalForSensitive && string.IsNullOrWhiteSpace(overrideProviderId))
+        {
+            provider = providers.FirstOrDefault(p => p.IsEnabled && p.IsConfigured && p.ProviderType == "OPENAI_COMPATIBLE");
+        }
+        provider ??= SelectActiveProvider(providers, sys, overrideProviderId);
         if (provider == null)
         {
             return (false, string.Empty, "Unconfigured", string.Empty,
                 "Chưa có nhà cung cấp AI nào được bật và cấu hình API Key.");
         }
+
+        var effectivePrompt = (!IsLocalProvider(provider) && sys.MaskPiiBeforeCloudLlm)
+            ? MaskPiiText(userPrompt)
+            : userPrompt;
 
         var fullSystemPrompt = string.IsNullOrWhiteSpace(sys.SystemPromptPrefix)
             ? systemPrompt
@@ -599,11 +638,13 @@ public class AiService
             provider.RawApiKey,
             provider.OrganizationId,
             fullSystemPrompt,
-            userPrompt,
+            effectivePrompt,
             temp,
             maxTok,
             timeout,
-            jsonMode);
+            jsonMode,
+            imageBase64,
+            imageMimeType);
         sw.Stop();
 
         await WriteLogAsync(
@@ -686,7 +727,7 @@ public class AiService
             Code = "AI_WORKFLOW_TRIAGE",
             Name = "AI Tóm tắt & Đề xuất Phê duyệt Đa cấp",
             Module = "Approval Workflow & Cổng Điều hành (/)",
-            Status = "PROPOSED",
+            Status = "INTEGRATED",
             Description = "Tự động chấm điểm rủi ro/ưu tiên cho hồ sơ chờ duyệt, tóm tắt chênh lệch ngân sách hoặc điều khoản cần lưu ý cho người phê duyệt.",
             Benefit = "Tăng tốc độ phê duyệt trên Cổng Điều hành mà vẫn kiểm soát chặt sai sót.",
             TargetRoute = "/admin",
@@ -697,7 +738,7 @@ public class AiService
             Code = "AI_CHAT_COPILOT",
             Name = "AI Chat Copilot & Tách việc tự động",
             Module = "Chat Nội bộ & Giao việc (/chat, /tasks)",
-            Status = "PROPOSED",
+            Status = "INTEGRATED",
             Description = "Tóm tắt cuộc hội thoại dài trong kênh Chat, trích xuất Action Items thành thẻ công việc (/task) kèm người phụ trách và hạn hoàn thành.",
             Benefit = "Không bỏ sót đầu việc trong các kênh trao đổi đông thành viên.",
             TargetRoute = "/chat",
@@ -708,7 +749,7 @@ public class AiService
             Code = "AI_DASHBOARD_INSIGHTS",
             Name = "Hỏi đáp Dữ liệu & Phân tích Dashboard (NL2Query)",
             Module = "Analytics & Dashboard Widgets (/apps/[appCode])",
-            Status = "PROPOSED",
+            Status = "INTEGRATED",
             Description = "Đặt câu hỏi tiếng Việt (VD: 'Chi phí bảo trì quý này tăng ở bộ phận nào?') để AI tổng hợp nhận định, cảnh báo xu hướng từ app_records.",
             Benefit = "Lãnh đạo khai thác dữ liệu tức thì mà không cần tạo bộ lọc thủ công.",
             TargetRoute = "/apps",
@@ -719,7 +760,7 @@ public class AiService
             Code = "AI_IMPORT_MAPPER",
             Name = "Ánh xạ & Chuẩn hóa Dữ liệu Nhập Excel thông minh",
             Module = "Excel Import & Excel-to-App",
-            Status = "PROPOSED",
+            Status = "INTEGRATED",
             Description = "Tự động ghép cột file Excel có tên không đồng nhất vào sys_columns, gợi ý chuẩn hóa ngày tháng, tiền tệ, mã danh mục trước khi lưu.",
             Benefit = "Giảm lỗi dữ liệu khi chuyển đổi từ file Excel rời rạc của các phòng ban.",
             TargetRoute = "/studio",
@@ -730,7 +771,7 @@ public class AiService
             Code = "AI_DOC_OCR",
             Name = "Trích xuất Hóa đơn / Chứng từ đính kèm (OCR + LLM)",
             Module = "Attachments & Public Intake Forms (/forms/[tableId])",
-            Status = "PROPOSED",
+            Status = "INTEGRATED",
             Description = "Đọc ảnh/PDF hóa đơn, hợp đồng, CCCD đính kèm để tự động điền vào các cột và dòng chi tiết SUB_TABLE.",
             Benefit = "Tự động hóa khâu nhập chứng từ kế toán, nhân sự và tiếp nhận biểu mẫu bên ngoài.",
             TargetRoute = "/forms",
@@ -817,18 +858,23 @@ public class AiService
         double temperature,
         int maxTokens,
         int timeoutSeconds,
-        bool jsonMode)
+        bool jsonMode,
+        string? imageBase64 = null,
+        string? imageMimeType = null)
     {
         try
         {
             var client = _httpFactory.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 5, 180));
             var cleanBase = baseUrl.Trim().TrimEnd('/');
+            var (hasMedia, mediaData, mediaMime) = NormalizeMediaData(imageBase64, imageMimeType);
 
             if (providerType == "GEMINI")
             {
                 var url = $"{cleanBase}/models/{Uri.EscapeDataString(model)}:generateContent?key={Uri.EscapeDataString(apiKey ?? string.Empty)}";
-                var payload = BuildGeminiGeneratePayload(systemPrompt, userPrompt, temperature, maxTokens, jsonMode);
+                var payload = hasMedia
+                    ? BuildGeminiMultimodalPayload(systemPrompt, userPrompt, mediaData, mediaMime, temperature, maxTokens, jsonMode)
+                    : BuildGeminiGeneratePayload(systemPrompt, userPrompt, temperature, maxTokens, jsonMode);
                 using var reqMsg = new HttpRequestMessage(HttpMethod.Post, url)
                 {
                     Content = new StringContent(JsonSerializer.Serialize(payload, JsonOpts), Encoding.UTF8, "application/json")
@@ -846,7 +892,9 @@ public class AiService
             if (providerType == "ANTHROPIC")
             {
                 var url = $"{cleanBase}/messages";
-                var payload = BuildAnthropicMessagesPayload(model, systemPrompt, userPrompt, temperature, maxTokens);
+                var payload = hasMedia && mediaMime.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+                    ? BuildAnthropicMultimodalPayload(model, systemPrompt, userPrompt, mediaData, mediaMime, temperature, maxTokens)
+                    : BuildAnthropicMessagesPayload(model, systemPrompt, userPrompt, temperature, maxTokens);
                 using var reqMsg = new HttpRequestMessage(HttpMethod.Post, url)
                 {
                     Content = new StringContent(JsonSerializer.Serialize(payload, JsonOpts), Encoding.UTF8, "application/json")
@@ -867,14 +915,16 @@ public class AiService
             var openAiUrl = cleanBase.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)
                 ? cleanBase
                 : $"{cleanBase}/chat/completions";
-            var openAiPayload = BuildOpenAiChatPayload(
-                model,
-                systemPrompt,
-                userPrompt,
-                temperature,
-                maxTokens,
-                jsonMode,
-                includeResponseFormat: providerType == "OPENAI");
+            var openAiPayload = hasMedia && mediaMime.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+                ? BuildOpenAiMultimodalPayload(model, systemPrompt, userPrompt, mediaData, mediaMime, temperature, maxTokens, jsonMode, providerType == "OPENAI")
+                : BuildOpenAiChatPayload(
+                    model,
+                    systemPrompt,
+                    userPrompt,
+                    temperature,
+                    maxTokens,
+                    jsonMode,
+                    includeResponseFormat: providerType == "OPENAI");
 
             using var oaiReq = new HttpRequestMessage(HttpMethod.Post, openAiUrl)
             {

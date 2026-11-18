@@ -44,6 +44,12 @@ public class AttachmentsController : ControllerBase
         ".exe", ".bat", ".cmd", ".com", ".msi", ".ps1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".sh", ".html", ".htm", ".svg", ".dll"
     };
 
+    public static bool IsBlockedExtension(string? fileName)
+    {
+        var ext = string.IsNullOrWhiteSpace(fileName) ? string.Empty : Path.GetExtension(fileName);
+        return !string.IsNullOrEmpty(ext) && BlockedExtensions.Contains(ext);
+    }
+
     [HttpPost]
     [RequestSizeLimit(15 * 1024 * 1024)]
     public async Task<IActionResult> Upload(

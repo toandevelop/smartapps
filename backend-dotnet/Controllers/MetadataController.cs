@@ -177,8 +177,15 @@ public class MetadataController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.TableId) || string.IsNullOrWhiteSpace(req.ColumnCode) || string.IsNullOrWhiteSpace(req.ColumnName))
             return BadRequest(new { success = false, message = "TableId, ColumnCode và ColumnName là bắt buộc." });
 
-        var item = await _metadata.UpsertColumnAsync(req);
-        return Ok(new { success = true, data = item });
+        try
+        {
+            var item = await _metadata.UpsertColumnAsync(req);
+            return Ok(new { success = true, data = item });
+        }
+        catch (FormulaCycleException ex)
+        {
+            return BadRequest(new { success = false, message = ex.Message, cycleColumns = ex.CycleColumns });
+        }
     }
 
     [HttpDelete("columns/{id}")]
