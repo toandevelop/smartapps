@@ -1,51 +1,53 @@
 # Hướng dẫn Đóng góp (Contributing Guide)
 
-Cảm ơn bạn đã quan tâm và muốn đóng góp cho **SmartApps Platform**! Mọi đóng góp từ báo lỗi, đề xuất tính năng, cải thiện tài liệu đến gửi Pull Request đều được hoan nghênh.
+Cảm ơn bạn đã quan tâm và muốn đóng góp cho **SmartApps Platform**! Tài liệu này áp dụng cho cả thành viên phát triển nội bộ lẫn cộng tác viên mã nguồn mở.
 
-## Quy trình Đóng góp (Pull Request Workflow)
+## Tài liệu Cộng tác Chi tiết
 
-1. **Fork** repository này về tài khoản GitHub của bạn.
-2. **Clone** bản fork về máy và tạo nhánh mới từ `main`:
-   ```bash
+Trước khi bắt đầu code, vui lòng xem qua bộ tài liệu dành cho nhóm phát triển tại [`docs/collaboration/`](docs/collaboration/README.md):
+
+- **[Hướng dẫn Onboarding](docs/collaboration/onboarding.md)** — Cài đặt PostgreSQL 16, .NET 9, Node.js, biến môi trường (`.env.example`) và xử lý lỗi local.
+- **[Quy trình Git & Code Review](docs/collaboration/git-and-review-workflow.md)** — Chiến lược nhánh, chuẩn commit, tách PR nhỏ, Definition of Done và xử lý CI.
+- **[Chuẩn Mã nguồn & Kiểm thử](docs/collaboration/coding-standards.md)** — Quy ước code cho Backend (.NET 9), Frontend (Next.js 16), PostgreSQL, Desktop (Rust/Tauri 2) và kiểm thử.
+- **[Tài liệu Kiến trúc & API](docs/architecture/README.md)** — Thiết kế hệ thống, danh mục API và luồng nghiệp vụ chi tiết.
+
+## Quy trình Đóng góp Nhanh (Pull Request Workflow)
+
+1. **Tạo nhánh làm việc** từ `main` mới nhất (hoặc **Fork** nếu đóng góp từ bên ngoài):
+   ```powershell
+   git checkout main
+   git pull origin main
    git checkout -b feat/ten-tinh-nang
-   # hoặc: git checkout -b fix/mo-ta-loi
+   # hoặc: fix/mo-ta-loi, docs/mo-ta, refactor/mo-ta, test/mo-ta
    ```
-3. **Cài đặt và chạy thử cục bộ**:
-   - **PostgreSQL 16**: Khởi tạo database `smartapps_db` với `db/schema.sql` (hoặc dùng `docker compose up -d postgres`).
-   - **Backend (.NET 9)**:
-     ```bash
-     cd backend-dotnet
-     dotnet run
-     ```
-   - **Frontend (Next.js 16)**:
-     ```bash
-     cd frontend-next
-     npm install
-     npm run dev
-     ```
-   - **Desktop (Rust / Tauri 2)** *(tùy chọn)*:
-     ```bash
-     cd desktop-rust
-     cargo check
-     ```
-4. **Chạy kiểm thử trước khi commit**:
-   ```bash
-   # Unit tests Backend (.NET 9 xUnit)
+2. **Cấu hình & chạy thử cục bộ** theo [Hướng dẫn Onboarding](docs/collaboration/onboarding.md) (tham khảo [`.env.example`](.env.example)):
+   - **PostgreSQL 16**: `docker compose up -d postgres` (hoặc PostgreSQL local với `db/schema.sql`).
+   - **Backend (.NET 9 - Port `5200`)**: `dotnet run --project ./backend-dotnet/SmartApps.Api.csproj`
+   - **Frontend (Next.js 16 - Port `4100`)**: `cd frontend-next && npm ci && npm run dev`
+   - **Desktop (Rust / Tauri 2)** *(tùy chọn)*: `cd desktop-rust && cargo check`
+3. **Chạy kiểm thử & kiểm tra chất lượng trước khi commit**:
+   ```powershell
+   # Unit & Integration tests Backend (.NET 9 xUnit)
    dotnet test backend-dotnet.Tests/SmartApps.Api.Tests.csproj
 
-   # Unit tests Frontend
+   # Type-check, Lint và Unit tests Frontend
    cd frontend-next
+   npx tsc --noEmit
+   npm run lint
    npm test
    ```
-5. **Commit & Push**:
-   - Viết commit message rõ ràng (khuyến khích theo chuẩn Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`).
-   - Không commit các file cấu hình bí mật (`.env`, API keys, mật khẩu thật, dữ liệu `uploads/` hoặc `backups/`).
-6. **Tạo Pull Request (PR)** vào nhánh `main` của repository gốc và mô tả rõ thay đổi, cách kiểm thử.
+   *(Nếu thay đổi luồng Form có điều kiện hoặc Nhập/Xuất Excel, chạy thêm `npm run test:e2e` với database test riêng `SMARTAPPS_E2E_POSTGRES`.)*
+4. **Commit & Push**:
+   - Tuân thủ **Conventional Commits** (`feat(scope): ...`, `fix(scope): ...`, `docs(scope): ...`, `refactor(scope): ...`, `test(scope): ...`, `chore(scope): ...`).
+   - **Tuyệt đối không commit** `.env`, mật khẩu thật, API keys, hoặc dữ liệu trong `backend-dotnet/uploads/` và `backend-dotnet/backups/`.
+5. **Tạo Pull Request (PR)** vào nhánh `main`:
+   - Điền đầy đủ [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md).
+   - Giữ PR gọn, tập trung một mục tiêu và theo dõi kết quả CI ([`.github/workflows/conditional-form-e2e.yml`](.github/workflows/conditional-form-e2e.yml)).
 
 ## Báo lỗi & Đề xuất Tính năng
 
-- Sử dụng mục **Issues** trên GitHub và chọn mẫu **Bug Report** hoặc **Feature Request** tương ứng.
-- Đính kèm các bước tái hiện, log lỗi (nếu có) và môi trường chạy (OS, phiên bản .NET/Node/Postgres).
+- Sử dụng mục **Issues** trên GitHub với mẫu **Bug Report** ([`.github/ISSUE_TEMPLATE/bug_report.md`](.github/ISSUE_TEMPLATE/bug_report.md)) hoặc **Feature Request** ([`.github/ISSUE_TEMPLATE/feature_request.md`](.github/ISSUE_TEMPLATE/feature_request.md)).
+- Đính kèm các bước tái hiện, log lỗi (đã che thông tin nhạy cảm) và phiên bản môi trường (OS, .NET, Node, PostgreSQL).
 
 ## Quy tắc Cộng đồng
 

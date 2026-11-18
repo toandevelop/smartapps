@@ -23,9 +23,10 @@ Nền tảng Low-Code / Metadata-Driven Multi-App kế thừa giao diện **Goog
 4. **Rust Desktop App (`desktop-rust/` - Tauri 2)**:
    - Shell Desktop Rust hỗ trợ cửa sổ App độc lập, System Tray menu, cấu hình Server URL động (`get_server_config`/`set_server_config`), lưu snapshot offline và hàng đợi đồng bộ offline (`queue_offline_mutation`).
 
-## Tài liệu phát triển và kỹ thuật
+## Tài liệu phát triển, cộng tác và kỹ thuật
 
-Bộ tài liệu dựa trên khảo sát mã ngày 17/11/2026 nằm tại [docs/architecture/README.md](docs/architecture/README.md), gồm kiến trúc, luồng dữ liệu/API, hướng dẫn phát triển, backlog ưu tiên và kết quả xác minh. Xem các giới hạn triển khai trong tài liệu trước khi dùng lệnh Docker bên dưới.
+- **Dành cho thành viên mới & làm việc nhóm:** Xem [docs/collaboration/README.md](docs/collaboration/README.md), gồm [Hướng dẫn Onboarding](docs/collaboration/onboarding.md), [Quy trình Git & Code Review](docs/collaboration/git-and-review-workflow.md), [Chuẩn Mã nguồn & Kiểm thử](docs/collaboration/coding-standards.md) và mẫu cấu hình [`.env.example`](.env.example).
+- **Kiến trúc & đặc tả kỹ thuật:** Bộ tài liệu dựa trên khảo sát mã ngày 17/11/2026 nằm tại [docs/architecture/README.md](docs/architecture/README.md), gồm kiến trúc, luồng dữ liệu/API, hướng dẫn phát triển, backlog ưu tiên và kết quả xác minh. Xem các giới hạn triển khai trong tài liệu trước khi dùng lệnh Docker bên dưới.
 
 ## Lệnh chạy & Kiểm thử
 
