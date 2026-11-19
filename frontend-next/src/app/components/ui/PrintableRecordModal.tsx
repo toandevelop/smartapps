@@ -9,7 +9,7 @@ import { getCategoryItemName } from '@/lib/category-service';
 import { resolveLookupLabel } from '@/lib/lookup-service';
 import { formatCurrencyVnd } from '@/lib/column-utils';
 import { useEscapeKey } from '@/lib/ui-hooks';
-import { renderPrintTemplateHtml, SysPrintTemplate } from '@/lib/print-template';
+import { getPagePrintCss, renderPrintTemplateHtml, SysPrintTemplate } from '@/lib/print-template';
 
 const CODE39_TABLE: Record<string, string> = {
   '0': 'nnnwwnwnn', '1': 'wnnwnnnnw', '2': 'nnwwnnnnw', '3': 'wnwwnnnnn',
@@ -95,6 +95,25 @@ export default function PrintableRecordModal({
 
   const codeText = record.recordKey || record.id;
 
+  const resolvedCustomData: Record<string, unknown> = { ...(record.data || {}) };
+  if (activeCustomTemplate) {
+    for (const col of columns) {
+      const val = resolvedCustomData[col.columnCode];
+      if (val === null || val === undefined || val === '') continue;
+      if (col.refTableId) {
+        resolvedCustomData[col.columnCode] = resolveLookupLabel(col, val) || val;
+      } else if (col.refCategoryCode) {
+        resolvedCustomData[col.columnCode] = getCategoryItemName(col.refCategoryCode, val)?.name || val;
+      }
+    }
+  }
+
+  const dialogMaxWidth = printMode === 'tag'
+    ? 460
+    : activeCustomTemplate?.orientation === 'landscape'
+    ? 980
+    : 780;
+
   const renderCell = (col: SysColumn): React.ReactNode => {
     const val = record.data?.[col.columnCode];
     const dt = (col.dataType || 'STRING').toUpperCase();
@@ -163,7 +182,7 @@ export default function PrintableRecordModal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-dialog printable-document" style={{ maxWidth: printMode === 'tag' ? 460 : 780 }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-dialog printable-document" style={{ maxWidth: dialogMaxWidth }} onClick={(e) => e.stopPropagation()}>
         <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 8, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <button
@@ -215,16 +234,28 @@ export default function PrintableRecordModal({
 
         {activeCustomTemplate ? (
           <div
+            className="printable-custom-sheet"
             style={{
               position: 'relative',
               border: '1px solid #cbd5e1',
               borderRadius: 10,
               padding: 22,
               backgroundColor: '#fff',
-              maxWidth: activeCustomTemplate.paperSize === 'K80' ? 340 : activeCustomTemplate.paperSize === 'LABEL_50X30' ? 400 : activeCustomTemplate.paperSize === 'A5' ? 560 : '100%',
+              color: '#111827',
+              maxWidth:
+                activeCustomTemplate.paperSize === 'K80'
+                  ? 340
+                  : activeCustomTemplate.paperSize === 'LABEL_50X30'
+                  ? 400
+                  : activeCustomTemplate.paperSize === 'A5'
+                  ? activeCustomTemplate.orientation === 'landscape'
+                    ? 740
+                    : 560
+                  : '100%',
               margin: '0 auto',
             }}
           >
+            <style>{getPagePrintCss(activeCustomTemplate.paperSize, activeCustomTemplate.orientation, activeCustomTemplate.cssStyles)}</style>
             {activeCustomTemplate.watermarkDraft && isNotApproved && (
               <div
                 style={{
@@ -263,13 +294,13 @@ export default function PrintableRecordModal({
                   approvalStatus: record.approvalStatus,
                   createdBy: record.createdBy,
                   approvedBy: record.approvedBy,
-                  data: record.data || {},
+                  data: resolvedCustomData,
                 }),
               }}
             />
           </div>
         ) : printMode === 'tag' ? (
-          <div style={{ border: '2px dashed #202124', borderRadius: 12, padding: 18, backgroundColor: '#fff', textAlign: 'center' }}>
+          <div style={{ border: '2px dashed #202124', borderRadius: 12, padding: 18, backgroundColor: '#fff', color: '#111827', textAlign: 'center' }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#5f6368', textTransform: 'uppercase' }}>
               {app.code} • {table.displayName}
             </div>
@@ -285,7 +316,7 @@ export default function PrintableRecordModal({
             </div>
           </div>
         ) : (
-          <div style={{ border: '2px solid #202124', borderRadius: 12, padding: 24, backgroundColor: '#fff' }}>
+          <div style={{ border: '2px solid #202124', borderRadius: 12, padding: 24, backgroundColor: '#fff', color: '#111827' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #dadce0', paddingBottom: 14, marginBottom: 18 }}>
               <div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#5f6368', textTransform: 'uppercase' }}>

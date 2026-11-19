@@ -1667,6 +1667,12 @@ function TemplateInstallModalBody({
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                          <span
+                            className="badge badge-info"
+                            style={{ fontSize: 10.5, padding: '2px 7px' }}
+                          >
+                            v{tpl.version || '2.0.0'}
+                          </span>
                           {isInstalled && (
                             <span
                               className="badge badge-success"
@@ -1706,7 +1712,7 @@ function TemplateInstallModalBody({
                           <span
                             key={f}
                             className="badge"
-                            style={{ backgroundColor: '#f1f3f4', color: '#3c4043', fontSize: 10.5, fontWeight: 500 }}
+                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)', fontSize: 10.5, fontWeight: 500 }}
                           >
                             {f}
                           </span>
@@ -1719,20 +1725,26 @@ function TemplateInstallModalBody({
                         style={{
                           fontSize: 11.5,
                           color: 'var(--text-muted)',
-                          backgroundColor: '#f8f9fa',
+                          backgroundColor: 'var(--bg-primary)',
                           padding: '6px 9px',
                           borderRadius: 8,
                           marginBottom: 8,
                           display: 'flex',
-                          justifyContent: 'space-between',
+                          flexDirection: 'column',
+                          gap: 3,
                         }}
                       >
-                        <span><strong>{tpl.moduleCount}</strong> phân hệ • <strong>{tpl.tableCount}</strong> bảng</span>
-                        <span><strong>{tpl.sampleRecordCount}</strong> mẫu • <strong>{tpl.widgetCount}</strong> KPI</span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span><strong>{tpl.moduleCount}</strong> phân hệ • <strong>{tpl.tableCount}</strong> bảng</span>
+                          <span><strong>{tpl.sampleRecordCount}</strong> mẫu • <strong>{tpl.widgetCount}</strong> KPI</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                          {tpl.formRuleCount ?? 0} Rule • {tpl.workflowCount ?? 0} WF • {tpl.printTemplateCount ?? 0} Mẫu in • {tpl.savedViewCount ?? 0} View
+                        </div>
                       </div>
 
                       {isCustomOpen && (
-                        <div style={{ padding: 10, borderRadius: 8, backgroundColor: '#f8f9fa', border: '1px solid var(--border-light)', marginBottom: 8 }}>
+                        <div style={{ padding: 10, borderRadius: 8, backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-light)', marginBottom: 8 }}>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 6, marginBottom: 6 }}>
                             <input
                               className="form-input"

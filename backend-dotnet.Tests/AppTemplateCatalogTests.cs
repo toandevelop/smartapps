@@ -133,4 +133,107 @@ public class AppTemplateCatalogTests
             }
         }
     }
+
+    [Fact]
+    public void AllTemplates_AndCoreApps_MeetV2Standards()
+    {
+        var compute = new DynamicComputeService();
+        var catSets = new Dictionary<string, HashSet<string>>(BaseCategories, StringComparer.OrdinalIgnoreCase);
+        var summaries = AppTemplateCatalog.GetSummaries();
+
+        Assert.All(summaries, s =>
+        {
+            Assert.Equal("2.0.0", s.Version);
+            Assert.True(s.FormRuleCount >= 1, $"Template {s.Code} missing FormRules");
+            Assert.True(s.WorkflowCount >= 1, $"Template {s.Code} missing Workflows");
+            Assert.True(s.AutomationCount >= 1, $"Template {s.Code} missing Automations");
+            Assert.True(s.PrintTemplateCount >= 1, $"Template {s.Code} missing PrintTemplates");
+            Assert.True(s.SavedViewCount >= 1, $"Template {s.Code} missing SavedViews");
+        });
+
+        foreach (var tpl in AppTemplateCatalog.GetAll())
+        {
+            Assert.Equal("2.0.0", tpl.Version);
+
+            var localCats = new Dictionary<string, HashSet<string>>(catSets, StringComparer.OrdinalIgnoreCase);
+            foreach (var cat in tpl.Categories)
+                localCats[cat.CategoryCode] = cat.Items.Select(i => i.ItemCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var colsByTable = new Dictionary<string, List<SysColumnDto>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var tbl in tpl.Modules.SelectMany(m => m.Tables))
+            {
+                Assert.Contains(tbl.PrimaryView, new[] { "table", "kanban", "calendar" });
+                Assert.NotEqual("table", tbl.Description);
+
+                var dtos = tbl.Columns.Select((c, i) => new SysColumnDto
+                {
+                    Id = $"col_{tbl.TableName}_{i}",
+                    TableId = tbl.TableName,
+                    ColumnCode = c.ColumnCode,
+                    ColumnName = c.ColumnName,
+                    DataType = c.DataType,
+                    IsRequired = c.IsRequired,
+                    IsIdentityKey = c.IsIdentityKey,
+                    ShowInTable = c.ShowInTable,
+                    ShowInForm = c.ShowInForm,
+                    Width = c.Width,
+                    ValidationRegex = c.ValidationRegex,
+                    RefCategoryCode = c.RefCategoryCode,
+                    AllowQuickCreate = c.AllowQuickCreate,
+                    RefAppId = c.RefAppId,
+                    RefTableId = c.RefTableId ?? c.InternalRefTableName,
+                    RefValueField = c.RefValueField,
+                    RefDisplayField = c.RefDisplayField,
+                    Formula = c.Formula,
+                    DefaultValue = c.DefaultValue,
+                    HiddenForRoles = c.HiddenForRoles ?? [],
+                    ReadOnlyForRoles = c.ReadOnlyForRoles ?? [],
+                    OrderIndex = c.OrderIndex
+                }).ToList();
+
+                DynamicComputeService.ValidateFormulaGraph(dtos);
+                FormRuleService.ValidateDefinition(tbl.FormRules, dtos);
+
+                foreach (var subCol in dtos.Where(c => c.DataType == "SUB_TABLE"))
+                {
+                    Assert.False(string.IsNullOrWhiteSpace(subCol.DefaultValue));
+                    Assert.StartsWith("[", subCol.DefaultValue!.TrimStart());
+                    var parsed = DynamicComputeService.ParseSubTableSchema(subCol.DefaultValue);
+                    Assert.True(parsed.Count >= 2, $"SUB_TABLE {tpl.Code}.{tbl.TableName}.{subCol.ColumnCode} should define >= 2 typed columns");
+                }
+
+                colsByTable[tbl.TableName] = dtos;
+
+                var matchingRecords = tpl.SampleRecords
+                    .Where(r => r.TableName.Equals(tbl.TableName, StringComparison.OrdinalIgnoreCase))
+                    .Select((r, idx) => ($"v2_{idx}", new Dictionary<string, object?>(r.Data)))
+                    .ToList();
+                if (matchingRecords.Count > 0)
+                {
+                    var results = compute.EvaluateAndValidate(dtos, localCats, matchingRecords, tbl.FormRules);
+                    Assert.All(results, r => Assert.True(r.IsValid,
+                        $"Template {tpl.Code}.{tbl.TableName} failed v2 FormRule/formula validation: {string.Join("; ", r.Errors.Select(e => e.Message))}"));
+                }
+            }
+
+            foreach (var sv in tpl.SavedViews)
+            {
+                Assert.True(colsByTable.ContainsKey(sv.TableName));
+                using var doc = System.Text.Json.JsonDocument.Parse(sv.FiltersJson);
+                Assert.Equal(System.Text.Json.JsonValueKind.Array, doc.RootElement.GetProperty("conditions").ValueKind);
+            }
+        }
+
+        var cores = AppTemplateCatalog.GetCoreAppV2Specs();
+        Assert.Equal(4, cores.Count);
+        Assert.All(cores, core =>
+        {
+            Assert.Equal("2.0.0", core.Version);
+            Assert.NotEmpty(core.FormRulesByTable);
+            Assert.NotEmpty(core.Automations);
+            Assert.NotEmpty(core.PrintTemplates);
+            Assert.NotEmpty(core.SavedViews);
+            Assert.NotEmpty(core.PluginBindings);
+        });
+    }
 }

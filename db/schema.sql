@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS sys_apps (
     order_index INT DEFAULT 1,
     is_active BOOLEAN DEFAULT TRUE,
     settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+    published_version INT NOT NULL DEFAULT 1,
+    publish_status VARCHAR(24) NOT NULL DEFAULT 'PUBLISHED',
+    published_at TIMESTAMPTZ,
+    published_by VARCHAR(64),
+    draft_snapshot JSONB,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -45,6 +50,8 @@ CREATE TABLE IF NOT EXISTS sys_tables (
     approval_field VARCHAR(128) DEFAULT 'trang_thai_duyet',
     approver_roles JSONB NOT NULL DEFAULT '["ADMIN","HR_MANAGER","ASSET_LEAD"]'::jsonb,
     public_form_enabled BOOLEAN DEFAULT FALSE,
+    public_form_expires_at TIMESTAMPTZ,
+    public_form_max_submissions INT,
     order_index INT DEFAULT 1,
     is_active BOOLEAN DEFAULT TRUE,
     ui_config JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -63,9 +70,11 @@ CREATE TABLE IF NOT EXISTS sys_columns (
     is_identity_key BOOLEAN DEFAULT FALSE,
     show_in_table BOOLEAN DEFAULT TRUE,
     show_in_form BOOLEAN DEFAULT TRUE,
+    show_in_parent_form BOOLEAN NOT NULL DEFAULT FALSE,
     width INT DEFAULT 170,
     validation_regex VARCHAR(255),
     ref_category_code VARCHAR(128),
+    allow_quick_create BOOLEAN NOT NULL DEFAULT FALSE,
     ref_app_id VARCHAR(64),
     ref_table_id VARCHAR(64),
     ref_value_field VARCHAR(128),
@@ -75,6 +84,7 @@ CREATE TABLE IF NOT EXISTS sys_columns (
     formula VARCHAR(512),
     default_value TEXT,
     hidden_for_roles JSONB NOT NULL DEFAULT '[]'::jsonb,
+    read_only_for_roles JSONB NOT NULL DEFAULT '[]'::jsonb,
     order_index INT DEFAULT 1,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -151,6 +161,7 @@ CREATE TABLE IF NOT EXISTS sys_users (
     email VARCHAR(255),
     employee_code VARCHAR(64),
     department VARCHAR(128) DEFAULT 'Toàn công ty',
+    org_unit_id VARCHAR(64),
     role_code VARCHAR(64) NOT NULL DEFAULT 'STAFF',
     role_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
     password_hash VARCHAR(255) NOT NULL,
@@ -198,7 +209,12 @@ CREATE TABLE IF NOT EXISTS app_records (
     approved_by VARCHAR(128),
     approved_at TIMESTAMPTZ,
     rejection_reason TEXT,
+    workflow_id VARCHAR(64),
+    current_step_order INT DEFAULT 0,
+    current_step_name VARCHAR(255),
+    workflow_history JSONB NOT NULL DEFAULT '[]'::jsonb,
     workflow_snapshot JSONB,
+    step_approvals JSONB NOT NULL DEFAULT '[]'::jsonb,
     deleted_at TIMESTAMPTZ,
     deleted_by VARCHAR(128),
     validation_errors JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -384,11 +400,14 @@ CREATE TABLE IF NOT EXISTS app_attachments (
     id VARCHAR(64) PRIMARY KEY,
     app_id VARCHAR(64),
     table_id VARCHAR(64),
+    record_id VARCHAR(64),
     file_name VARCHAR(255) NOT NULL,
     content_type VARCHAR(128) NOT NULL,
     size_bytes BIGINT NOT NULL,
     storage_path VARCHAR(512) NOT NULL,
     uploaded_by VARCHAR(128) DEFAULT 'system',
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    deleted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -418,6 +437,8 @@ CREATE TABLE IF NOT EXISTS sys_api_keys (
     table_id VARCHAR(64),
     scopes JSONB NOT NULL DEFAULT '["records:read","records:write"]'::jsonb,
     is_active BOOLEAN DEFAULT TRUE,
+    expires_at TIMESTAMPTZ,
+    rotated_at TIMESTAMPTZ,
     last_used_at TIMESTAMPTZ,
     created_by VARCHAR(128) DEFAULT 'admin',
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -525,3 +546,254 @@ CREATE TABLE IF NOT EXISTS sys_ai_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sys_ai_logs_created ON sys_ai_logs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_workflows (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    app_id VARCHAR(64) NOT NULL REFERENCES sys_apps(id) ON DELETE CASCADE,
+    table_id VARCHAR(64) NOT NULL REFERENCES sys_tables(id) ON DELETE CASCADE,
+    trigger_type VARCHAR(32) DEFAULT 'MANUAL_SUBMIT',
+    condition_field VARCHAR(128),
+    condition_operator VARCHAR(32) DEFAULT 'EQUALS',
+    condition_value TEXT,
+    steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_app_workflows_tbl ON app_workflows(table_id, is_active);
+
+-- Migration 0002..0014 Schema Extensions (mirrors DatabaseMigrationRunner)
+CREATE TABLE IF NOT EXISTS app_outbox_events (
+    id VARCHAR(64) PRIMARY KEY,
+    event_type VARCHAR(64) NOT NULL,
+    aggregate_type VARCHAR(64) NOT NULL,
+    aggregate_id VARCHAR(64) NOT NULL,
+    payload JSONB NOT NULL,
+    status VARCHAR(24) NOT NULL DEFAULT 'PENDING',
+    attempt_count INT NOT NULL DEFAULT 0,
+    max_attempts INT NOT NULL DEFAULT 5,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_error TEXT,
+    locked_at TIMESTAMPTZ,
+    processed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_pending
+    ON app_outbox_events(status, next_attempt_at)
+    WHERE status IN ('PENDING', 'FAILED');
+
+CREATE TABLE IF NOT EXISTS sys_app_releases (
+    id VARCHAR(64) PRIMARY KEY,
+    app_id VARCHAR(64) NOT NULL REFERENCES sys_apps(id) ON DELETE CASCADE,
+    version_number INT NOT NULL,
+    notes TEXT,
+    snapshot JSONB NOT NULL,
+    published_by VARCHAR(64) NOT NULL,
+    published_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(app_id, version_number)
+);
+CREATE INDEX IF NOT EXISTS idx_app_releases_app ON sys_app_releases(app_id, version_number DESC);
+
+CREATE TABLE IF NOT EXISTS sys_plugins (
+    id VARCHAR(64) PRIMARY KEY,
+    code VARCHAR(64) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    category VARCHAR(64) NOT NULL DEFAULT 'CUSTOM',
+    version VARCHAR(32) NOT NULL DEFAULT '1.0.0',
+    description TEXT,
+    manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+    config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    secret_value TEXT,
+    app_id VARCHAR(64),
+    is_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    last_tested_at TIMESTAMPTZ,
+    last_test_status VARCHAR(32),
+    last_test_message TEXT,
+    created_by VARCHAR(64) DEFAULT 'admin',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS app_integration_logs (
+    id VARCHAR(64) PRIMARY KEY,
+    direction VARCHAR(16) NOT NULL,
+    source_type VARCHAR(32) NOT NULL,
+    source_id VARCHAR(64) NOT NULL,
+    app_id VARCHAR(64),
+    table_id VARCHAR(64),
+    status_code INT NOT NULL DEFAULT 200,
+    success BOOLEAN NOT NULL DEFAULT TRUE,
+    summary TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_integration_logs_created ON app_integration_logs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS sys_print_templates (
+    id VARCHAR(64) PRIMARY KEY,
+    table_id VARCHAR(64) NOT NULL REFERENCES sys_tables(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    paper_size VARCHAR(32) NOT NULL DEFAULT 'A4',
+    orientation VARCHAR(16) NOT NULL DEFAULT 'portrait',
+    html_template TEXT NOT NULL,
+    css_styles TEXT,
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
+    watermark_draft BOOLEAN NOT NULL DEFAULT TRUE,
+    require_approved BOOLEAN NOT NULL DEFAULT FALSE,
+    created_by VARCHAR(64) DEFAULT 'admin',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_print_templates_tbl ON sys_print_templates(table_id, is_default DESC);
+
+CREATE TABLE IF NOT EXISTS sys_storage_quotas (
+    id VARCHAR(64) PRIMARY KEY,
+    scope_type VARCHAR(16) NOT NULL,
+    scope_id VARCHAR(64) NOT NULL,
+    quota_mb INT NOT NULL DEFAULT 1024,
+    updated_by VARCHAR(64) DEFAULT 'admin',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(scope_type, scope_id)
+);
+
+CREATE TABLE IF NOT EXISTS app_file_shares (
+    id VARCHAR(64) PRIMARY KEY,
+    attachment_id VARCHAR(64) NOT NULL REFERENCES app_attachments(id) ON DELETE CASCADE,
+    share_token VARCHAR(128) UNIQUE NOT NULL,
+    expires_at TIMESTAMPTZ,
+    allow_download BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by VARCHAR(64) NOT NULL,
+    access_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_file_shares_token ON app_file_shares(share_token);
+
+CREATE TABLE IF NOT EXISTS sys_org_units (
+    id VARCHAR(64) PRIMARY KEY,
+    code VARCHAR(64) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    parent_id VARCHAR(64) REFERENCES sys_org_units(id) ON DELETE SET NULL,
+    manager_username VARCHAR(64),
+    order_index INT NOT NULL DEFAULT 1,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sys_backup_configs (
+    id VARCHAR(64) PRIMARY KEY,
+    is_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    interval_hours INT NOT NULL DEFAULT 24,
+    retention_count INT NOT NULL DEFAULT 7,
+    destination_type VARCHAR(32) NOT NULL DEFAULT 'LOCAL',
+    destination_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    destination_secret TEXT,
+    include_uploads BOOLEAN NOT NULL DEFAULT TRUE,
+    last_run_at TIMESTAMPTZ,
+    updated_by VARCHAR(64) DEFAULT 'admin',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS app_backup_runs (
+    id VARCHAR(64) PRIMARY KEY,
+    trigger_type VARCHAR(24) NOT NULL DEFAULT 'MANUAL',
+    destination_type VARCHAR(32) NOT NULL DEFAULT 'LOCAL',
+    file_name VARCHAR(255) NOT NULL,
+    local_path TEXT,
+    remote_uri TEXT,
+    size_bytes BIGINT NOT NULL DEFAULT 0,
+    checksum_sha256 VARCHAR(64),
+    status VARCHAR(24) NOT NULL DEFAULT 'SUCCEEDED',
+    message TEXT,
+    created_by VARCHAR(64) DEFAULT 'admin',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_backup_runs_created ON app_backup_runs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS sys_app_plugin_bindings (
+    id VARCHAR(64) PRIMARY KEY,
+    app_id VARCHAR(64) NOT NULL,
+    plugin_code VARCHAR(64) NOT NULL,
+    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    table_id VARCHAR(64),
+    field_mapping JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_by VARCHAR(64) DEFAULT 'admin',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(app_id, plugin_code)
+);
+CREATE INDEX IF NOT EXISTS idx_app_plugin_bindings_app ON sys_app_plugin_bindings(app_id);
+
+CREATE INDEX IF NOT EXISTS idx_app_records_approval ON app_records(table_id, approval_status) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS sys_sso_states (
+    state VARCHAR(128) PRIMARY KEY,
+    provider_code VARCHAR(64) NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    code_verifier TEXT NOT NULL,
+    nonce VARCHAR(128) NOT NULL,
+    return_url TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sso_states_expires ON sys_sso_states(expires_at);
+
+CREATE TABLE IF NOT EXISTS sys_business_holidays (
+    id VARCHAR(64) PRIMARY KEY,
+    holiday_date DATE NOT NULL UNIQUE,
+    name VARCHAR(255) NOT NULL,
+    is_recurring BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sys_workflow_delegations (
+    id VARCHAR(64) PRIMARY KEY,
+    delegator_username VARCHAR(64) NOT NULL,
+    delegate_username VARCHAR(64) NOT NULL,
+    app_id VARCHAR(64),
+    starts_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    reason TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_wf_delegations_delegate ON sys_workflow_delegations(LOWER(delegate_username), is_active, starts_at, expires_at);
+
+CREATE TABLE IF NOT EXISTS app_idempotency_keys (
+    idempotency_key VARCHAR(128) PRIMARY KEY,
+    actor VARCHAR(64) NOT NULL,
+    method VARCHAR(16) NOT NULL DEFAULT 'POST',
+    path VARCHAR(255) NOT NULL DEFAULT '',
+    response_status INT NOT NULL DEFAULT 200,
+    response_body JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_app_idempotency_created ON app_idempotency_keys(created_at);
+
+CREATE TABLE IF NOT EXISTS sys_store_registries (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(150) NOT NULL,
+    registry_url VARCHAR(500) UNIQUE NOT NULL,
+    description TEXT,
+    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    last_synced_at TIMESTAMPTZ,
+    cached_manifest JSONB NOT NULL DEFAULT '[]'::jsonb,
+    last_error TEXT,
+    created_by VARCHAR(64) DEFAULT 'admin',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sys_store_installs (
+    id VARCHAR(64) PRIMARY KEY,
+    package_code VARCHAR(80) NOT NULL,
+    registry_id VARCHAR(64),
+    app_id VARCHAR(64) REFERENCES sys_apps(id) ON DELETE SET NULL,
+    installed_version VARCHAR(32) NOT NULL DEFAULT '2.0.0',
+    package_checksum VARCHAR(64),
+    action_type VARCHAR(24) NOT NULL DEFAULT 'INSTALL',
+    actor VARCHAR(64) NOT NULL DEFAULT 'admin',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_store_installs_pkg ON sys_store_installs(package_code, created_at DESC);

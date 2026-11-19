@@ -49,7 +49,9 @@ import UserFormModal from './UserFormModal';
 import RoleFormModal from './RoleFormModal';
 import AppPermissionsModal from './AppPermissionsModal';
 import AiAppModal from './AiAppModal';
-import { AppPublishModal, AppPluginBindingsPanel, OutboxMonitorPanel, PrintTemplateDesignerModal } from './StudioPlatformPanels';
+import { AppPublishModal, AppPluginBindingsPanel, AppUpgradeV2Modal, OutboxMonitorPanel, PrintTemplateDesignerModal } from './StudioPlatformPanels';
+import RocketLaunchRoundedIcon from '@mui/icons-material/RocketLaunchRounded';
+import StorefrontRoundedIcon from '@mui/icons-material/StorefrontRounded';
 
 import DesignServicesRoundedIcon from '@mui/icons-material/DesignServicesRounded';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
@@ -171,6 +173,7 @@ function AppBuilderStudioContent() {
   const [showTableModal, setShowTableModal] = useState(false);
   const [editingTable, setEditingTable] = useState<SysTable | null>(null);
   const [showPublishModal, setShowPublishModal] = useState(false);
+  const [showUpgradeV2Modal, setShowUpgradeV2Modal] = useState(false);
   const [showPrintDesignerModal, setShowPrintDesignerModal] = useState(false);
   const [showColumnModal, setShowColumnModal] = useState(false);
   const [editingColumn, setEditingColumn] = useState<SysColumn | null>(null);
@@ -194,8 +197,9 @@ function AppBuilderStudioContent() {
     severity: 'info',
   });
 
-  const toast = (message: string, severity: 'success' | 'error' | 'info' = 'success') =>
+  const toast = useCallback((message: string, severity: 'success' | 'error' | 'info' = 'success') => {
     setSnack({ open: true, message, severity });
+  }, []);
 
   const copyText = (text: string, label: string) => {
     navigator.clipboard?.writeText(text);
@@ -737,6 +741,16 @@ function AppBuilderStudioContent() {
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
+                style={{ color: '#0f766e', borderColor: '#99f6e4' }}
+                onClick={() => setShowUpgradeV2Modal(true)}
+              >
+                <RocketLaunchRoundedIcon sx={{ fontSize: 16 }} />
+                Nâng cấp Apps 2.0
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
                 style={{ color: '#7b1fa2', borderColor: '#d8b4fe' }}
                 onClick={() => setShowAiModal(true)}
               >
@@ -774,6 +788,15 @@ function AppBuilderStudioContent() {
                       gap: 2,
                     }}
                   >
+                    <Link
+                      href="/store"
+                      className="utility-menu-item"
+                      onClick={() => setShowBlueprintMenu(false)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', padding: '9px 12px', borderRadius: 8, fontSize: 13, color: 'var(--text-primary)', textDecoration: 'none' }}
+                    >
+                      <StorefrontRoundedIcon sx={{ fontSize: 17, color: '#ea580c' }} />
+                      <span>Mở Kho Apps Online (Tải &amp; Cài đặt)</span>
+                    </Link>
                     <button
                       type="button"
                       className="utility-menu-item"
@@ -830,6 +853,15 @@ function AppBuilderStudioContent() {
                           <DownloadRoundedIcon sx={{ fontSize: 17, color: '#1e8e3e' }} />
                           <span>Xuất Blueprint {selectedApp.code}</span>
                         </button>
+                        <a
+                          href={`/api/store/export-package/${encodeURIComponent(selectedApp.code)}`}
+                          className="utility-menu-item"
+                          onClick={() => setShowBlueprintMenu(false)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', padding: '9px 12px', borderRadius: 8, fontSize: 13, color: 'var(--text-primary)', textDecoration: 'none' }}
+                        >
+                          <DownloadRoundedIcon sx={{ fontSize: 17, color: '#1a73e8' }} />
+                          <span>Đóng gói Store {selectedApp.code} (.smartapp.json)</span>
+                        </a>
                         <label
                           className="utility-menu-item"
                           title="Cập nhật thêm cột/bảng từ Blueprint vào App hiện tại mà không mất dữ liệu"
@@ -852,6 +884,13 @@ function AppBuilderStudioContent() {
                   </div>
                 )}
               </div>
+
+              {selectedApp && selectedApp.publishStatus === 'DRAFT' && (
+                <Link href={`/apps/${selectedApp.code}?previewDraft=true`} className="btn btn-outline btn-sm" title="Xem thử cấu trúc Nháp trước khi phát hành">
+                  <OpenInNewRoundedIcon sx={{ fontSize: 16 }} />
+                  Xem thử Nháp
+                </Link>
+              )}
 
               {selectedApp && (
                 <Link href={`/apps/${selectedApp.code}`} className="btn btn-outline btn-sm">
@@ -978,7 +1017,7 @@ function AppBuilderStudioContent() {
                           {app.name}
                         </div>
                         <div style={{ fontSize: 11, color: active ? '#3c4043' : 'var(--text-muted)' }}>
-                          {app.code} • {app.moduleCount} phân hệ • {app.tableCount} bảng
+                          {app.code} • v{app.version || '1.0.0'} • {app.moduleCount} phân hệ • {app.tableCount} bảng
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
@@ -2189,6 +2228,16 @@ function AppBuilderStudioContent() {
         onClose={() => setShowPublishModal(false)}
         onPublished={async () => {
           await refreshApps();
+        }}
+        toast={toast}
+      />
+
+      <AppUpgradeV2Modal
+        open={showUpgradeV2Modal}
+        onClose={() => setShowUpgradeV2Modal(false)}
+        onUpgraded={async () => {
+          await refreshApps();
+          if (selectedApp) await loadModules(selectedApp.id);
         }}
         toast={toast}
       />

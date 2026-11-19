@@ -507,12 +507,19 @@ public class AppTemplateSummaryDto
     public string Icon { get; set; } = "Apps";
     public string Color { get; set; } = "#1a73e8";
     public string BgColor { get; set; } = "#e8f0fe";
+    public string Version { get; set; } = "2.0.0";
     public List<string> Highlights { get; set; } = new();
     public List<string> Features { get; set; } = new();
     public int ModuleCount { get; set; }
     public int TableCount { get; set; }
     public int SampleRecordCount { get; set; }
     public int WidgetCount { get; set; }
+    public int FormRuleCount { get; set; }
+    public int WorkflowCount { get; set; }
+    public int AutomationCount { get; set; }
+    public int PrintTemplateCount { get; set; }
+    public int SavedViewCount { get; set; }
+    public int PluginBindingCount { get; set; }
 }
 
 public class AppAutomationDto
@@ -1858,4 +1865,338 @@ public class AiDashboardInsightsResult
     public List<AiDashboardGroupStat> Breakdown { get; set; } = new();
     public List<AppRecordDto> SampleRecords { get; set; } = new();
     public string Engine { get; set; } = string.Empty;
+}
+
+public class AppUpgradeRequest
+{
+    public List<string>? AppIds { get; set; }
+}
+
+public class AppUpgradeCandidateDto
+{
+    public string AppId { get; set; } = string.Empty;
+    public string AppCode { get; set; } = string.Empty;
+    public string AppName { get; set; } = string.Empty;
+    public string CurrentVersion { get; set; } = "1.0.0";
+    public string TargetVersion { get; set; } = "2.0.0";
+    public string? MatchedTemplateCode { get; set; }
+    public bool NeedsUpgrade { get; set; }
+    public List<string> MissingFeatures { get; set; } = new();
+    public string Summary { get; set; } = string.Empty;
+}
+
+public class AppUpgradeExecutionResultDto
+{
+    public string AppId { get; set; } = string.Empty;
+    public string AppCode { get; set; } = string.Empty;
+    public string AppName { get; set; } = string.Empty;
+    public string PreviousVersion { get; set; } = "1.0.0";
+    public string NewVersion { get; set; } = "2.0.0";
+    public string? MatchedTemplateCode { get; set; }
+    public int ModulesAdded { get; set; }
+    public int TablesAdded { get; set; }
+    public int ColumnsUpgraded { get; set; }
+    public int FormRulesAttached { get; set; }
+    public int WorkflowsAdded { get; set; }
+    public int AutomationsAdded { get; set; }
+    public int PrintTemplatesAdded { get; set; }
+    public int SavedViewsAdded { get; set; }
+    public int WidgetsAdded { get; set; }
+    public int PluginBindingsAdded { get; set; }
+    public int? PublishedReleaseVersion { get; set; }
+}
+
+// ─── Online App Store / Marketplace ───────────────────────────────────────────────
+
+public class StoreRegistryDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string RegistryUrl { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public bool IsEnabled { get; set; } = true;
+    public int AppCount { get; set; }
+    public DateTime? LastSyncedAt { get; set; }
+    public string? LastError { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class UpsertStoreRegistryRequest
+{
+    public string? Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string RegistryUrl { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public bool IsEnabled { get; set; } = true;
+}
+
+public class StoreAppSummaryDto
+{
+    public string PackageCode { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string Department { get; set; } = "Doanh nghiệp";
+    public string Category { get; set; } = "Kinh doanh & Vận hành";
+    public string Version { get; set; } = "2.0.0";
+    public string Publisher { get; set; } = "SmartApps Official";
+    public string Icon { get; set; } = "Apps";
+    public string Color { get; set; } = "#1a73e8";
+    public string BgColor { get; set; } = "#e8f0fe";
+    public List<string> Tags { get; set; } = new();
+    public List<string> Highlights { get; set; } = new();
+    public List<string> Features { get; set; } = new();
+    public string SourceType { get; set; } = "OFFICIAL"; // OFFICIAL | REMOTE
+    public string? RegistryId { get; set; }
+    public string? RegistryName { get; set; }
+    public string? DownloadUrl { get; set; }
+    public string ChecksumSha256 { get; set; } = string.Empty;
+    public long PackageSizeBytes { get; set; }
+    public int DownloadCount { get; set; }
+    public int InstallCount { get; set; }
+    public bool IsInstalled { get; set; }
+    public string? InstalledAppCode { get; set; }
+    public string? InstalledAppId { get; set; }
+    public string? InstalledVersion { get; set; }
+    public bool HasUpdateAvailable { get; set; }
+    public int ModuleCount { get; set; }
+    public int TableCount { get; set; }
+    public int SampleRecordCount { get; set; }
+    public int WidgetCount { get; set; }
+    public int FormRuleCount { get; set; }
+    public int WorkflowCount { get; set; }
+    public int AutomationCount { get; set; }
+    public int PrintTemplateCount { get; set; }
+    public int SavedViewCount { get; set; }
+    public int PluginBindingCount { get; set; }
+}
+
+public class StorePackageCategoryDto
+{
+    public string CategoryCode { get; set; } = string.Empty;
+    public string CategoryName { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public List<StorePackageCategoryItemDto> Items { get; set; } = new();
+}
+
+public class StorePackageCategoryItemDto
+{
+    public string ItemCode { get; set; } = string.Empty;
+    public string ItemName { get; set; } = string.Empty;
+    public string Color { get; set; } = "#1a73e8";
+    public int OrderIndex { get; set; }
+}
+
+public class StorePackageColumnDto
+{
+    public string ColumnCode { get; set; } = string.Empty;
+    public string ColumnName { get; set; } = string.Empty;
+    public string DataType { get; set; } = "STRING";
+    public bool IsRequired { get; set; }
+    public bool IsIdentityKey { get; set; }
+    public bool ShowInTable { get; set; } = true;
+    public bool ShowInForm { get; set; } = true;
+    public bool ShowInParentForm { get; set; }
+    public int Width { get; set; } = 170;
+    public string? ValidationRegex { get; set; }
+    public string? RefCategoryCode { get; set; }
+    public bool AllowQuickCreate { get; set; }
+    public string? RefAppId { get; set; }
+    public string? RefTableId { get; set; }
+    public string? InternalRefTableName { get; set; }
+    public string? RefValueField { get; set; }
+    public string? RefDisplayField { get; set; }
+    public string? LookupFilterField { get; set; }
+    public string? LookupSourceField { get; set; }
+    public string? Formula { get; set; }
+    public string? DefaultValue { get; set; }
+    public List<string> HiddenForRoles { get; set; } = new();
+    public List<string> ReadOnlyForRoles { get; set; } = new();
+    public int OrderIndex { get; set; } = 1;
+}
+
+public class StorePackageTableDto
+{
+    public string TableName { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string PrimaryView { get; set; } = "table";
+    public string RowScope { get; set; } = "ALL";
+    public bool ApprovalEnabled { get; set; }
+    public string ApprovalField { get; set; } = "trang_thai_duyet";
+    public List<string> ApproverRoles { get; set; } = new() { "ADMIN", "HR_MANAGER", "ASSET_LEAD" };
+    public bool PublicFormEnabled { get; set; }
+    public List<FormRuleDto> FormRules { get; set; } = new();
+    public List<StorePackageColumnDto> Columns { get; set; } = new();
+}
+
+public class StorePackageModuleDto
+{
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Icon { get; set; } = "Layers";
+    public string Description { get; set; } = string.Empty;
+    public List<StorePackageTableDto> Tables { get; set; } = new();
+}
+
+public class StorePackageWidgetDto
+{
+    public string TableName { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string WidgetType { get; set; } = "KPI_COUNT";
+    public string? MetricField { get; set; }
+    public string? GroupField { get; set; }
+    public string? FilterField { get; set; }
+    public string? FilterValue { get; set; }
+    public int ColSpan { get; set; } = 1;
+    public string Color { get; set; } = "#1a73e8";
+    public int OrderIndex { get; set; } = 1;
+}
+
+public class StorePackageWorkflowDto
+{
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string TableName { get; set; } = string.Empty;
+    public string TriggerType { get; set; } = "MANUAL_SUBMIT";
+    public List<WorkflowStepDto> Steps { get; set; } = new();
+}
+
+public class StorePackageAutomationDto
+{
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string TriggerTableName { get; set; } = string.Empty;
+    public string TriggerEvent { get; set; } = "RECORD_CREATED";
+    public string? ConditionField { get; set; }
+    public string ConditionOperator { get; set; } = "EQUALS";
+    public string? ConditionValue { get; set; }
+    public string? TargetTableName { get; set; }
+    public string ActionType { get; set; } = "SEND_NOTIFICATION";
+    public string? MatchSourceField { get; set; }
+    public string? MatchTargetField { get; set; }
+    public Dictionary<string, string> FieldMappings { get; set; } = new();
+    public string? NotifyRecipient { get; set; }
+    public string? NotifyTemplate { get; set; }
+}
+
+public class StorePackagePrintTemplateDto
+{
+    public string TableName { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string PaperSize { get; set; } = "A4";
+    public string Orientation { get; set; } = "portrait";
+    public bool IsDefault { get; set; }
+    public bool WatermarkDraft { get; set; } = true;
+    public bool RequireApproved { get; set; }
+    public string HtmlTemplate { get; set; } = string.Empty;
+    public string? CssStyles { get; set; }
+}
+
+public class StorePackageSavedViewDto
+{
+    public string TableName { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public bool IsDefault { get; set; }
+    public bool IsShared { get; set; } = true;
+    public string FiltersJson { get; set; } = "{}";
+    public string? SortField { get; set; }
+    public string SortDir { get; set; } = "DESC";
+}
+
+public class StorePackagePluginBindingDto
+{
+    public string PluginCode { get; set; } = string.Empty;
+    public string TableName { get; set; } = string.Empty;
+    public Dictionary<string, string> FieldMapping { get; set; } = new();
+}
+
+public class StorePackageRecordDto
+{
+    public string TableName { get; set; } = string.Empty;
+    public Dictionary<string, object?> Data { get; set; } = new();
+}
+
+public class StoreAppPackageDto
+{
+    public string PackageFormat { get; set; } = "smartapps-package/2.0";
+    public DateTime ExportedAt { get; set; } = DateTime.UtcNow;
+    public string ChecksumSha256 { get; set; } = string.Empty;
+    public string PackageCode { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string Department { get; set; } = "Doanh nghiệp";
+    public string Category { get; set; } = "Kinh doanh & Vận hành";
+    public string Version { get; set; } = "2.0.0";
+    public string Publisher { get; set; } = "SmartApps Official";
+    public string Icon { get; set; } = "Apps";
+    public string Color { get; set; } = "#1a73e8";
+    public string BgColor { get; set; } = "#e8f0fe";
+    public List<string> Tags { get; set; } = new();
+    public List<string> Highlights { get; set; } = new();
+    public List<string> Features { get; set; } = new();
+    public List<StorePackageCategoryDto> Categories { get; set; } = new();
+    public List<StorePackageModuleDto> Modules { get; set; } = new();
+    public List<StorePackageWidgetDto> Widgets { get; set; } = new();
+    public List<StorePackageWorkflowDto> Workflows { get; set; } = new();
+    public List<StorePackageAutomationDto> Automations { get; set; } = new();
+    public List<StorePackagePrintTemplateDto> PrintTemplates { get; set; } = new();
+    public List<StorePackageSavedViewDto> SavedViews { get; set; } = new();
+    public List<StorePackagePluginBindingDto> PluginBindings { get; set; } = new();
+    public List<StorePackageRecordDto> SampleRecords { get; set; } = new();
+}
+
+public class StoreAppDetailDto
+{
+    public StoreAppSummaryDto Summary { get; set; } = new();
+    public List<StorePackageModuleDto> Modules { get; set; } = new();
+    public List<StorePackageWorkflowDto> Workflows { get; set; } = new();
+    public List<StorePackageAutomationDto> Automations { get; set; } = new();
+    public List<StorePackagePrintTemplateDto> PrintTemplates { get; set; } = new();
+    public List<StorePackageSavedViewDto> SavedViews { get; set; } = new();
+    public List<StorePackagePluginBindingDto> PluginBindings { get; set; } = new();
+}
+
+public class InstallStoreAppRequest
+{
+    public string? RegistryId { get; set; }
+    public string? CustomCode { get; set; }
+    public string? CustomName { get; set; }
+    public bool IncludeSampleData { get; set; } = true;
+}
+
+public class InstallStorePackageUrlRequest
+{
+    public string PackageUrl { get; set; } = string.Empty;
+    public string? CustomCode { get; set; }
+    public string? CustomName { get; set; }
+    public bool IncludeSampleData { get; set; } = true;
+}
+
+public class InstallStorePackageBodyRequest
+{
+    public JsonElement Package { get; set; }
+    public string? CustomCode { get; set; }
+    public string? CustomName { get; set; }
+    public bool IncludeSampleData { get; set; } = true;
+}
+
+public class StoreManifestDto
+{
+    public string StoreName { get; set; } = "SmartApps Online Store Hub";
+    public string StoreVersion { get; set; } = "2.0.0";
+    public DateTime GeneratedAt { get; set; } = DateTime.UtcNow;
+    public List<StoreAppSummaryDto> Apps { get; set; } = new();
+}
+
+public class StoreInstallHistoryDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string PackageCode { get; set; } = string.Empty;
+    public string? RegistryId { get; set; }
+    public string? AppId { get; set; }
+    public string InstalledVersion { get; set; } = "2.0.0";
+    public string? PackageChecksum { get; set; }
+    public string ActionType { get; set; } = "INSTALL";
+    public string Actor { get; set; } = "admin";
+    public DateTime CreatedAt { get; set; }
 }

@@ -1,6 +1,6 @@
-# E2E và CI cho form và Excel
+# E2E và CI cho form, Excel và Workflow/Ecosystem
 
-Triển khai và chạy xác minh ngày **17/11/2026**. Bộ Playwright ban đầu có 9 kịch bản form, nay có **17 kịch bản** sau khi bổ sung [8 E2E nhập/xuất Excel](excel-e2e.md), chạy trên Chromium thật, Next production build, ASP.NET Core và PostgreSQL thật.
+Cập nhật ngày **19/11/2026**. Bộ Playwright ban đầu có 9 kịch bản form, mở rộng lên 17 kịch bản với [8 E2E nhập/xuất Excel](excel-e2e.md) và hiện có **22 kịch bản** sau khi bổ sung 5 kịch bản Workflow 360° / Dark Theme / Ecosystem / Apps v2.0 Upgrade / Kho Apps Online `/store` trong [`workflow-and-ecosystem.spec.ts`](../../frontend-next/e2e/specs/workflow-and-ecosystem.spec.ts), chạy trên Chromium thật, Next production build, ASP.NET Core và PostgreSQL thật.
 
 ## 1. Phạm vi hồi quy
 
@@ -11,6 +11,7 @@ Triển khai và chạy xác minh ngày **17/11/2026**. Bộ Playwright ban đ�
 | [public-form.spec.ts](../../frontend-next/e2e/specs/public-form.spec.ts) | Public form không có cookie đăng nhập; required native và kiểm tra chuỗi trắng; hiện/ẩn/chỉ đọc; gửi liên tiếp giữ mặc định false và `1`; request vượt qua kiểm tra giao diện vẫn bị backend chặn 422 |
 | [excel-import.spec.ts](../../frontend-next/e2e/specs/excel-import.spec.ts) | Mapping, chọn sheet/header, preview không ghi dữ liệu, lỗi đúng dòng, báo cáo lỗi, upsert, invalidation và preview cũ |
 | [excel-export.spec.ts](../../frontend-next/e2e/specs/excel-export.spec.ts) | 1.057 dòng theo bộ lọc và sort khi đang ở trang 2; file rỗng; ownership, FLS và thu hồi quyền export |
+| [workflow-and-ecosystem.spec.ts](../../frontend-next/e2e/specs/workflow-and-ecosystem.spec.ts) | Record 360° audit restore chọn lọc + recall/resubmit/approve; kiểm tra token bề mặt Dark Theme không chói trắng; OpenAPI per-app, MCP JSON-RPC, chống trùng `Idempotency-Key` và `/metrics`; kiểm tra Apps v2.0 templates và nâng cấp legacy v1.0 app qua Studio `Nâng cấp Apps 2.0`; duyệt Kho Apps Online `/store`, tải `.smartapp.json`, cài từ file upload & 1-click, kết nối/bật-tắt Remote Registry `manifest.json`, Lịch sử Kho, Đóng gói Xuất App và chạy runtime |
 
 Các assertion đối chiếu dữ liệu thật đọc lại từ API, số bản ghi sau request thất bại và định nghĩa quy tắc đã lưu. Không gọi evaluator trong mã ứng dụng để tạo kết quả mong đợi. Mỗi test có App, bảng, dữ liệu và browser context riêng; các test public không nhận cookie admin. Fixture đăng nhập admin qua API thật để tạo dữ liệu và cấu trúc ban đầu.
 

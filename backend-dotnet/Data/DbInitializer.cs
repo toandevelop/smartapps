@@ -47,6 +47,7 @@ public static class DbInitializer
         }
 
         await EnsureCrossAppLinksAndAutomationsAsync(conn);
+        await AppUpgradeService.EnsureCoreAppsV2Async(connectionString);
     }
 
     internal const string BaselineSchemaDdl = """

@@ -31,6 +31,7 @@ import TableViewRoundedIcon from '@mui/icons-material/TableViewRounded';
 import StorageRoundedIcon from '@mui/icons-material/StorageRounded';
 import ArrowForwardRoundedIcon from '@mui/icons-material/ArrowForwardRounded';
 import CloudUploadRoundedIcon from '@mui/icons-material/CloudUploadRounded';
+import StorefrontRoundedIcon from '@mui/icons-material/StorefrontRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import DesktopWindowsRoundedIcon from '@mui/icons-material/DesktopWindowsRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
@@ -150,6 +151,10 @@ export default function HomePortalPage() {
         actions={
           canStudio ? (
             <>
+              <Link href="/store" className="btn btn-outline btn-sm">
+                <StorefrontRoundedIcon sx={{ fontSize: 16 }} />
+                Kho Apps Online
+              </Link>
               <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowTemplateModal(true)}>
                 <AutoAwesomeRoundedIcon sx={{ fontSize: 16 }} />
                 Cài App Mẫu
@@ -461,12 +466,21 @@ export default function HomePortalPage() {
                           <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{app.department}</div>
                         </div>
                       </div>
-                      <span
-                        className="badge"
-                        style={{ backgroundColor: app.bgColor, color: app.color }}
-                      >
-                        {app.code}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+                        <span
+                          className={`badge ${Number((app.version || '1').split('.')[0]) >= 2 ? 'badge-success' : 'badge-warning'}`}
+                          style={{ fontSize: 10.5, padding: '2px 7px' }}
+                          title={`Phiên bản v${app.version || '1.0.0'}`}
+                        >
+                          v{app.version || '1.0.0'}
+                        </span>
+                        <span
+                          className="badge"
+                          style={{ backgroundColor: app.bgColor, color: app.color }}
+                        >
+                          {app.code}
+                        </span>
+                      </div>
                     </div>
 
                     <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, minHeight: 40 }}>

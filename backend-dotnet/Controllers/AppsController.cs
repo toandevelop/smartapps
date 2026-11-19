@@ -11,11 +11,13 @@ public class AppsController : ControllerBase
 {
     private readonly MetadataService _metadata;
     private readonly AuthService _auth;
+    private readonly AppUpgradeService _upgrader;
 
-    public AppsController(MetadataService metadata, AuthService auth)
+    public AppsController(MetadataService metadata, AuthService auth, AppUpgradeService upgrader)
     {
         _metadata = metadata;
         _auth = auth;
+        _upgrader = upgrader;
     }
 
     [HttpGet]
@@ -36,6 +38,49 @@ public class AppsController : ControllerBase
         if (user == null) return Unauthorized(new { success = false, message = "Vui lòng đăng nhập." });
 
         return Ok(new { success = true, data = AppTemplateCatalog.GetSummaries() });
+    }
+
+    [HttpGet("upgrade-v2/preview")]
+    public async Task<IActionResult> PreviewUpgradeV2()
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+        if (!AuthService.HasPermission(user, "studio.manage"))
+            return StatusCode(403, new { success = false, message = "Chỉ Quản trị/Studio mới được xem trước nâng cấp v2.0." });
+
+        var list = await _upgrader.PreviewUpgradeAsync();
+        return Ok(new { success = true, data = list });
+    }
+
+    [HttpPost("upgrade-v2")]
+    public async Task<IActionResult> UpgradeAllV2([FromBody] AppUpgradeRequest? req = null)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+        if (!AuthService.HasPermission(user, "studio.manage"))
+            return StatusCode(403, new { success = false, message = "Chỉ Quản trị/Studio mới được nâng cấp ứng dụng lên v2.0." });
+
+        var results = await _upgrader.UpgradeAllAppsToV2Async(req?.AppIds, user.Username);
+        return Ok(new { success = true, data = results });
+    }
+
+    [HttpPost("{codeOrId}/upgrade-v2")]
+    public async Task<IActionResult> UpgradeSingleV2(string codeOrId)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+        if (!AuthService.HasPermission(user, "studio.manage"))
+            return StatusCode(403, new { success = false, message = "Chỉ Quản trị/Studio mới được nâng cấp ứng dụng lên v2.0." });
+
+        try
+        {
+            var res = await _upgrader.UpgradeAppToV2Async(codeOrId, user.Username);
+            return Ok(new { success = true, data = res });
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { success = false, message = ex.Message });
+        }
     }
 
     [HttpGet("{codeOrId}")]

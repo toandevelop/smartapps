@@ -902,32 +902,7 @@ public class MetadataService
         await conn.OpenAsync();
 
         // 1. Ensure shared/template categories exist without overwriting user-customized items
-        foreach (var cat in tpl.Categories)
-        {
-            await using var catCmd = new NpgsqlCommand("""
-                INSERT INTO sys_categories (category_code, category_name, description)
-                VALUES (@c, @n, @d) ON CONFLICT (category_code) DO NOTHING
-                """, conn);
-            catCmd.Parameters.AddWithValue("c", cat.CategoryCode);
-            catCmd.Parameters.AddWithValue("n", cat.CategoryName);
-            catCmd.Parameters.AddWithValue("d", cat.Description);
-            await catCmd.ExecuteNonQueryAsync();
-
-            foreach (var item in cat.Items)
-            {
-                await using var itemCmd = new NpgsqlCommand("""
-                    INSERT INTO sys_category_items (id, category_code, item_code, item_name, color, order_index)
-                    VALUES (@id, @cat, @code, @name, @col, @ord) ON CONFLICT DO NOTHING
-                    """, conn);
-                itemCmd.Parameters.AddWithValue("id", $"ci_{cat.CategoryCode.ToLowerInvariant()}_{item.ItemCode.ToLowerInvariant()}");
-                itemCmd.Parameters.AddWithValue("cat", cat.CategoryCode);
-                itemCmd.Parameters.AddWithValue("code", item.ItemCode);
-                itemCmd.Parameters.AddWithValue("name", item.ItemName);
-                itemCmd.Parameters.AddWithValue("col", item.Color);
-                itemCmd.Parameters.AddWithValue("ord", item.OrderIndex);
-                await itemCmd.ExecuteNonQueryAsync();
-            }
-        }
+        await AppUpgradeService.EnsureCategoriesAsync(conn, tpl.Categories);
 
         // 2. Create App
         var app = await UpsertAppAsync(new UpsertAppRequest
@@ -939,7 +914,7 @@ public class MetadataService
             Icon = tpl.Icon,
             Color = tpl.Color,
             BgColor = tpl.BgColor,
-            Version = "1.0.0",
+            Version = tpl.Version,
             OrderIndex = tpl.OrderIndex
         });
 
@@ -971,8 +946,10 @@ public class MetadataService
                     DisplayName = tblSpec.DisplayName,
                     Description = tblSpec.Description,
                     PrimaryView = tblSpec.PrimaryView,
+                    RowScope = tblSpec.RowScope,
                     ApprovalEnabled = tblSpec.ApprovalEnabled,
                     ApprovalField = tblSpec.ApprovalField,
+                    ApproverRoles = tblSpec.ApproverRoles.Count > 0 ? tblSpec.ApproverRoles : ["ADMIN", "HR_MANAGER", "ASSET_LEAD"],
                     PublicFormEnabled = tblSpec.PublicFormEnabled,
                     OrderIndex = tblIdx + 1
                 });
@@ -1005,43 +982,35 @@ public class MetadataService
                         Width = colSpec.Width,
                         ValidationRegex = colSpec.ValidationRegex,
                         RefCategoryCode = colSpec.RefCategoryCode,
+                        AllowQuickCreate = colSpec.AllowQuickCreate,
                         RefAppId = refAppId,
                         RefTableId = refTableId,
                         RefValueField = colSpec.RefValueField,
                         RefDisplayField = colSpec.RefDisplayField,
+                        LookupFilterField = colSpec.LookupFilterField,
+                        LookupSourceField = colSpec.LookupSourceField,
                         Formula = colSpec.Formula,
                         DefaultValue = colSpec.DefaultValue,
+                        HiddenForRoles = colSpec.HiddenForRoles ?? [],
+                        ReadOnlyForRoles = colSpec.ReadOnlyForRoles ?? [],
                         OrderIndex = colSpec.OrderIndex
                     });
                     savedCols.Add(col);
                 }
                 columnsByTable[tblSpec.TableName] = savedCols;
+
+                if (tblSpec.FormRules.Count > 0)
+                {
+                    await SetFormRulesAsync(tbl.Id, tblSpec.FormRules);
+                }
             }
         }
 
-        // 4. Seed Dashboard Widgets
-        foreach (var w in tpl.Widgets)
-        {
-            if (!createdTables.TryGetValue(w.TableName, out var wTbl)) continue;
-            await using var wCmd = new NpgsqlCommand("""
-                INSERT INTO app_widgets (id, app_id, table_id, title, widget_type, metric_field, group_field,
-                    filter_field, filter_value, col_span, color, order_index, is_visible)
-                VALUES (@id, @app, @tbl, @title, @wt, @mf, @gf, @ff, @fv, @span, @col, @ord, TRUE)
-                """, conn);
-            wCmd.Parameters.AddWithValue("id", $"wdg_{Guid.NewGuid().ToString("N")[..8]}");
-            wCmd.Parameters.AddWithValue("app", app.Id);
-            wCmd.Parameters.AddWithValue("tbl", wTbl.Id);
-            wCmd.Parameters.AddWithValue("title", w.Title);
-            wCmd.Parameters.AddWithValue("wt", w.WidgetType);
-            wCmd.Parameters.AddWithValue("mf", (object?)w.MetricField ?? DBNull.Value);
-            wCmd.Parameters.AddWithValue("gf", (object?)w.GroupField ?? DBNull.Value);
-            wCmd.Parameters.AddWithValue("ff", (object?)w.FilterField ?? DBNull.Value);
-            wCmd.Parameters.AddWithValue("fv", (object?)w.FilterValue ?? DBNull.Value);
-            wCmd.Parameters.AddWithValue("span", w.ColSpan);
-            wCmd.Parameters.AddWithValue("col", w.Color);
-            wCmd.Parameters.AddWithValue("ord", w.OrderIndex);
-            await wCmd.ExecuteNonQueryAsync();
-        }
+        // 4. Seed v2.0 Ecosystem Artifacts (Widgets, Workflows, Automations, Print Templates, Saved Views, Plugins)
+        await AppUpgradeService.ApplyV2ArtifactsAsync(
+            this, conn, app.Id, createdTables,
+            tpl.Workflows, tpl.Automations, tpl.PrintTemplates,
+            tpl.SavedViews, tpl.Widgets, tpl.PluginBindings, "admin");
 
         // 5. Seed evaluated sample records so the app is immediately ready to use
         if (req.IncludeSampleData && tpl.SampleRecords.Count > 0)
@@ -1096,15 +1065,17 @@ public class MetadataService
                     ins.Parameters.AddWithValue("app", app.Id);
                     ins.Parameters.AddWithValue("mod", tbl.ModuleId);
                     ins.Parameters.AddWithValue("tbl", tbl.Id);
-                    ins.Parameters.AddWithValue("key", (object?)recKey ?? DBNull.Value);
+                    ins.Parameters.Add(new NpgsqlParameter("key", NpgsqlDbType.Varchar) { Value = (object?)recKey ?? DBNull.Value });
                     ins.Parameters.AddWithValue("data", JsonSerializer.Serialize(res.EvaluatedData));
                     ins.Parameters.AddWithValue("appSt", approvalStatus);
-                    ins.Parameters.AddWithValue("appBy", (object?)approvedBy ?? DBNull.Value);
+                    ins.Parameters.Add(new NpgsqlParameter("appBy", NpgsqlDbType.Varchar) { Value = (object?)approvedBy ?? DBNull.Value });
                     ins.Parameters.AddWithValue("errs", JsonSerializer.Serialize(res.Errors));
                     await ins.ExecuteNonQueryAsync();
                 }
             }
         }
+
+        await PublishAppAsync(app.Id, "admin", $"Khởi tạo ứng dụng mẫu {tpl.Code} v{tpl.Version}");
 
         return (await GetAppByCodeOrIdAsync(app.Id))!;
     }

@@ -11,8 +11,15 @@ import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded';
-import { AppRecord, SysApp, SysColumn, SysTable } from '@/lib/types';
-import { PRINT_TEMPLATE_PRESETS, renderPrintTemplateHtml, SysPrintTemplate } from '@/lib/print-template';
+import { AppRecord, AppUpgradeCandidate, AppUpgradeExecutionResult, SysApp, SysColumn, SysTable } from '@/lib/types';
+import { getPagePrintCss, PRINT_TEMPLATE_PRESETS, renderPrintTemplateHtml, SysPrintTemplate } from '@/lib/print-template';
+import {
+  compilePrintBuilderToHtml,
+  createDefaultBuilderSchema,
+  parseBuilderSchemaFromHtml,
+  PrintBuilderSchema,
+} from '@/lib/print-builder';
+import PrintTemplateBuilder from './PrintTemplateBuilder';
 import { useEscapeKey } from '@/lib/ui-hooks';
 
 /* =========================================================
@@ -1164,12 +1171,28 @@ export function PrintTemplateDesignerModal({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [paperSize, setPaperSize] = useState('A4');
+  const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
   const [isDefault, setIsDefault] = useState(true);
   const [watermarkDraft, setWatermarkDraft] = useState(true);
   const [requireApproved, setRequireApproved] = useState(false);
+  const [editorMode, setEditorMode] = useState<'visual' | 'code'>('visual');
+  const [builderSchema, setBuilderSchema] = useState<PrintBuilderSchema>(() =>
+    createDefaultBuilderSchema(table?.displayName || 'Phiếu', columns),
+  );
   const [htmlTemplate, setHtmlTemplate] = useState(PRINT_TEMPLATE_PRESETS[0].htmlTemplate);
+  const [cssStyles, setCssStyles] = useState('');
   const [saving, setSaving] = useState(false);
   const templateRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const latestColumnsRef = React.useRef(columns);
+
+  useEffect(() => {
+    latestColumnsRef.current = columns;
+  }, [columns]);
+
+  const handleBuilderChange = (next: PrintBuilderSchema) => {
+    setBuilderSchema(next);
+    setHtmlTemplate(compilePrintBuilderToHtml(next));
+  };
 
   const insertTokenAtCursor = (token: string) => {
     const el = templateRef.current;
@@ -1204,10 +1227,15 @@ export function PrintTemplateDesignerModal({
       setEditingId(null);
       setName(`Mẫu in ${table.displayName}`);
       setPaperSize('A4');
+      setOrientation('portrait');
       setIsDefault(true);
       setWatermarkDraft(true);
       setRequireApproved(false);
-      setHtmlTemplate(PRINT_TEMPLATE_PRESETS[0].htmlTemplate);
+      setCssStyles('');
+      const defSchema = createDefaultBuilderSchema(table.displayName, latestColumnsRef.current);
+      setBuilderSchema(defSchema);
+      setEditorMode('visual');
+      setHtmlTemplate(compilePrintBuilderToHtml(defSchema));
     });
     return () => {
       cancelled = true;
@@ -1257,10 +1285,19 @@ export function PrintTemplateDesignerModal({
                         setEditingId(t.id);
                         setName(t.name);
                         setPaperSize(t.paperSize);
+                        setOrientation(t.orientation === 'landscape' ? 'landscape' : 'portrait');
                         setIsDefault(t.isDefault);
                         setWatermarkDraft(t.watermarkDraft);
                         setRequireApproved(t.requireApproved);
+                        setCssStyles(t.cssStyles || '');
                         setHtmlTemplate(t.htmlTemplate);
+                        const parsed = parseBuilderSchemaFromHtml(t.htmlTemplate);
+                        if (parsed) {
+                          setBuilderSchema(parsed);
+                          setEditorMode('visual');
+                        } else {
+                          setEditorMode('code');
+                        }
                       }}
                     >
                       {t.name}{t.isDefault ? ' ★' : ''}
@@ -1294,6 +1331,9 @@ export function PrintTemplateDesignerModal({
                     setEditingId(null);
                     setName(p.name);
                     setPaperSize(p.paperSize);
+                    setOrientation(p.orientation === 'landscape' ? 'landscape' : 'portrait');
+                    setCssStyles('');
+                    setEditorMode('code');
                     setHtmlTemplate(p.htmlTemplate);
                   }}
                 >
@@ -1302,7 +1342,7 @@ export function PrintTemplateDesignerModal({
               ))}
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8 }}>
               <div>
                 <label className="form-label">Tên mẫu in</label>
                 <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} />
@@ -1316,67 +1356,120 @@ export function PrintTemplateDesignerModal({
                   <option value="LABEL_50X30">Tem 50x30mm</option>
                 </select>
               </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12.5 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} /> Mặc định
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input type="checkbox" checked={watermarkDraft} onChange={(e) => setWatermarkDraft(e.target.checked)} /> Watermark nếu chưa duyệt
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input type="checkbox" checked={requireApproved} onChange={(e) => setRequireApproved(e.target.checked)} /> Chỉ cho in khi APPROVED
-              </label>
-            </div>
-
-            <div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 6 }}>
-                <strong>Token Picker</strong> (nhấn để chèn nhanh vào vị trí con trỏ):
+              <div>
+                <label className="form-label">Hướng giấy</label>
+                <select
+                  className="form-select"
+                  value={orientation}
+                  onChange={(e) => setOrientation(e.target.value as 'portrait' | 'landscape')}
+                >
+                  <option value="portrait">Dọc (Portrait)</option>
+                  <option value="landscape">Ngang (Landscape)</option>
+                </select>
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8, maxHeight: 112, overflowY: 'auto', padding: 6, borderRadius: 8, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
-                {[
-                  { label: 'Mã hồ sơ', token: '{{record_key}}' },
-                  { label: 'Ngày in', token: '{{print_date}}' },
-                  { label: 'Người lập', token: '{{created_by}}' },
-                  { label: 'Người duyệt', token: '{{approved_by}}' },
-                  ...columns.map((c) => {
-                    const dt = (c.dataType || '').toUpperCase();
-                    if (dt === 'SUB_TABLE') {
-                      return {
-                        label: `Lặp bảng: ${c.columnName}`,
-                        token: `{{#each ${c.columnCode}}}\n  <tr><td>{{@index1}}</td><td>...</td></tr>\n{{/each}}`,
-                      };
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12.5 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} /> Mặc định
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input type="checkbox" checked={watermarkDraft} onChange={(e) => setWatermarkDraft(e.target.checked)} /> Watermark nếu chưa duyệt
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input type="checkbox" checked={requireApproved} onChange={(e) => setRequireApproved(e.target.checked)} /> Chỉ cho in khi APPROVED
+                </label>
+              </div>
+              <div style={{ display: 'inline-flex', gap: 4 }}>
+                <button
+                  type="button"
+                  className={`btn btn-xs ${editorMode === 'visual' ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={() => {
+                    const parsed = parseBuilderSchemaFromHtml(htmlTemplate);
+                    if (parsed) {
+                      setBuilderSchema(parsed);
+                    } else {
+                      const fresh = createDefaultBuilderSchema(table.displayName, columns);
+                      setBuilderSchema(fresh);
                     }
-                    if (dt === 'CURRENCY') return { label: `${c.columnName} (Tiền)`, token: `{{${c.columnCode} | currency}}` };
-                    if (dt === 'DATE') return { label: `${c.columnName} (Ngày)`, token: `{{${c.columnCode} | date}}` };
-                    return { label: c.columnName, token: `{{${c.columnCode}}}` };
-                  }),
-                  ...columns
-                    .filter((c) => (c.dataType || '').toUpperCase() === 'CURRENCY')
-                    .map((c) => ({ label: `${c.columnName} (Bằng chữ)`, token: `{{${c.columnCode} | vnd_words}}` })),
-                ].map((item, idx) => (
-                  <button
-                    key={`${item.label}_${idx}`}
-                    type="button"
-                    className="btn btn-outline btn-xs"
-                    style={{ fontSize: 11, padding: '2px 7px' }}
-                    onClick={() => insertTokenAtCursor(item.token)}
-                    title={item.token}
-                  >
-                    + {item.label}
-                  </button>
-                ))}
+                    setEditorMode('visual');
+                  }}
+                >
+                  Trực quan (Builder)
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-xs ${editorMode === 'code' ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={() => setEditorMode('code')}
+                >
+                  Mã HTML / CSS
+                </button>
               </div>
-              <textarea
-                ref={templateRef}
-                className="form-input"
-                rows={11}
-                style={{ fontFamily: 'monospace', fontSize: 12 }}
-                value={htmlTemplate}
-                onChange={(e) => setHtmlTemplate(e.target.value)}
-              />
             </div>
+
+            {editorMode === 'visual' ? (
+              <PrintTemplateBuilder schema={builderSchema} columns={columns} onChange={handleBuilderChange} />
+            ) : (
+              <div>
+                <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 6 }}>
+                  <strong>Token Picker</strong> (nhấn để chèn nhanh vào vị trí con trỏ):
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8, maxHeight: 112, overflowY: 'auto', padding: 6, borderRadius: 8, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+                  {[
+                    { label: 'Mã hồ sơ', token: '{{record_key}}' },
+                    { label: 'Barcode Mã HS', token: '{{barcode:record_key}}' },
+                    { label: 'Ngày in', token: '{{print_date}}' },
+                    { label: 'Người lập', token: '{{created_by}}' },
+                    { label: 'Người duyệt', token: '{{approved_by}}' },
+                    ...columns.map((c) => {
+                      const dt = (c.dataType || '').toUpperCase();
+                      if (dt === 'SUB_TABLE') {
+                        return {
+                          label: `Lặp bảng: ${c.columnName}`,
+                          token: `{{#each ${c.columnCode}}}\n  <tr><td>{{@index1}}</td><td>...</td></tr>\n{{/each}}`,
+                        };
+                      }
+                      if (dt === 'CURRENCY') return { label: `${c.columnName} (Tiền)`, token: `{{${c.columnCode} | currency}}` };
+                      if (dt === 'DATE') return { label: `${c.columnName} (Ngày)`, token: `{{${c.columnCode} | date}}` };
+                      if (dt === 'IMAGE') return { label: `${c.columnName} (Ảnh)`, token: `{{${c.columnCode} | image}}` };
+                      return { label: c.columnName, token: `{{${c.columnCode}}}` };
+                    }),
+                    ...columns
+                      .filter((c) => (c.dataType || '').toUpperCase() === 'CURRENCY')
+                      .map((c) => ({ label: `${c.columnName} (Bằng chữ)`, token: `{{${c.columnCode} | vnd_words}}` })),
+                  ].map((item, idx) => (
+                    <button
+                      key={`${item.label}_${idx}`}
+                      type="button"
+                      className="btn btn-outline btn-xs"
+                      style={{ fontSize: 11, padding: '2px 7px' }}
+                      onClick={() => insertTokenAtCursor(item.token)}
+                      title={item.token}
+                    >
+                      + {item.label}
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  ref={templateRef}
+                  className="form-input"
+                  rows={10}
+                  style={{ fontFamily: 'monospace', fontSize: 12, marginBottom: 8 }}
+                  value={htmlTemplate}
+                  onChange={(e) => setHtmlTemplate(e.target.value)}
+                />
+                <label className="form-label">CSS tùy chỉnh (tùy chọn)</label>
+                <textarea
+                  className="form-input"
+                  rows={3}
+                  style={{ fontFamily: 'monospace', fontSize: 11.5 }}
+                  placeholder="vd: h1 { color: #1e3a8a; }"
+                  value={cssStyles}
+                  onChange={(e) => setCssStyles(e.target.value)}
+                />
+              </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button
@@ -1395,8 +1488,9 @@ export function PrintTemplateDesignerModal({
                         tableId: table.id,
                         name,
                         paperSize,
-                        orientation: 'portrait',
+                        orientation,
                         htmlTemplate,
+                        cssStyles: cssStyles.trim() || null,
                         isDefault,
                         watermarkDraft,
                         requireApproved,
@@ -1420,10 +1514,11 @@ export function PrintTemplateDesignerModal({
           </div>
 
           {/* Live Preview */}
-          <div className="form-section-card" style={{ overflowY: 'auto', maxHeight: 540 }}>
+          <div className="form-section-card" style={{ overflowY: 'auto', maxHeight: 620 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 8 }}>
-              XEM TRƯỚC TRỰC TIẾP ({paperSize})
+              XEM TRƯỚC TRỰC TIẾP ({paperSize} • {orientation === 'landscape' ? 'Ngang' : 'Dọc'})
             </div>
+            <style>{getPagePrintCss(paperSize, orientation, cssStyles)}</style>
             <div
               style={{
                 backgroundColor: '#fff',
@@ -1431,7 +1526,7 @@ export function PrintTemplateDesignerModal({
                 padding: 18,
                 borderRadius: 8,
                 border: '1px solid #cbd5e1',
-                maxWidth: paperSize === 'K80' ? 320 : '100%',
+                maxWidth: paperSize === 'K80' ? 320 : paperSize === 'LABEL_50X30' ? 360 : '100%',
                 margin: '0 auto',
               }}
               dangerouslySetInnerHTML={{ __html: previewHtml }}
@@ -1644,6 +1739,222 @@ export function BackupManagerPanel({
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+/* =========================================================
+ * 6. UPGRADE APPS TO V2.0 MODAL
+ * ========================================================= */
+export function AppUpgradeV2Modal({
+  open,
+  onClose,
+  onUpgraded,
+  toast,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onUpgraded: () => Promise<void> | void;
+  toast: (msg: string, type?: 'success' | 'error') => void;
+}) {
+  const [candidates, setCandidates] = useState<AppUpgradeCandidate[]>([]);
+  const [results, setResults] = useState<AppUpgradeExecutionResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const loadPreview = useCallback(async () => {
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch('/api/apps/upgrade-v2/preview', { credentials: 'include' }).then((r) => r.json());
+      if (res.success) {
+        setCandidates(res.data || []);
+      } else {
+        setErrorMsg(res.message || 'Không thể tải danh sách nâng cấp v2.0');
+      }
+    } catch {
+      setErrorMsg('Lỗi kết nối khi tải danh sách nâng cấp v2.0');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEscapeKey(open, onClose);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      setResults([]);
+      void loadPreview();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, loadPreview]);
+
+  if (!open) return null;
+
+  const pendingCount = candidates.filter((c) => c.needsUpgrade).length;
+
+  const upgradeOne = async (appId: string) => {
+    setBusyId(appId);
+    try {
+      const res = await fetch(`/api/apps/${encodeURIComponent(appId)}/upgrade-v2`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }).then((r) => r.json());
+      if (res.success && res.data) {
+        setResults((prev) => [res.data, ...prev.filter((r) => r.appId !== appId)]);
+        toast(`Đã nâng cấp ${res.data.appCode} lên v${res.data.newVersion}!`);
+        await loadPreview();
+        await onUpgraded();
+      } else {
+        toast(res.message || 'Nâng cấp thất bại', 'error');
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const upgradeAll = async () => {
+    const ids = candidates.filter((c) => c.needsUpgrade).map((c) => c.appId);
+    if (ids.length === 0) return;
+    setBusyId('__ALL__');
+    try {
+      const res = await fetch('/api/apps/upgrade-v2', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appIds: ids }),
+      }).then((r) => r.json());
+      if (res.success && Array.isArray(res.data)) {
+        setResults(res.data);
+        toast(`Đã nâng cấp thành công ${res.data.length} ứng dụng lên v2.0.0!`);
+        await loadPreview();
+        await onUpgraded();
+      } else {
+        toast(res.message || 'Nâng cấp hàng loạt thất bại', 'error');
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-dialog" style={{ maxWidth: 820, maxHeight: '88vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <RocketLaunchRoundedIcon sx={{ color: '#1a73e8' }} />
+            <div>
+              <h3 style={{ margin: 0, fontSize: 16 }}>Nâng cấp Ứng dụng lên Phiên bản 2.0.0</h3>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                Không mất dữ liệu • Typed JSON SUB_TABLE • FormRules • Workflow • Mẫu in A4/K80 • Saved Views • Plugin VN
+              </div>
+            </div>
+          </div>
+          <button type="button" className="btn btn-outline btn-xs" onClick={onClose} aria-label="Đóng">
+            ✕
+          </button>
+        </div>
+
+        <div className="modal-body" style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+              {pendingCount > 0
+                ? <>Phát hiện <strong>{pendingCount}/{candidates.length}</strong> ứng dụng cần bổ sung tính năng chuẩn v2.0.0.</>
+                : <>Tất cả <strong>{candidates.length}</strong> ứng dụng đang đạt chuẩn phiên bản v2.0.0.</>}
+            </div>
+            <button type="button" className="btn btn-outline btn-xs" onClick={() => void loadPreview()} disabled={loading || busyId !== null}>
+              <RefreshRoundedIcon sx={{ fontSize: 15 }} /> Kiểm tra lại
+            </button>
+          </div>
+
+          {errorMsg && (
+            <div className="alert alert-error" style={{ fontSize: 12.5 }}>
+              {errorMsg}
+            </div>
+          )}
+
+          {loading ? (
+            <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+              Đang phân tích cấu trúc &amp; tính năng từng ứng dụng...
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {candidates.map((c) => (
+                <div
+                  key={c.appId}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 10,
+                    border: '1px solid var(--border-subtle)',
+                    backgroundColor: c.needsUpgrade ? 'var(--bg-primary)' : 'var(--bg-surface)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 12,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 260 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <strong style={{ fontSize: 13.5, color: 'var(--text-primary)' }}>{c.appName}</strong>
+                      <span className="badge badge-info" style={{ fontSize: 10.5 }}>{c.appCode}</span>
+                      <span className={`badge ${c.needsUpgrade ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: 10.5 }}>
+                        v{c.currentVersion} {c.needsUpgrade ? `→ ${c.targetVersion}` : '• Đạt chuẩn 2.0'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                      {c.missingFeatures.length > 0 ? c.missingFeatures.join(' • ') : c.summary}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${c.needsUpgrade ? 'btn-primary' : 'btn-outline'}`}
+                    disabled={busyId !== null}
+                    onClick={() => void upgradeOne(c.appId)}
+                  >
+                    {busyId === c.appId ? 'Đang nâng cấp...' : c.needsUpgrade ? 'Nâng cấp lên 2.0.0' : 'Đồng bộ lại'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {results.length > 0 && (
+            <div style={{ padding: 12, borderRadius: 10, backgroundColor: 'var(--success-bg)', border: '1px solid var(--border-subtle)', fontSize: 12 }}>
+              <strong style={{ display: 'block', marginBottom: 6 }}>Kết quả nâng cấp vừa thực hiện:</strong>
+              {results.map((r) => (
+                <div key={r.appId} style={{ color: 'var(--text-primary)', marginBottom: 3 }}>
+                  <strong>{r.appCode}</strong> (v{r.previousVersion} → v{r.newVersion}):
+                  +{r.columnsUpgraded} cột, +{r.formRulesAttached} rule, +{r.workflowsAdded} WF, +{r.printTemplatesAdded} mẫu in, +{r.savedViewsAdded} view
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button type="button" className="btn btn-outline btn-sm" onClick={onClose} disabled={busyId !== null}>
+            Đóng
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={loading || busyId !== null || pendingCount === 0}
+            onClick={() => void upgradeAll()}
+          >
+            <RocketLaunchRoundedIcon sx={{ fontSize: 15 }} />
+            {busyId === '__ALL__' ? 'Đang nâng cấp hàng loạt...' : `Nâng cấp Tất cả (${pendingCount})`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

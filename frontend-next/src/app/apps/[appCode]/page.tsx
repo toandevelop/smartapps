@@ -154,7 +154,12 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
   const [structuredFilter, setStructuredFilter] = useState<StructuredQueryFilter>(EMPTY_STRUCTURED_FILTER);
   const [filterBuilderKey, setFilterBuilderKey] = useState(0);
-  const [previewDraft, setPreviewDraft] = useState(false);
+  const [draftOverride, setDraftOverride] = useState<boolean | null>(null);
+  const previewDraft =
+    draftOverride ??
+    (searchParams?.get('previewDraft') === 'true' || searchParams?.get('previewDraft') === '1');
+  const togglePreviewDraft = (next?: boolean) =>
+    setDraftOverride((prev) => (next !== undefined ? next : !(prev ?? previewDraft)));
   const [conflictState, setConflictState] = useState<{
     recordId: string;
     recordKey?: string | null;
@@ -738,7 +743,14 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
         subtitle={`${tree.app.department} • Phiên bản ${tree.app.version} • ${tree.app.description || ''}`}
         icon={<ClusterIcon icon={tree.app.icon} fontSize={24} />}
         accentColor={tree.app.color}
-        badge={<span className="badge badge-info">{tree.app.code}</span>}
+        badge={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span className="badge badge-info">{tree.app.code}</span>
+            <span className={`badge ${Number((tree.app.version || '1').split('.')[0]) >= 2 ? 'badge-success' : 'badge-warning'}`}>
+              v{tree.app.version || '1.0.0'}
+            </span>
+          </span>
+        }
         breadcrumbs={[{ label: 'Cổng Ứng dụng', href: '/' }, { label: tree.app.name }]}
         actions={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -768,7 +780,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                   type="button"
                   className={`btn btn-sm ${previewDraft ? 'btn-primary' : 'btn-outline'}`}
                   style={previewDraft ? { backgroundColor: '#b06000', borderColor: '#b06000', color: '#ffffff' } : undefined}
-                  onClick={() => setPreviewDraft((prev) => !prev)}
+                  onClick={() => togglePreviewDraft()}
                   title={previewDraft ? 'Quay lại xem Bản Phát hành chính thức' : 'Xem thử Bản Nháp đang thiết kế trong Studio (chưa Publish)'}
                 >
                   {previewDraft ? 'Đang xem: Bản Nháp' : 'Xem Bản Nháp'}
@@ -1059,7 +1071,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
               <Link href={`/studio?appId=${encodeURIComponent(tree.app.id)}`} className="btn btn-outline btn-xs">
                 Mở Studio để Phát hành
               </Link>
-              <button type="button" className="btn btn-primary btn-xs" onClick={() => setPreviewDraft(false)}>
+              <button type="button" className="btn btn-primary btn-xs" onClick={() => togglePreviewDraft(false)}>
                 Về Bản Phát hành
               </button>
             </div>

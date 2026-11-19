@@ -64,32 +64,32 @@ test('Record 360 drawer supports selective audit restore and approval recall/res
 
 test('dark theme uses semantic surfaces without light-mode glare across controls', async ({ page, qa }) => {
   await qa.signIn(page);
-  const initialSettingsLoaded = page.waitForResponse(
+  const initialMeLoaded = page.waitForResponse(
     (res) => new URL(res.url()).pathname === '/api/settings/me' && res.status() === 200,
+  );
+  const initialSysLoaded = page.waitForResponse(
+    (res) => new URL(res.url()).pathname === '/api/settings/system' && res.status() === 200,
   );
   await page.goto(`/apps/${qa.app.code}`);
   await expect(page.getByRole('heading', { name: qa.app.name, exact: true })).toBeVisible();
-  await initialSettingsLoaded;
+  await Promise.all([initialMeLoaded, initialSysLoaded]);
 
   await page.evaluate(() => document.body.classList.add('theme-dark'));
 
-  const bodyBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-  expect(bodyBg).toBe('rgb(15, 23, 42)');
+  await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(15, 23, 42)');
 
   await page.getByRole('button', { name: 'Thêm Phiếu E2E điều kiện', exact: true }).click();
   const approvedSwitch = page.getByRole('switch', { name: 'Không / Sai', exact: true });
   await expect(approvedSwitch).toBeVisible();
 
-  const uncheckedBg = await approvedSwitch.evaluate((el) => getComputedStyle(el).backgroundColor);
-  expect(uncheckedBg).not.toBe('rgb(255, 255, 255)');
-  expect(uncheckedBg).toBe('rgb(22, 32, 50)');
+  await expect(approvedSwitch).not.toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect(approvedSwitch).toHaveCSS('background-color', 'rgb(22, 32, 50)');
 
   await approvedSwitch.click();
   const checkedSwitch = page.getByRole('switch', { name: 'Có / Đúng', exact: true });
-  const checkedBg = await checkedSwitch.evaluate((el) => getComputedStyle(el).backgroundColor);
-  expect(checkedBg).not.toBe('rgb(240, 253, 244)');
-  expect(checkedBg).not.toBe('rgb(255, 255, 255)');
-  expect(checkedBg).toBe('rgba(34, 197, 94, 0.14)');
+  await expect(checkedSwitch).not.toHaveCSS('background-color', 'rgb(240, 253, 244)');
+  await expect(checkedSwitch).not.toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect(checkedSwitch).toHaveCSS('background-color', 'rgba(34, 197, 94, 0.14)');
 });
 
 test('ecosystem exposes OpenAPI spec, MCP tools, Idempotency-Key deduplication, and metrics', async ({ adminApi, qa }) => {
@@ -164,4 +164,171 @@ test('ecosystem exposes OpenAPI spec, MCP tools, Idempotency-Key deduplication, 
   expect(metricsPromRes.status()).toBe(200);
   const promText = await metricsPromRes.text();
   expect(promText).toContain('smartapps_http_requests_total');
+});
+
+test('apps run on v2.0.0 with rich templates and Studio upgrades legacy v1.0 apps cleanly', async ({ page, adminApi, qa }) => {
+  const templatesRes = await adminApi.get('/api/apps/templates');
+  expect(templatesRes.status()).toBe(200);
+  const templatesJson = await templatesRes.json();
+  expect(templatesJson.success).toBe(true);
+  const templates = templatesJson.data as Array<{
+    code: string;
+    version: string;
+    formRuleCount: number;
+    workflowCount: number;
+    printTemplateCount: number;
+    savedViewCount: number;
+  }>;
+  expect(templates.length).toBeGreaterThanOrEqual(15);
+  for (const tpl of templates) {
+    expect(tpl.version).toBe('2.0.0');
+    expect(tpl.formRuleCount).toBeGreaterThanOrEqual(1);
+    expect(tpl.workflowCount).toBeGreaterThanOrEqual(1);
+    expect(tpl.printTemplateCount).toBeGreaterThanOrEqual(1);
+    expect(tpl.savedViewCount).toBeGreaterThanOrEqual(1);
+  }
+
+  await qa.addColumn({
+    columnCode: 'chi_tiet_v1',
+    columnName: 'Chi tiết v1',
+    dataType: 'SUB_TABLE',
+    defaultValue: 'ten_hang,so_luong,don_gia,thanh_tien',
+  });
+
+  await qa.signIn(page);
+  await page.goto('/');
+  await expect(page.getByText('v2.0.0').first()).toBeVisible();
+
+  await qa.openStudio(page);
+  await page.getByRole('button', { name: 'Nâng cấp Apps 2.0', exact: true }).click();
+
+  const dialog = page.locator('.modal-dialog').filter({ hasText: 'Nâng cấp Ứng dụng lên Phiên bản 2.0.0' });
+  await expect(dialog).toBeVisible();
+
+  const targetRow = dialog
+    .locator('div')
+    .filter({ hasText: qa.app.code })
+    .filter({ hasText: 'v1.0.0 → 2.0.0' })
+    .filter({ has: page.getByRole('button', { name: 'Nâng cấp lên 2.0.0', exact: true }) })
+    .last();
+  await expect(targetRow).toBeVisible();
+
+  const upgradeRes = page.waitForResponse(
+    (res) => new URL(res.url()).pathname === `/api/apps/${encodeURIComponent(qa.app.id)}/upgrade-v2` && res.request().method() === 'POST',
+  );
+  await targetRow.getByRole('button', { name: 'Nâng cấp lên 2.0.0', exact: true }).click();
+  expect((await upgradeRes).status()).toBe(200);
+
+  await expect(dialog.getByText('Kết quả nâng cấp vừa thực hiện:')).toBeVisible();
+  await expect(dialog.getByText(`${qa.app.code} (v1.0.0 → v2.0.0)`)).toBeVisible();
+
+  await dialog.getByRole('button', { name: 'Đóng', exact: true }).first().click();
+  await page.goto(`/apps/${qa.app.code}?previewDraft=true`);
+  await expect(page.getByText('Chế độ xem thử Bản Nháp (Draft Preview):')).toBeVisible();
+  await page.getByRole('button', { name: 'Về Bản Phát hành', exact: true }).click();
+  await expect(page.getByText('Chế độ xem thử Bản Nháp (Draft Preview):')).toHaveCount(0);
+  await expect(page.getByText('v2.0.0', { exact: true }).first()).toBeVisible();
+});
+
+test('online app store browses, downloads .smartapp.json, installs apps, and syncs remote registry', async ({ page, adminApi, qa }) => {
+  await qa.signIn(page);
+  await page.goto('/store');
+  await expect(page.getByRole('heading', { name: 'Kho Apps Online (SmartApps Marketplace)', exact: true })).toBeVisible();
+
+  const searchInput = page.getByPlaceholder('Tìm kiếm App trên Kho Online (CRM, TMĐT, BĐS, HIS, MES...)');
+  await expect(searchInput).toBeVisible();
+  await searchInput.fill('MANUFACTURE_MES');
+
+  const mesCard = page.locator('.card').filter({ hasText: 'MANUFACTURE_MES' }).first();
+  await expect(mesCard).toBeVisible();
+
+  // 1. Download .smartapp.json package to disk and verify contents
+  const downloadPromise = page.waitForEvent('download');
+  await mesCard.getByRole('button', { name: 'Tải về (.json)', exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toContain('smartapp-manufacture_mes');
+  const dlPath = await download.path();
+  expect(dlPath).toBeTruthy();
+
+  // 2. Open detail modal, customize code, install 1-click and verify runtime works
+  await mesCard.getByRole('button', { name: 'Chi tiết', exact: true }).click();
+  const detailDialog = page.locator('.modal-dialog').filter({ hasText: 'Mã gói: MANUFACTURE_MES' });
+  await expect(detailDialog).toBeVisible();
+  const storeCode = `MES_E2E_${Date.now().toString().slice(-4)}`;
+  await detailDialog.getByPlaceholder('Mã App...').fill(storeCode);
+
+  const installRes = page.waitForResponse(
+    (res) => new URL(res.url()).pathname === '/api/store/apps/MANUFACTURE_MES/install' && res.request().method() === 'POST',
+  );
+  await detailDialog.getByRole('button', { name: 'Tải & Cài đặt ngay', exact: true }).click();
+  expect((await installRes).status()).toBe(200);
+  await expect(page.getByRole('link', { name: 'Mở App ngay', exact: true })).toBeVisible();
+
+  // 3. Re-install from downloaded .smartapp.json file via file input
+  const fileInstallRes = page.waitForResponse(
+    (res) => new URL(res.url()).pathname === '/api/store/install-package' && res.request().method() === 'POST',
+  );
+  await page.locator('input[type="file"][accept*=".smartapp.json"]').setInputFiles(dlPath!);
+  expect((await fileInstallRes).status()).toBe(200);
+
+  // 4. Connect live remote Online Store registry pointing to manifest.json and sync
+  await page.getByRole('button', { name: /Nguồn Kho Online/ }).click();
+  const regDialog = page.locator('.modal-dialog').filter({ hasText: 'Nguồn Kho Apps Online Từ Xa' });
+  await expect(regDialog).toBeVisible();
+  await regDialog.getByPlaceholder('Tên kho (VD: Partner Hub)').fill('Local Mirror Hub');
+  await regDialog.getByPlaceholder(/URL Manifest/).fill('http://127.0.0.1:5520/api/store/manifest.json');
+  const regCreateRes = page.waitForResponse(
+    (res) => new URL(res.url()).pathname === '/api/store/registries' && res.request().method() === 'POST',
+  );
+  await regDialog.getByRole('button', { name: 'Kết nối & Đồng bộ', exact: true }).click();
+  expect((await regCreateRes).status()).toBe(200);
+  await expect(regDialog.getByText('Local Mirror Hub')).toBeVisible();
+  await expect(regDialog.getByText('Đang bật')).toBeVisible();
+
+  // Toggle registry off & back on cleanly
+  const toggleOffRes = page.waitForResponse(
+    (res) => res.url().includes('/api/store/registries/') && res.url().endsWith('/toggle') && res.request().method() === 'PATCH',
+  );
+  await regDialog.getByRole('button', { name: 'Tạm dừng', exact: true }).first().click();
+  expect((await toggleOffRes).status()).toBe(200);
+  await expect(regDialog.getByText('Tạm dừng')).toBeVisible();
+
+  const toggleOnRes = page.waitForResponse(
+    (res) => res.url().includes('/api/store/registries/') && res.url().endsWith('/toggle') && res.request().method() === 'PATCH',
+  );
+  await regDialog.getByRole('button', { name: 'Kích hoạt', exact: true }).first().click();
+  expect((await toggleOnRes).status()).toBe(200);
+
+  await regDialog.getByRole('button', { name: 'Đóng', exact: true }).click();
+
+  await searchInput.fill('');
+  await page.getByRole('button', { name: /Kho Từ xa \(/ }).click();
+  await expect(page.locator('.card').filter({ hasText: 'Local Mirror Hub' }).first()).toBeVisible();
+
+  // 4b. Verify Store History modal & Workspace Export modal work
+  const histRes = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/store/history');
+  await page.getByRole('button', { name: 'Lịch sử Kho', exact: true }).click();
+  expect((await histRes).status()).toBe(200);
+  const histDialog = page.locator('.modal-dialog').filter({ hasText: 'Lịch sử Tải & Cài đặt Kho Apps Online' });
+  await expect(histDialog.getByText('MANUFACTURE_MES').first()).toBeVisible();
+  await histDialog.getByRole('button', { name: 'Đóng', exact: true }).click();
+
+  await page.getByRole('button', { name: 'Đóng gói Xuất App', exact: true }).click();
+  const exportDialog = page.locator('.modal-dialog').filter({ hasText: 'Đóng gói Ứng dụng thành Gói Store' });
+  await expect(exportDialog.getByText(storeCode)).toBeVisible();
+  await exportDialog.getByRole('button', { name: 'Đóng', exact: true }).click();
+
+  // 5. Open newly installed v2.0 Store App in Runtime
+  await page.goto(`/apps/${storeCode}`);
+  await expect(page.getByText('v2.0.0', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('LSX-2026-0001')).toBeVisible();
+
+  // Cleanup any created store test apps & registries via adminApi
+  const appsRes = await adminApi.get('/api/apps');
+  const allApps = (await appsRes.json()).data as Array<{ id: string; code: string }>;
+  for (const a of allApps) {
+    if (a.code.startsWith('MES_E2E_') || a.code.startsWith('MANUFACTURE_MES')) {
+      await adminApi.delete(`/api/apps/${encodeURIComponent(a.id)}`);
+    }
+  }
 });

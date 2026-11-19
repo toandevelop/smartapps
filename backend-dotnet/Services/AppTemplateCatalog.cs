@@ -22,14 +22,19 @@ public record TemplateColumnSpec
     public int Width { get; init; } = 170;
     public string? ValidationRegex { get; init; }
     public string? RefCategoryCode { get; init; }
+    public bool AllowQuickCreate { get; init; }
     public string? RefAppId { get; init; }
     public string? RefTableId { get; init; }
     public string? InternalRefTableName { get; init; }
     public string? RefValueField { get; init; }
     public string? RefDisplayField { get; init; }
+    public string? LookupFilterField { get; init; }
+    public string? LookupSourceField { get; init; }
     public string? Formula { get; init; }
     public string? DefaultValue { get; init; }
     public bool ShowInParentForm { get; init; }
+    public List<string>? HiddenForRoles { get; init; }
+    public List<string>? ReadOnlyForRoles { get; init; }
     public int OrderIndex { get; init; } = 1;
 }
 
@@ -41,7 +46,12 @@ public record TemplateTableSpec(
     bool ApprovalEnabled,
     string ApprovalField,
     bool PublicFormEnabled,
-    List<TemplateColumnSpec> Columns);
+    List<TemplateColumnSpec> Columns)
+{
+    public string RowScope { get; init; } = "ALL";
+    public List<string> ApproverRoles { get; init; } = [];
+    public List<FormRuleDto> FormRules { get; init; } = [];
+}
 
 public record TemplateModuleSpec(
     string Code,
@@ -64,6 +74,72 @@ public record TemplateWidgetSpec(
     string Color,
     int OrderIndex);
 
+public record TemplateWorkflowSpec(
+    string Name,
+    string Description,
+    string TableName,
+    string TriggerType,
+    List<WorkflowStepDto> Steps);
+
+public record TemplateAutomationSpec(
+    string Name,
+    string Description,
+    string TriggerTableName,
+    string TriggerEvent,
+    string? ConditionField,
+    string? ConditionOperator,
+    string? ConditionValue,
+    string? TargetAppIdOrCode,
+    string? TargetModuleCode,
+    string? TargetTableName,
+    string ActionType,
+    string? MatchTargetField,
+    string? MatchSourceField,
+    Dictionary<string, string> FieldMappings,
+    string? NotifyRecipient = null,
+    string? NotifyTemplate = null);
+
+public record TemplatePrintTemplateSpec(
+    string TableName,
+    string Name,
+    string PaperSize,
+    string Orientation,
+    bool IsDefault,
+    bool WatermarkDraft,
+    bool RequireApproved,
+    string HtmlTemplate,
+    string? CssStyles = null);
+
+public record TemplateSavedViewSpec(
+    string TableName,
+    string Name,
+    bool IsDefault,
+    bool IsShared,
+    string FiltersJson,
+    string? SortField = null,
+    string SortDir = "DESC");
+
+public record TemplatePluginBindingSpec(
+    string PluginCode,
+    string TableName,
+    Dictionary<string, string> FieldMapping);
+
+public record CoreAppV2Spec(
+    string AppId,
+    string Code,
+    string Version,
+    List<TemplateCategorySpec> Categories,
+    List<TemplateModuleSpec> ExtraModules,
+    Dictionary<string, List<TemplateColumnSpec>> ExtraColumnsByTable,
+    Dictionary<string, List<FormRuleDto>> FormRulesByTable,
+    Dictionary<string, string> SubTableSchemaUpgrades,
+    List<TemplateWorkflowSpec> Workflows,
+    List<TemplateAutomationSpec> Automations,
+    List<TemplatePrintTemplateSpec> PrintTemplates,
+    List<TemplateSavedViewSpec> SavedViews,
+    List<TemplateWidgetSpec> ExtraWidgets,
+    List<TemplatePluginBindingSpec> PluginBindings);
+
 public record AppTemplateDefinition(
     string TemplateKey,
     string Code,
@@ -80,14 +156,22 @@ public record AppTemplateDefinition(
     List<TemplateCategorySpec> Categories,
     List<TemplateModuleSpec> Modules,
     List<TemplateRecordSpec> SampleRecords,
-    List<TemplateWidgetSpec> Widgets);
+    List<TemplateWidgetSpec> Widgets)
+{
+    public string Version { get; init; } = "2.0.0";
+    public List<TemplateWorkflowSpec> Workflows { get; init; } = [];
+    public List<TemplateAutomationSpec> Automations { get; init; } = [];
+    public List<TemplatePrintTemplateSpec> PrintTemplates { get; init; } = [];
+    public List<TemplateSavedViewSpec> SavedViews { get; init; } = [];
+    public List<TemplatePluginBindingSpec> PluginBindings { get; init; } = [];
+}
 
 /// <summary>
 /// Built-in catalog of commonly used enterprise sample application templates.
 /// </summary>
-public static class AppTemplateCatalog
+public static partial class AppTemplateCatalog
 {
-    private static readonly IReadOnlyList<AppTemplateDefinition> AllTemplates = BuildTemplates();
+    private static readonly IReadOnlyList<AppTemplateDefinition> AllTemplates = BuildV2Templates(BuildTemplates());
 
     public static IReadOnlyList<AppTemplateDefinition> GetAll() => AllTemplates;
 
@@ -112,12 +196,19 @@ public static class AppTemplateCatalog
             Icon = t.Icon,
             Color = t.Color,
             BgColor = t.BgColor,
+            Version = t.Version,
             Highlights = t.Highlights,
             Features = t.Features,
             ModuleCount = t.Modules.Count,
             TableCount = t.Modules.Sum(m => m.Tables.Count),
             SampleRecordCount = t.SampleRecords.Count,
-            WidgetCount = t.Widgets.Count
+            WidgetCount = t.Widgets.Count,
+            FormRuleCount = t.Modules.SelectMany(m => m.Tables).Sum(tb => tb.FormRules.Count),
+            WorkflowCount = t.Workflows.Count,
+            AutomationCount = t.Automations.Count,
+            PrintTemplateCount = t.PrintTemplates.Count,
+            SavedViewCount = t.SavedViews.Count,
+            PluginBindingCount = t.PluginBindings.Count
         }).ToList();
 
     private static TemplateColumnSpec HrmLookupCol(string code, string name, int order, bool required = true) => new()
@@ -283,7 +374,18 @@ public static class AppTemplateCatalog
                     new() { ColumnCode = "loai_chi_phi", ColumnName = "Khoản mục chi phí", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_LOAI_CHI_PHI", Width = 195, OrderIndex = 3 },
                     HrmLookupCol("nguoi_de_nghi", "Người đề nghị (HRM)", 4),
                     new() { ColumnCode = "ngay_de_nghi", ColumnName = "Ngày đề nghị", DataType = "DATE", IsRequired = true, Width = 135, OrderIndex = 5 },
-                    new() { ColumnCode = "bang_ke", ColumnName = "Bảng kê hóa đơn / chứng từ", DataType = "SUB_TABLE", DefaultValue = "hang_muc,so_tien,ghi_chu", ShowInTable = false, Width = 260, OrderIndex = 6 },
+                    new()
+                    {
+                        ColumnCode = "bang_ke", ColumnName = "Bảng kê hóa đơn / chứng từ", DataType = "SUB_TABLE",
+                        DefaultValue = SubTableJson(
+                            new("hang_muc", "Hạng mục chi phí", "STRING", true, 240),
+                            new("so_luong", "SL", "NUMBER", true, 85, "1"),
+                            new("don_gia", "Đơn giá", "CURRENCY", true, 145),
+                            new("so_tien", "Thành tiền", "CURRENCY", false, 155, null, "so_luong * don_gia"),
+                            new("ghi_chu", "Ghi chú", "STRING", false, 170)
+                        ),
+                        ShowInTable = false, Width = 260, OrderIndex = 6
+                    },
                     new() { ColumnCode = "tong_tien_hang", ColumnName = "Tiền hàng (Auto)", DataType = "CURRENCY", Formula = "SUM(bang_ke.so_tien)", Width = 160, OrderIndex = 7 },
                     new() { ColumnCode = "thue_vat", ColumnName = "Thuế VAT (VNĐ)", DataType = "CURRENCY", DefaultValue = "0", Width = 140, OrderIndex = 8 },
                     new() { ColumnCode = "tong_cong", ColumnName = "Tổng thanh toán (Auto)", DataType = "CURRENCY", Formula = "tong_tien_hang + thue_vat", Width = 175, OrderIndex = 9 },
@@ -312,8 +414,8 @@ public static class AppTemplateCatalog
                 ["ngay_de_nghi"] = "2026-11-10",
                 ["bang_ke"] = new List<Dictionary<string, object?>>
                 {
-                    new() { ["hang_muc"] = "AWS RDS PostgreSQL Production", ["so_tien"] = 18500000m, ["ghi_chu"] = "Hóa đơn tháng 11" },
-                    new() { ["hang_muc"] = "Cloudflare Enterprise DNS", ["so_tien"] = 4500000m, ["ghi_chu"] = "Gia hạn quý 4" }
+                    new() { ["hang_muc"] = "AWS RDS PostgreSQL Production", ["so_luong"] = 1, ["don_gia"] = 18500000m, ["so_tien"] = 18500000m, ["ghi_chu"] = "Hóa đơn tháng 11" },
+                    new() { ["hang_muc"] = "Cloudflare Enterprise DNS", ["so_luong"] = 1, ["don_gia"] = 4500000m, ["so_tien"] = 4500000m, ["ghi_chu"] = "Gia hạn quý 4" }
                 },
                 ["thue_vat"] = 2300000m,
                 ["trang_thai_duyet"] = "DA_DUYET"
@@ -327,8 +429,8 @@ public static class AppTemplateCatalog
                 ["ngay_de_nghi"] = "2026-11-14",
                 ["bang_ke"] = new List<Dictionary<string, object?>>
                 {
-                    new() { ["hang_muc"] = "Thuê hội trường & Âm thanh", ["so_tien"] = 15000000m, ["ghi_chu"] = "Khách sạn Melia" },
-                    new() { ["hang_muc"] = "Tea-break & Tài liệu in ấn", ["so_tien"] = 6200000m, ["ghi_chu"] = "60 khách mời" }
+                    new() { ["hang_muc"] = "Thuê hội trường & Âm thanh", ["so_luong"] = 1, ["don_gia"] = 15000000m, ["so_tien"] = 15000000m, ["ghi_chu"] = "Khách sạn Melia" },
+                    new() { ["hang_muc"] = "Tea-break & Tài liệu in ấn", ["so_luong"] = 1, ["don_gia"] = 6200000m, ["so_tien"] = 6200000m, ["ghi_chu"] = "60 khách mời" }
                 },
                 ["thue_vat"] = 1696000m,
                 ["trang_thai_duyet"] = "CHO_DUYET"
@@ -342,7 +444,7 @@ public static class AppTemplateCatalog
                 ["ngay_de_nghi"] = "2026-11-15",
                 ["bang_ke"] = new List<Dictionary<string, object?>>
                 {
-                    new() { ["hang_muc"] = "Giấy in A4 & Mực máy in", ["so_tien"] = 3400000m, ["ghi_chu"] = "Kho văn phòng" }
+                    new() { ["hang_muc"] = "Giấy in A4 & Mực máy in", ["so_luong"] = 1, ["don_gia"] = 3400000m, ["so_tien"] = 3400000m, ["ghi_chu"] = "Kho văn phòng" }
                 },
                 ["thue_vat"] = 340000m,
                 ["trang_thai_duyet"] = "CHO_DUYET"
@@ -437,7 +539,17 @@ public static class AppTemplateCatalog
                     new() { ColumnCode = "ma_ncc", ColumnName = "Nhà cung cấp", DataType = "LOOKUP", IsRequired = true, InternalRefTableName = "pur_nha_cung_cap", RefValueField = "ma_ncc", RefDisplayField = "ten_ncc", Width = 210, OrderIndex = 3 },
                     HrmLookupCol("nguoi_yeu_cau", "Người đề xuất (HRM)", 4),
                     new() { ColumnCode = "ngay_can_hang", ColumnName = "Ngày cần hàng", DataType = "DATE", IsRequired = true, Width = 135, OrderIndex = 5 },
-                    new() { ColumnCode = "chi_tiet_hang", ColumnName = "Danh sách mặt hàng", DataType = "SUB_TABLE", DefaultValue = "ten_hang,so_luong,don_gia,thanh_tien", ShowInTable = false, Width = 260, OrderIndex = 6 },
+                    new()
+                    {
+                        ColumnCode = "chi_tiet_hang", ColumnName = "Danh sách mặt hàng", DataType = "SUB_TABLE",
+                        DefaultValue = SubTableJson(
+                            new("ten_hang", "Tên mặt hàng / Quy cách", "STRING", true, 240),
+                            new("so_luong", "Số lượng", "NUMBER", true, 100, "1"),
+                            new("don_gia", "Đơn giá (VNĐ)", "CURRENCY", true, 150),
+                            new("thanh_tien", "Thành tiền", "CURRENCY", false, 165, null, "so_luong * don_gia")
+                        ),
+                        ShowInTable = false, Width = 260, OrderIndex = 6
+                    },
                     new() { ColumnCode = "tong_gia_tri", ColumnName = "Tổng giá trị PO", DataType = "CURRENCY", Formula = "SUM(chi_tiet_hang.thanh_tien)", Width = 170, OrderIndex = 7 },
                     new() { ColumnCode = "tien_do_po", ColumnName = "Tiến độ giao hàng", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_TRANG_THAI_PO", DefaultValue = "MOI_TAO", Width = 175, OrderIndex = 8 },
                     new() { ColumnCode = "trang_thai_duyet", ColumnName = "Trạng thái duyệt", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_TRANG_THAI_DUYET", DefaultValue = "CHO_DUYET", Width = 155, OrderIndex = 9 }
@@ -555,7 +667,18 @@ public static class AppTemplateCatalog
                     new() { ColumnCode = "loai_phieu", ColumnName = "Loại chứng từ", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_LOAI_PHIEU_KHO", Width = 175, OrderIndex = 2 },
                     new() { ColumnCode = "ngay_chung_tu", ColumnName = "Ngày chứng từ", DataType = "DATE", IsRequired = true, Width = 135, OrderIndex = 3 },
                     HrmLookupCol("nguoi_lap", "Nhân viên lập phiếu", 4),
-                    new() { ColumnCode = "chi_tiet_vt", ColumnName = "Chi tiết vật tư", DataType = "SUB_TABLE", DefaultValue = "ma_sku,ten_hang,so_luong,thanh_tien", ShowInTable = false, Width = 260, OrderIndex = 5 },
+                    new()
+                    {
+                        ColumnCode = "chi_tiet_vt", ColumnName = "Chi tiết vật tư", DataType = "SUB_TABLE",
+                        DefaultValue = SubTableJson(
+                            new("ma_sku", "Mã SKU", "STRING", true, 125),
+                            new("ten_hang", "Tên vật tư / Hàng hóa", "STRING", true, 220),
+                            new("so_luong", "Số lượng", "NUMBER", true, 95, "1"),
+                            new("don_gia", "Đơn giá", "CURRENCY", true, 145),
+                            new("thanh_tien", "Thành tiền", "CURRENCY", false, 160, null, "so_luong * don_gia")
+                        ),
+                        ShowInTable = false, Width = 260, OrderIndex = 5
+                    },
                     new() { ColumnCode = "tong_gia_tri", ColumnName = "Tổng giá trị phiếu", DataType = "CURRENCY", Formula = "SUM(chi_tiet_vt.thanh_tien)", Width = 170, OrderIndex = 6 },
                     new() { ColumnCode = "trang_thai_duyet", ColumnName = "Trạng thái duyệt", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_TRANG_THAI_DUYET", DefaultValue = "CHO_DUYET", Width = 155, OrderIndex = 7 }
                 ])
@@ -575,7 +698,7 @@ public static class AppTemplateCatalog
                 ["nguoi_lap"] = "NV001",
                 ["chi_tiet_vt"] = new List<Dictionary<string, object?>>
                 {
-                    new() { ["ma_sku"] = "SKU-SSD-1T", ["ten_hang"] = "Ổ cứng NVMe SSD Samsung 1TB", ["so_luong"] = 10, ["thanh_tien"] = 24500000m }
+                    new() { ["ma_sku"] = "SKU-SSD-1T", ["ten_hang"] = "Ổ cứng NVMe SSD Samsung 1TB", ["so_luong"] = 10, ["don_gia"] = 2450000m, ["thanh_tien"] = 24500000m }
                 },
                 ["trang_thai_duyet"] = "DA_DUYET"
             }),
@@ -587,7 +710,7 @@ public static class AppTemplateCatalog
                 ["nguoi_lap"] = "NV003",
                 ["chi_tiet_vt"] = new List<Dictionary<string, object?>>
                 {
-                    new() { ["ma_sku"] = "SKU-A4-DL", ["ten_hang"] = "Giấy in Double A A4 80gsm", ["so_luong"] = 10, ["thanh_tien"] = 850000m }
+                    new() { ["ma_sku"] = "SKU-A4-DL", ["ten_hang"] = "Giấy in Double A A4 80gsm", ["so_luong"] = 10, ["don_gia"] = 85000m, ["thanh_tien"] = 850000m }
                 },
                 ["trang_thai_duyet"] = "CHO_DUYET"
             })
@@ -1201,7 +1324,17 @@ public static class AppTemplateCatalog
                     new() { ColumnCode = "bien_so", ColumnName = "Phương tiện", DataType = "LOOKUP", IsRequired = true, InternalRefTableName = "flt_phuong_tien", RefValueField = "bien_so", RefDisplayField = "hang_xe", ShowInParentForm = true, Width = 210, OrderIndex = 2 },
                     new() { ColumnCode = "loai_bao_tri", ColumnName = "Loại bảo dưỡng", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_LOAI_BAO_TRI", Width = 175, OrderIndex = 3 },
                     new() { ColumnCode = "ngay_thuc_hien", ColumnName = "Ngày thực hiện", DataType = "DATE", IsRequired = true, Width = 140, OrderIndex = 4 },
-                    new() { ColumnCode = "chi_tiet_phu_tung", ColumnName = "Chi tiết phụ tùng / công", DataType = "SUB_TABLE", DefaultValue = "hang_muc,so_luong,thanh_tien", ShowInTable = false, Width = 260, OrderIndex = 5 },
+                    new()
+                    {
+                        ColumnCode = "chi_tiet_phu_tung", ColumnName = "Chi tiết phụ tùng / công", DataType = "SUB_TABLE",
+                        DefaultValue = SubTableJson(
+                            new("hang_muc", "Hạng mục phụ tùng / công", "STRING", true, 240),
+                            new("so_luong", "Số lượng", "NUMBER", true, 95, "1"),
+                            new("don_gia", "Đơn giá", "CURRENCY", true, 145),
+                            new("thanh_tien", "Thành tiền", "CURRENCY", false, 160, null, "so_luong * don_gia")
+                        ),
+                        ShowInTable = false, Width = 260, OrderIndex = 5
+                    },
                     new() { ColumnCode = "tong_chi_phi", ColumnName = "Tổng chi phí (Auto)", DataType = "CURRENCY", Formula = "SUM(chi_tiet_phu_tung.thanh_tien)", Width = 175, OrderIndex = 6 },
                     new() { ColumnCode = "trang_thai_duyet", ColumnName = "Trạng thái duyệt", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_TRANG_THAI_DUYET", DefaultValue = "CHO_DUYET", Width = 155, OrderIndex = 7 }
                 ])
@@ -1220,8 +1353,8 @@ public static class AppTemplateCatalog
                 ["ngay_thuc_hien"] = "2026-11-14",
                 ["chi_tiet_phu_tung"] = new List<Dictionary<string, object?>>
                 {
-                    new() { ["hang_muc"] = "Thay dầu động cơ & Lọc nhớt", ["so_luong"] = 1, ["thanh_tien"] = 2400000m },
-                    new() { ["hang_muc"] = "Thay má phanh trước", ["so_luong"] = 2, ["thanh_tien"] = 3800000m }
+                    new() { ["hang_muc"] = "Thay dầu động cơ & Lọc nhớt", ["so_luong"] = 1, ["don_gia"] = 2400000m, ["thanh_tien"] = 2400000m },
+                    new() { ["hang_muc"] = "Thay má phanh trước", ["so_luong"] = 2, ["don_gia"] = 1900000m, ["thanh_tien"] = 3800000m }
                 },
                 ["trang_thai_duyet"] = "DA_DUYET"
             }),
@@ -1233,7 +1366,7 @@ public static class AppTemplateCatalog
                 ["ngay_thuc_hien"] = "2026-11-24",
                 ["chi_tiet_phu_tung"] = new List<Dictionary<string, object?>>
                 {
-                    new() { ["hang_muc"] = "Phí đăng kiểm & Bảo trì đường bộ 12 tháng", ["so_luong"] = 1, ["thanh_tien"] = 4650000m }
+                    new() { ["hang_muc"] = "Phí đăng kiểm & Bảo trì đường bộ 12 tháng", ["so_luong"] = 1, ["don_gia"] = 4650000m, ["thanh_tien"] = 4650000m }
                 },
                 ["trang_thai_duyet"] = "CHO_DUYET"
             })
@@ -1279,16 +1412,27 @@ public static class AppTemplateCatalog
         [
             new("MUA_SAM", "Đề xuất & Thanh toán", "ReceiptLong", "Quy trình mua sắm khép kín",
             [
-                new("proc_de_xuat", "Đề xuất Mua sắm", "table", "ALL", true, "trang_thai_duyet", false,
+                new("proc_de_xuat", "Đề xuất Mua sắm", "Lập đề xuất mua sắm có bảng con hàng hóa, phê duyệt và thanh toán VietQR", "table", true, "trang_thai_duyet", false,
                 [
                     new() { ColumnCode = "ma_dx", ColumnName = "Mã Đề xuất", DataType = "AUTO_NUMBER", DefaultValue = "DX-{YYYY}-", IsRequired = true, IsIdentityKey = true, Width = 140, OrderIndex = 1 },
                     new() { ColumnCode = "tieu_de", ColumnName = "Nội dung đề xuất", DataType = "STRING", IsRequired = true, Width = 240, OrderIndex = 2 },
                     new() { ColumnCode = "loai_mua", ColumnName = "Loại mua sắm", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_LOAI_MUA_SAM", Width = 170, OrderIndex = 3 },
                     new() { ColumnCode = "nguoi_de_xuat", ColumnName = "Người đề xuất", DataType = "USER", IsRequired = true, Width = 160, OrderIndex = 4 },
-                    new() { ColumnCode = "chi_tiet", ColumnName = "Chi tiết hàng hóa", DataType = "SUB_TABLE", DefaultValue = "ten_hang,so_luong,don_gia,thanh_tien", ShowInTable = false, Width = 260, OrderIndex = 5 },
+                    new()
+                    {
+                        ColumnCode = "chi_tiet", ColumnName = "Chi tiết hàng hóa", DataType = "SUB_TABLE",
+                        DefaultValue = SubTableJson(
+                            new("ten_hang", "Tên hàng hóa / Dịch vụ", "STRING", true, 240),
+                            new("so_luong", "Số lượng", "NUMBER", true, 95, "1"),
+                            new("don_gia", "Đơn giá", "CURRENCY", true, 150),
+                            new("thanh_tien", "Thành tiền", "CURRENCY", false, 165, null, "so_luong * don_gia")
+                        ),
+                        ShowInTable = false, Width = 260, OrderIndex = 5
+                    },
                     new() { ColumnCode = "tong_tien", ColumnName = "Tổng tiền (VNĐ)", DataType = "CURRENCY", Formula = "SUM(chi_tiet.thanh_tien)", Width = 165, OrderIndex = 6 },
                     new() { ColumnCode = "payment_status", ColumnName = "Thanh toán", DataType = "STRING", DefaultValue = "UNPAID", Width = 135, OrderIndex = 7 },
-                    new() { ColumnCode = "bao_gia", ColumnName = "Báo giá đính kèm", DataType = "MULTI_FILE", ShowInTable = false, Width = 200, OrderIndex = 8 }
+                    new() { ColumnCode = "bao_gia", ColumnName = "Báo giá đính kèm", DataType = "MULTI_FILE", ShowInTable = false, Width = 200, OrderIndex = 8 },
+                    new() { ColumnCode = "trang_thai_duyet", ColumnName = "Trạng thái duyệt", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_TRANG_THAI_DUYET", DefaultValue = "CHO_DUYET", Width = 155, OrderIndex = 9 }
                 ])
             ])
         ],
@@ -1304,7 +1448,8 @@ public static class AppTemplateCatalog
                 {
                     new() { ["ten_hang"] = "Laptop Dell Latitude 5450", ["so_luong"] = 2, ["don_gia"] = 22500000m, ["thanh_tien"] = 45000000m }
                 },
-                ["payment_status"] = "UNPAID"
+                ["payment_status"] = "UNPAID",
+                ["trang_thai_duyet"] = "CHO_DUYET"
             })
         ],
         Widgets:
@@ -1336,12 +1481,22 @@ public static class AppTemplateCatalog
         [
             new("BAN_HANG", "Đơn hàng & Tồn kho", "Inventory2", "Quản lý bán hàng và kho",
             [
-                new("sales_don_hang", "Đơn hàng Bán", "table", "ALL", false, "trang_thai_duyet", false,
+                new("sales_don_hang", "Đơn hàng Bán", "Đơn hàng bán lẻ/B2B, chi tiết sản phẩm, in K80/A4 và đối soát thanh toán", "table", false, "trang_thai_duyet", false,
                 [
                     new() { ColumnCode = "ma_don", ColumnName = "Mã Đơn hàng", DataType = "AUTO_NUMBER", DefaultValue = "DH-{YYYY}-", IsRequired = true, IsIdentityKey = true, Width = 140, OrderIndex = 1 },
                     new() { ColumnCode = "khach_hang", ColumnName = "Khách hàng", DataType = "STRING", IsRequired = true, Width = 210, OrderIndex = 2 },
                     new() { ColumnCode = "sdt", ColumnName = "Số điện thoại", DataType = "TEL", Width = 135, OrderIndex = 3 },
-                    new() { ColumnCode = "chi_tiet", ColumnName = "Sản phẩm đặt mua", DataType = "SUB_TABLE", DefaultValue = "ten_hang,so_luong,thanh_tien", ShowInTable = false, Width = 260, OrderIndex = 4 },
+                    new()
+                    {
+                        ColumnCode = "chi_tiet", ColumnName = "Sản phẩm đặt mua", DataType = "SUB_TABLE",
+                        DefaultValue = SubTableJson(
+                            new("ten_hang", "Sản phẩm / Hàng hóa", "STRING", true, 230),
+                            new("so_luong", "SL", "NUMBER", true, 85, "1"),
+                            new("don_gia", "Đơn giá", "CURRENCY", true, 145),
+                            new("thanh_tien", "Thành tiền", "CURRENCY", false, 160, null, "so_luong * don_gia")
+                        ),
+                        ShowInTable = false, Width = 260, OrderIndex = 4
+                    },
                     new() { ColumnCode = "tong_tien", ColumnName = "Tổng thanh toán", DataType = "CURRENCY", Formula = "SUM(chi_tiet.thanh_tien)", Width = 165, OrderIndex = 5 },
                     new() { ColumnCode = "payment_status", ColumnName = "Trạng thái TT", DataType = "STRING", DefaultValue = "UNPAID", Width = 135, OrderIndex = 6 }
                 ])
@@ -1356,7 +1511,7 @@ public static class AppTemplateCatalog
                 ["sdt"] = "0901234567",
                 ["chi_tiet"] = new List<Dictionary<string, object?>>
                 {
-                    new() { ["ten_hang"] = "Máy in hóa đơn K80", ["so_luong"] = 2, ["thanh_tien"] = 4200000m }
+                    new() { ["ten_hang"] = "Máy in hóa đơn K80", ["so_luong"] = 2, ["don_gia"] = 2100000m, ["thanh_tien"] = 4200000m }
                 },
                 ["payment_status"] = "PAID"
             })
@@ -1390,14 +1545,24 @@ public static class AppTemplateCatalog
         [
             new("BAN_GIAO", "Bàn giao Tài sản", "AssignmentInd", "Biên bản giao nhận tài sản",
             [
-                new("bg_tai_san", "Phiếu Bàn giao", "table", "ALL", true, "trang_thai_duyet", false,
+                new("bg_tai_san", "Phiếu Bàn giao", "Biên bản giao nhận tài sản cho nhân sự kèm ảnh đính kèm và chữ ký tay", "table", true, "trang_thai_duyet", false,
                 [
                     new() { ColumnCode = "ma_phieu", ColumnName = "Mã Biên bản", DataType = "AUTO_NUMBER", DefaultValue = "BG-{YYYY}-", IsRequired = true, IsIdentityKey = true, Width = 140, OrderIndex = 1 },
                     new() { ColumnCode = "nguoi_nhan", ColumnName = "Nhân sự nhận", DataType = "USER", IsRequired = true, Width = 175, OrderIndex = 2 },
                     new() { ColumnCode = "ngay_ban_giao", ColumnName = "Ngày bàn giao", DataType = "DATE", IsRequired = true, Width = 135, OrderIndex = 3 },
-                    new() { ColumnCode = "chi_tiet_ts", ColumnName = "Danh sách tài sản", DataType = "SUB_TABLE", DefaultValue = "ten_ts,serial,tinh_trang", ShowInTable = false, Width = 260, OrderIndex = 4 },
+                    new()
+                    {
+                        ColumnCode = "chi_tiet_ts", ColumnName = "Danh sách tài sản", DataType = "SUB_TABLE",
+                        DefaultValue = SubTableJson(
+                            new("ten_ts", "Tên tài sản / Thiết bị", "STRING", true, 230),
+                            new("serial", "Số Serial / Mã TS", "STRING", true, 160),
+                            new("tinh_trang", "Tình trạng bàn giao", "STRING", true, 165)
+                        ),
+                        ShowInTable = false, Width = 260, OrderIndex = 4
+                    },
                     new() { ColumnCode = "ho_so_dinh_kem", ColumnName = "Ảnh / Biên bản đính kèm", DataType = "MULTI_FILE", ShowInTable = false, Width = 200, OrderIndex = 5 },
-                    new() { ColumnCode = "chu_ky_nhan", ColumnName = "Chữ ký người nhận", DataType = "SIGNATURE", ShowInTable = true, Width = 160, OrderIndex = 6 }
+                    new() { ColumnCode = "chu_ky_nhan", ColumnName = "Chữ ký người nhận", DataType = "SIGNATURE", ShowInTable = true, Width = 160, OrderIndex = 6 },
+                    new() { ColumnCode = "trang_thai_duyet", ColumnName = "Trạng thái duyệt", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_TRANG_THAI_DUYET", DefaultValue = "CHO_DUYET", Width = 155, OrderIndex = 7 }
                 ])
             ])
         ],
@@ -1411,7 +1576,8 @@ public static class AppTemplateCatalog
                 ["chi_tiet_ts"] = new List<Dictionary<string, object?>>
                 {
                     new() { ["ten_ts"] = "Laptop Dell Latitude 5450", ["serial"] = "DL-5450-8899", ["tinh_trang"] = "Mới 100%" }
-                }
+                },
+                ["trang_thai_duyet"] = "DA_DUYET"
             })
         ],
         Widgets:

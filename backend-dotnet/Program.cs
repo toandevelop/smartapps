@@ -11,6 +11,8 @@ builder.Services.AddSingleton<RealtimeEventService>();
 builder.Services.AddSingleton<PlatformMetricsService>();
 builder.Services.AddSingleton<AiService>();
 builder.Services.AddSingleton<MetadataService>();
+builder.Services.AddSingleton<AppUpgradeService>();
+builder.Services.AddSingleton<AppStoreService>();
 builder.Services.AddSingleton<DynamicComputeService>();
 builder.Services.AddSingleton<RecordWriteService>();
 builder.Services.AddSingleton<ExternalNotificationService>();

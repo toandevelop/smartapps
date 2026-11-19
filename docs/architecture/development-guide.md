@@ -1,24 +1,26 @@
 # Hướng dẫn phát triển SmartApps
 
-Đối chiếu mã và chạy kiểm tra ngày **17/11/2026**. Các lệnh dưới đây dùng PowerShell tại `D:/smartapps`.
+Đối chiếu mã và chạy kiểm tra gần nhất ngày **18/11/2026**. Các lệnh dưới đây dùng PowerShell tại `D:/smartapps`.
 
-**Cập nhật:** đã thêm `npm test` và integration tests PostgreSQL/HTTP cho ba chức năng ưu tiên. Xem [hướng dẫn chạy và kết quả đợt 1](priority-features-implementation.md). Những mô tả “chưa có frontend test/integration” bên dưới phản ánh baseline trước đợt này; lint vẫn chưa được cấu hình.
+**Cập nhật 19/11/2026:**
+- Kiểm thử hiện đạt **137/137** backend `.NET` unit + PostgreSQL integration tests (`dotnet test -c Release`), **65/65** frontend unit tests (`npm test`), **22/22** Playwright E2E (`npm run test:e2e`), `npx tsc --noEmit` thoát `0` và `npm run lint` đạt **0 lỗi** (7 cảnh báo `@next/next/no-img-element` cho URL động/chữ ký; 0 cảnh báo React hook).
+- Repository Git (`origin/main`) và CI (`.github/workflows/conditional-form-e2e.yml`) đã bật đủ Backend tests, `tsc --noEmit`, `npm run lint`, `npm test` và Playwright E2E; `db/schema.sql` đã đồng bộ đầy đủ theo 14 migration (`0001..0014`) kèm test kiểm tra parity tự động.
+- Toàn bộ 4 Core Apps (`HRM`, `ASSET`, `OPS`, `TASKS`) và 15 built-in App Templates đều chuẩn hóa lên **v2.0.0** (`AppTemplateCatalog.V2.cs` + `AppUpgradeService.cs`), hỗ trợ nâng cấp 1-Click từ v1.0 không mất dữ liệu (`/api/apps/upgrade-v2/preview`, nút `Xem thử Nháp` `?previewDraft=true` & Studio `Nâng cấp Apps 2.0`), đồng thời hoàn thiện **Kho Apps Online (`/store`, `AppStoreService`, `AppStoreController`)** với 20 gói v2.0 tải về `.smartapp.json` (SHA-256), cài hai lượt lookup chéo + rollback bù trừ, Đóng gói Xuất App, Lịch sử Kho và đồng bộ/bật-tắt Remote Registry `manifest.json`.
+- Đã bổ sung hướng dẫn vận hành production, reverse proxy SSE và backup/restore tại [operations-and-backup.md](../collaboration/operations-and-backup.md) cùng [`deploy/nginx.conf.example`](../../deploy/nginx.conf.example), đồng thời có chế độ chạy `--migrate-only`, `/health/ready` và `/metrics`.
 
 Luồng Excel mới và API preview bắt buộc được mô tả trong [triển khai nhập Excel](excel-import-implementation.md). Khi thay đổi quy tắc nhập, phải kiểm tra cả preview và commit; không phục hồi cách gọi bulk-import trực tiếp bỏ qua preflight.
 
 Quy tắc form được mô tả ở [form có điều kiện](form-rules-implementation.md). Khi thêm toán tử hoặc đổi ngữ nghĩa, cập nhật evaluator C#/TypeScript và bộ fixture dùng chung; kiểm tra cả CRUD, inline, public, external, import và automation.
 
-Đã có [9 E2E form điều kiện và CI](conditional-form-e2e.md). Chạy `npm run test:e2e` tại frontend với `SMARTAPPS_E2E_POSTGRES` để tự tạo database, build/chạy server riêng và dọn sau test. Workflow chạy backend, frontend unit và E2E khi push/PR, lưu report và bằng chứng thất bại. Khi đổi giao diện hoặc ngữ nghĩa form, cập nhật assertion về dữ liệu đã lưu và chạy lại bộ này.
-
-Bộ E2E hiện có **17 kịch bản**, gồm thêm [8 test nhập/xuất Excel](excel-e2e.md). Khi đổi mapping, preflight/fingerprint, phân trang hoặc query export, chạy cả hai file `excel-import.spec.ts` và `excel-export.spec.ts`; kiểm tra workbook tải về và số bản ghi thực, không chỉ trạng thái nút hoặc mã HTTP.
+Đã có **22 kịch bản Playwright E2E** ([chi tiết form/CI](conditional-form-e2e.md) và [E2E Excel](excel-e2e.md)), gồm thêm [`workflow-and-ecosystem.spec.ts`](../../frontend-next/e2e/specs/workflow-and-ecosystem.spec.ts) (Record 360° restore/recall/approve, Dark Mode semantic UI, OpenAPI/MCP/`Idempotency-Key`/`/metrics`, Apps v2.0 upgrade và Kho Apps Online `/store`). Chạy `npm run test:e2e` tại frontend với `SMARTAPPS_E2E_POSTGRES` để tự tạo database, build/chạy server riêng và dọn sau test. Khi đổi mapping, preflight/fingerprint, phân trang, query export, workflow 360°, Store packages hoặc giao diện dark theme, cập nhật assertion và chạy lại toàn bộ suite.
 
 ## 1. Chuẩn bị
 
 - .NET SDK có khả năng build target `net9.0`.
 - Node.js và npm; Dockerfile frontend dùng Node 22 làm mốc môi trường.
 - PostgreSQL 16 hoặc Docker Engine để chạy service PostgreSQL.
-- Nếu phát triển desktop: Rust/Cargo và các công cụ build Windows cần cho Tauri. Chưa xác minh toolchain desktop trong đợt khảo sát.
-- IDE tùy chọn. Chưa có Git repository ở thư mục được cung cấp; cần thiết lập quản lý phiên bản trước khi dùng quy trình branch/PR.
+- Nếu phát triển desktop native (`desktop-rust/`): cần cài Rustup/Cargo và MSVC Build Tools trên Windows. Trên host hiện tại chưa cài `cargo`/`rustc` nên phần Rust crate chỉ duy trì giao diện lệnh hiện có; bridge TypeScript (`tauri-bridge.ts`) và endpoint `.NET` (`complete_local_sign`) được kiểm thử độc lập qua `npm test` và `dotnet test`.
+- IDE tùy chọn. Đọc [quy trình Git & Code Review](../collaboration/git-and-review-workflow.md) trước khi mở PR.
 
 Không cần chuyển dependency sang phiên bản khác chỉ để chạy theo tài liệu này. Khi nâng cấp hãy làm thành thay đổi riêng có kiểm thử.
 
@@ -55,7 +57,7 @@ Invoke-RestMethod http://localhost:5200/health
 Invoke-RestMethod http://localhost:5200/openapi/v1.json
 ```
 
-`/health` hiện chỉ trả trạng thái tĩnh, không chứng minh database hoặc dịch vụ bên ngoài đang hoạt động.
+`/health` trả trạng thái liveness tĩnh; dùng `/health/ready` để kiểm tra kết nối PostgreSQL thực tế.
 
 ### Frontend
 
@@ -82,10 +84,12 @@ dotnet test ./backend-dotnet.Tests/SmartApps.Api.Tests.csproj
 ```powershell
 Set-Location D:/smartapps/frontend-next
 npx tsc --noEmit
+npm run lint
+npm test
 npm run build
 ```
 
-Các lệnh trên đã đạt. `npm test` chạy kiểm thử helper lịch sử chat; integration tests PostgreSQL/HTTP chạy khi có `SMARTAPPS_TEST_POSTGRES` như hướng dẫn trong [đợt 1](priority-features-implementation.md). `npm run lint` hiện thất bại vì không có ESLint khả dụng; phải bổ sung dependency và cấu hình rồi mới dùng làm điều kiện CI. Chưa có bộ browser E2E.
+Tất cả các lệnh trên (`tsc --noEmit`, `npm run lint`, `npm test` với 65 unit test và `npm run build`) đã đạt; `dotnet test` với `SMARTAPPS_TEST_POSTGRES` đạt **137/137** và `npm run test:e2e` với `SMARTAPPS_E2E_POSTGRES` đạt **22/22**. Xem thêm [biên bản xác minh](verification.md).
 
 Đọc [verification.md](verification.md) để phân biệt lệnh đã chạy và các kịch bản mới đề xuất.
 
@@ -111,7 +115,7 @@ Các lệnh trên đã đạt. `npm test` chạy kiểm thử helper lịch sử
 
 1. Ghi tình huống người dùng, kết quả mong muốn, quyền cần có và tình huống lỗi. Phân biệt tính năng dùng chung nền tảng với tính năng riêng App.
 2. Xác định hợp đồng API và DTO trước khi sửa UI. Tính tới request sai, người không có quyền, thao tác lặp và cập nhật đồng thời nếu tính năng ghi dữ liệu.
-3. Nếu đổi schema, xác định cách nâng cấp database hiện có và cách rollback. Hiện chưa có migration runner; không chỉ sửa `schema.sql` rồi coi triển khai đã xong.
+3. Nếu đổi schema, bổ sung step idempotent vào `DatabaseMigrationRunner` (cùng `db/schema.sql`), xác định cách rollback và kiểm chứng bằng chế độ `dotnet run -- --migrate-only`; không chỉ sửa `schema.sql` rồi coi triển khai đã xong.
 4. Đặt quy tắc nghiệp vụ ở backend. UI có thể kiểm tra sớm nhưng không thay thế kiểm tra API.
 5. Kiểm tra mọi đường đi có liên quan: form, inline edit, Excel, automation, public form, external API và offline replay. Dùng chung quy tắc thay vì sao chép thêm nhánh SQL.
 6. Viết kiểm thử cho invariant/rủi ro của thay đổi. Thay đổi data pipeline cần test database; thay đổi giao diện trọng yếu cần E2E; sửa nội dung nhỏ không cần test mô phỏng lại implementation.
@@ -139,21 +143,18 @@ Không chạy test phá hủy dữ liệu trên database phát triển hoặc pr
 
 ## 7. Docker và triển khai
 
-Compose đã có PostgreSQL, API, frontend và volume cho database/uploads. Tuy nhiên cấu hình hiện còn hai vấn đề được xác định từ file:
+Compose đã có PostgreSQL, API, frontend và volume cho database/uploads:
 
-- Dockerfile frontend `COPY /app/public` nhưng `frontend-next/public` chưa có trong cây nguồn; cần tạo asset directory có chủ ý hoặc chỉnh COPY theo output thực tế.
-- Healthcheck backend gọi `curl`, trong khi Dockerfile runtime không cài hoặc bảo đảm có lệnh này; cần cách healthcheck phù hợp image được dùng.
+- `frontend-next/public` hiện đã có sẵn trong cây nguồn (`.gitkeep`, `manifest.json`), khớp bước `COPY --from=build /app/public ./public` trong `frontend-next/Dockerfile`.
+- `backend-dotnet/Dockerfile` đã cài `curl` phục vụ healthcheck Compose, đồng thời hỗ trợ `AUTH_SECRET` bắt buộc ở `docker-compose.yml` và biến `Cors__AllowedOrigins`.
+- Lưu ý: image build/up qua `docker compose up --build` vẫn cần chạy kiểm chứng trực tiếp trên môi trường có Docker Engine hoạt động.
 
-Chưa thực thi Docker build vì Docker Engine không kết nối được ở môi trường khảo sát. Sau khi sửa, cần kiểm tra build từ context sạch, chạy healthcheck và truy cập web/API qua địa chỉ sử dụng thực tế.
+Môi trường thật cần cấu hình riêng secret, tắt seed demo (`ASPNETCORE_ENVIRONMENT=Production` / `Database__SeedDemoData=false`), HTTPS/reverse proxy, giới hạn origin, readiness database (`/health/ready`), backup cả database lẫn uploads và theo dõi `/metrics`. Đã bổ sung mẫu Nginx hỗ trợ SSE tại [`deploy/nginx.conf.example`](../../deploy/nginx.conf.example) và runbook chi tiết tại [operations-and-backup.md](../collaboration/operations-and-backup.md).
 
-Môi trường thật cần cấu hình riêng secret, tắt seed demo, HTTPS/reverse proxy, giới hạn origin, readiness database, backup cả database lẫn uploads và theo dõi lỗi. SSE cần tắt buffering và có timeout phù hợp trên proxy. Chưa có file cấu hình proxy hoặc runbook backup/restore trong cây nguồn khảo sát.
+## 8. Quy trình phát hành & bàn giao
 
-## 8. Hoàn thiện quy trình bàn giao
+Trạng thái nền tảng phát hành hiện có:
 
-Checklist phát hành đề xuất:
-
-- Có Git, `.gitignore`, `.dockerignore`, quy ước môi trường và mẫu cấu hình không chứa credential thật.
-- CI chạy backend tests, TypeScript, lint khi đã cấu hình, production build và kiểm thử tích hợp trọng yếu.
-- Có migration version, bản sao lưu và kết quả diễn tập restore vào môi trường tách biệt.
-- Có hướng dẫn vận hành, tài khoản quản trị khởi tạo riêng và lịch sử thay đổi phiên bản.
-- Tài liệu ghi rõ cấu hình hỗ trợ một instance hay nhiều instance, cùng giới hạn offline và tích hợp.
+- Có Git, `.gitignore`, `.dockerignore`, `.env.example`, GitHub Actions CI chạy backend tests, `tsc --noEmit`, `npm run lint`, `npm test` và 22 kịch bản Playwright E2E.
+- Có migration runner (`DatabaseMigrationRunner` / `--migrate-only`), endpoint backup/restore (`BackupsController`) và runbook sao lưu/diễn tập restore.
+- Cần tiếp tục bổ sung ở môi trường vận hành thực tế: kiểm thử dựng Docker stack hoàn chỉnh, chứng thực biến môi trường Production, công cụ native Rust/Tauri nếu phát hành bản desktop trên Windows và nhật ký diễn tập restore định kỳ.

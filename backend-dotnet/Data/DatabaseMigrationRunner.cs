@@ -265,6 +265,36 @@ public static class DatabaseMigrationRunner
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_app_idempotency_created ON app_idempotency_keys(created_at);
+            """),
+        new(
+            "0014",
+            "0014_online_app_store",
+            """
+            CREATE TABLE IF NOT EXISTS sys_store_registries (
+                id VARCHAR(64) PRIMARY KEY,
+                name VARCHAR(150) NOT NULL,
+                registry_url VARCHAR(500) UNIQUE NOT NULL,
+                description TEXT,
+                is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                last_synced_at TIMESTAMPTZ,
+                cached_manifest JSONB NOT NULL DEFAULT '[]'::jsonb,
+                last_error TEXT,
+                created_by VARCHAR(64) DEFAULT 'admin',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS sys_store_installs (
+                id VARCHAR(64) PRIMARY KEY,
+                package_code VARCHAR(80) NOT NULL,
+                registry_id VARCHAR(64),
+                app_id VARCHAR(64) REFERENCES sys_apps(id) ON DELETE SET NULL,
+                installed_version VARCHAR(32) NOT NULL DEFAULT '2.0.0',
+                package_checksum VARCHAR(64),
+                action_type VARCHAR(24) NOT NULL DEFAULT 'INSTALL',
+                actor VARCHAR(64) NOT NULL DEFAULT 'admin',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_store_installs_pkg ON sys_store_installs(package_code, created_at DESC);
             """)
     ];
 

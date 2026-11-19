@@ -16,6 +16,8 @@ using SmartApps.Api.Models;
 using SmartApps.Api.Services;
 using Xunit;
 
+[assembly: CollectionBehavior(MaxParallelThreads = 4)]
+
 namespace SmartApps.Api.Tests;
 
 public sealed class PostgresFactAttribute : FactAttribute
@@ -47,16 +49,16 @@ public sealed class PriorityPostgresFixture : IAsyncLifetime
     {
         var source = Environment.GetEnvironmentVariable("SMARTAPPS_TEST_POSTGRES");
         if (string.IsNullOrWhiteSpace(source)) return;
-        var cs = new NpgsqlConnectionStringBuilder(source) { Database = "postgres", Pooling = false };
-        _adminConnection = cs.ConnectionString;
+        var adminCs = new NpgsqlConnectionStringBuilder(source) { Database = "postgres", Pooling = false };
+        _adminConnection = adminCs.ConnectionString;
         await using (var admin = new NpgsqlConnection(_adminConnection))
         {
             await admin.OpenAsync();
             await using var create = new NpgsqlCommand($"CREATE DATABASE \"{_databaseName}\"", admin);
             await create.ExecuteNonQueryAsync();
         }
-        cs.Database = _databaseName;
-        ConnectionString = cs.ConnectionString;
+        var appCs = new NpgsqlConnectionStringBuilder(source) { Database = _databaseName, Pooling = true, MaxPoolSize = 16 };
+        ConnectionString = appCs.ConnectionString;
         await DbInitializer.InitializeAsync(ConnectionString);
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Development" });
         builder.WebHost.UseUrls("http://127.0.0.1:0");
@@ -73,6 +75,8 @@ public sealed class PriorityPostgresFixture : IAsyncLifetime
         builder.Services.AddSingleton<PlatformMetricsService>();
         builder.Services.AddSingleton<BusinessCalendarService>();
         builder.Services.AddSingleton<MetadataService>();
+        builder.Services.AddSingleton<AppUpgradeService>();
+        builder.Services.AddSingleton<AppStoreService>();
         builder.Services.AddSingleton<DynamicComputeService>();
         builder.Services.AddSingleton<RecordWriteService>();
         builder.Services.AddSingleton<ExternalNotificationService>();
@@ -154,6 +158,11 @@ public sealed class PriorityPostgresFixture : IAsyncLifetime
     {
         Client?.Dispose();
         if (_app != null) await _app.DisposeAsync();
+        if (!string.IsNullOrWhiteSpace(ConnectionString))
+        {
+            await using var poolTarget = new NpgsqlConnection(ConnectionString);
+            NpgsqlConnection.ClearPool(poolTarget);
+        }
         if (_adminConnection != null)
         {
             await using var conn = new NpgsqlConnection(_adminConnection);

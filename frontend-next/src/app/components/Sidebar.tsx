@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
+import StorefrontRoundedIcon from '@mui/icons-material/StorefrontRounded';
 import DesignServicesRoundedIcon from '@mui/icons-material/DesignServicesRounded';
 import AdminPanelSettingsRoundedIcon from '@mui/icons-material/AdminPanelSettingsRounded';
 import ForumRoundedIcon from '@mui/icons-material/ForumRounded';
@@ -94,6 +95,10 @@ export default function Sidebar() {
         <Link href="/" className={`nav-link ${pathname === '/' ? 'active' : ''}`}>
           <DashboardRoundedIcon sx={{ fontSize: 20 }} />
           <span>{t('nav.portal')}</span>
+        </Link>
+        <Link href="/store" className={`nav-link ${pathname.startsWith('/store') ? 'active' : ''}`}>
+          <StorefrontRoundedIcon sx={{ fontSize: 20 }} />
+          <span>{t('nav.store')}</span>
         </Link>
         {(hasPermission('studio.manage') || hasPermission('user.manage') || hasPermission('role.manage')) && (
           <Link href="/studio" className={`nav-link ${pathname.startsWith('/studio') ? 'active' : ''}`}>

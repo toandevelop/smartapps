@@ -711,12 +711,51 @@ export interface AppTemplateSummary {
   icon: string;
   color: string;
   bgColor: string;
+  version?: string;
   highlights: string[];
   features: string[];
   moduleCount: number;
   tableCount: number;
   sampleRecordCount: number;
   widgetCount: number;
+  formRuleCount?: number;
+  workflowCount?: number;
+  automationCount?: number;
+  printTemplateCount?: number;
+  savedViewCount?: number;
+  pluginBindingCount?: number;
+}
+
+export interface AppUpgradeCandidate {
+  appId: string;
+  appCode: string;
+  appName: string;
+  currentVersion: string;
+  targetVersion: string;
+  matchedTemplateCode?: string | null;
+  needsUpgrade: boolean;
+  missingFeatures: string[];
+  summary: string;
+}
+
+export interface AppUpgradeExecutionResult {
+  appId: string;
+  appCode: string;
+  appName: string;
+  previousVersion: string;
+  newVersion: string;
+  matchedTemplateCode?: string | null;
+  modulesAdded: number;
+  tablesAdded: number;
+  columnsUpgraded: number;
+  formRulesAttached: number;
+  workflowsAdded: number;
+  automationsAdded: number;
+  printTemplatesAdded: number;
+  savedViewsAdded: number;
+  widgetsAdded: number;
+  pluginBindingsAdded: number;
+  publishedReleaseVersion?: number | null;
 }
 
 export interface WorkflowHistoryEntry {
@@ -931,4 +970,103 @@ export interface StorageStats {
   quotas: StorageQuota[];
   usedByApp: Record<string, number>;
   usedByUser: Record<string, number>;
+}
+
+export interface StoreRegistry {
+  id: string;
+  name: string;
+  registryUrl: string;
+  description?: string | null;
+  isEnabled: boolean;
+  appCount: number;
+  lastSyncedAt?: string | null;
+  lastError?: string | null;
+  createdAt: string;
+}
+
+export interface StoreAppSummary {
+  packageCode: string;
+  name: string;
+  description: string;
+  department: string;
+  category: string;
+  version: string;
+  publisher: string;
+  icon: string;
+  color: string;
+  bgColor: string;
+  tags: string[];
+  highlights: string[];
+  features: string[];
+  sourceType: 'OFFICIAL' | 'REMOTE' | string;
+  registryId?: string | null;
+  registryName?: string | null;
+  downloadUrl?: string | null;
+  checksumSha256: string;
+  packageSizeBytes: number;
+  downloadCount: number;
+  installCount: number;
+  isInstalled: boolean;
+  installedAppCode?: string | null;
+  installedAppId?: string | null;
+  installedVersion?: string | null;
+  hasUpdateAvailable?: boolean;
+  moduleCount: number;
+  tableCount: number;
+  sampleRecordCount: number;
+  widgetCount: number;
+  formRuleCount: number;
+  workflowCount: number;
+  automationCount: number;
+  printTemplateCount: number;
+  savedViewCount: number;
+  pluginBindingCount: number;
+}
+
+export interface StorePackageColumn {
+  columnCode: string;
+  columnName: string;
+  dataType: string;
+  isRequired: boolean;
+}
+
+export interface StorePackageTable {
+  tableName: string;
+  displayName: string;
+  description: string;
+  primaryView: string;
+  approvalEnabled: boolean;
+  publicFormEnabled: boolean;
+  formRules: FormRule[];
+  columns: StorePackageColumn[];
+}
+
+export interface StorePackageModule {
+  code: string;
+  name: string;
+  icon: string;
+  description: string;
+  tables: StorePackageTable[];
+}
+
+export interface StoreAppDetail {
+  summary: StoreAppSummary;
+  modules: StorePackageModule[];
+  workflows: Array<{ name: string; tableName: string; steps: WorkflowStep[] }>;
+  automations: Array<{ name: string; triggerTableName: string; actionType: string }>;
+  printTemplates: Array<{ name: string; tableName: string; paperSize: string }>;
+  savedViews: Array<{ name: string; tableName: string }>;
+  pluginBindings: Array<{ pluginCode: string; tableName: string }>;
+}
+
+export interface StoreInstallHistoryItem {
+  id: string;
+  packageCode: string;
+  registryId?: string | null;
+  appId?: string | null;
+  installedVersion: string;
+  packageChecksum?: string | null;
+  actionType: string;
+  actor: string;
+  createdAt: string;
 }

@@ -91,6 +91,54 @@ export function escapeHtml(value: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
+const CODE39_TABLE: Record<string, string> = {
+  '0': 'nnnwwnwnn', '1': 'wnnwnnnnw', '2': 'nnwwnnnnw', '3': 'wnwwnnnnn',
+  '4': 'nnnwwnnnw', '5': 'wnnwwnnnn', '6': 'nnwwwnnnn', '7': 'nnnwnnwnw',
+  '8': 'wnnwnnwnn', '9': 'nnwwnnwnn', A: 'wnnnnwnnw', B: 'nnwnnwnnw',
+  C: 'wnwnnwnnn', D: 'nnnnwwnnw', E: 'wnnnwwnnn', F: 'nnwnwwnnn',
+  G: 'nnnnnwwnw', H: 'wnnnnwwnn', I: 'nnwnnwwnn', J: 'nnnnwwwnn',
+  K: 'wnnnnnnww', L: 'nnwnnnnww', M: 'wnwnnnnwn', N: 'nnnnwnnww',
+  O: 'wnnnwnnwn', P: 'nnwnwnnwn', Q: 'nnnnnnwww', R: 'wnnnnnwwn',
+  S: 'nnwnnnwwn', T: 'nnnnwnwwn', U: 'wwnnnnnnw', V: 'nwwnnnnnw',
+  W: 'wwwnnnnnn', X: 'nwnnwnnnw', Y: 'wwnnwnnnn', Z: 'nwwnwnnnn',
+  '-': 'nwnnnnwnw', '.': 'wwnnnnwnn', ' ': 'nwwnnnwnn', '*': 'nwnnwnwnn',
+};
+
+export function renderCode39SvgString(value: string, height = 38): string {
+  const raw = (value || '').trim();
+  if (!raw) return '';
+  const clean = `*${raw.toUpperCase().replace(/[^0-9A-Z.\- ]/g, '-')}*`;
+  const bars: Array<{ x: number; w: number }> = [];
+  let x = 4;
+  for (const ch of clean) {
+    const pattern = CODE39_TABLE[ch] || CODE39_TABLE['-'];
+    for (let i = 0; i < 9; i++) {
+      const width = pattern[i] === 'w' ? 4 : 1.6;
+      if (i % 2 === 0) bars.push({ x, w: width });
+      x += width;
+    }
+    x += 2;
+  }
+  const totalWidth = x + 4;
+  const rects = bars.map((b) => `<rect x="${b.x}" y="2" width="${b.w}" height="${height - 4}" fill="#111827"/>`).join('');
+  return `<svg viewBox="0 0 ${totalWidth} ${height}" style="width:100%;max-width:220px;height:${height}px;display:inline-block;vertical-align:middle;"><rect x="0" y="0" width="${totalWidth}" height="${height}" fill="#ffffff"/>${rects}</svg>`;
+}
+
+function extractImageUrl(val: unknown): string {
+  if (typeof val === 'string') return val.trim();
+  if (typeof val === 'object' && val !== null && 'url' in val) {
+    return String((val as { url?: unknown }).url ?? '').trim();
+  }
+  return '';
+}
+
+function isSafeImageUrl(url: string): boolean {
+  if (!url) return false;
+  if (url.startsWith('/') || url.startsWith('https://') || url.startsWith('http://')) return true;
+  if (url.startsWith('data:image/png;base64,') || url.startsWith('data:image/jpeg;base64,') || url.startsWith('data:image/webp;base64,')) return true;
+  return false;
+}
+
 function formatPipe(val: unknown, pipe?: string): string {
   if (val === null || val === undefined || val === '') return '';
   const p = (pipe || '').trim().toLowerCase();
@@ -113,7 +161,56 @@ function formatPipe(val: unknown, pipe?: string): string {
     }
     return escapeHtml(s);
   }
+  if (p === 'datetime') {
+    const d = new Date(String(val));
+    if (!Number.isNaN(d.getTime())) {
+      return escapeHtml(d.toLocaleString('vi-VN'));
+    }
+    return escapeHtml(val);
+  }
+  if (p === 'boolean') {
+    return val === true || val === 'true' || val === 1 || val === '1' ? 'Có' : 'Không';
+  }
+  if (p === 'image') {
+    const url = extractImageUrl(val);
+    if (!isSafeImageUrl(url)) return '';
+    return `<img src="${escapeHtml(url)}" alt="image" style="max-height:84px;max-width:180px;border-radius:4px;border:1px solid #d1d5db;object-fit:contain;" />`;
+  }
   return escapeHtml(val);
+}
+
+function isTruthyValue(val: unknown): boolean {
+  if (val === null || val === undefined || val === false) return false;
+  if (typeof val === 'string') return val.trim().length > 0 && val.trim().toLowerCase() !== 'false';
+  if (Array.isArray(val)) return val.length > 0;
+  return true;
+}
+
+export function sanitizePrintHtml(html: string): string {
+  return (html || '')
+    .replace(/<!--\s*SMARTAPPS_BUILDER_V1:[\s\S]*?-->/g, '')
+    .replace(/<\s*(script|iframe|object|embed|link|meta|base)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+    .replace(/<\s*(script|iframe|object|embed|link|meta|base)[^>]*\/?\s*>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/(href|src)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, '$1=$2#$2');
+}
+
+export function getPagePrintCss(paperSize: string, orientation: string, customCss?: string | null): string {
+  const ps = (paperSize || 'A4').toUpperCase();
+  const orient = (orientation || 'portrait').toLowerCase() === 'landscape' ? 'landscape' : 'portrait';
+  let sizeRule = `A4 ${orient}`;
+  let marginRule = '12mm';
+  if (ps === 'A5') {
+    sizeRule = `A5 ${orient}`;
+    marginRule = '10mm';
+  } else if (ps === 'K80') {
+    sizeRule = '80mm auto';
+    marginRule = '4mm';
+  } else if (ps === 'LABEL_50X30') {
+    sizeRule = orient === 'landscape' ? '50mm 30mm' : '30mm 50mm';
+    marginRule = '2mm';
+  }
+  return `@media print { @page { size: ${sizeRule}; margin: ${marginRule}; } }\n${customCss || ''}`;
 }
 
 export function renderPrintTemplateHtml(htmlTemplate: string, ctx: PrintRenderContext): string {
@@ -128,8 +225,30 @@ export function renderPrintTemplateHtml(htmlTemplate: string, ctx: PrintRenderCo
     print_date: new Date().toLocaleDateString('vi-VN'),
   };
 
-  // 1) Resolve {{#each subTable}}...{{/each}}
-  let out = htmlTemplate.replace(/\{\{#each\s+([a-zA-Z0-9_]+)\s*\}\}([\s\S]*?)\{\{\/each\}\}/g, (_m, field, inner) => {
+  const resolveRaw = (key: string): unknown => (key in (ctx.data || {}) ? ctx.data[key] : sysVars[key]);
+
+  // 0) Strip embedded builder metadata comment
+  let out = htmlTemplate.replace(/<!--\s*SMARTAPPS_BUILDER_V1:[\s\S]*?-->/g, '');
+
+  // 1) Resolve {{#if field}}...{{else}}...{{/if}}
+  out = out.replace(/\{\{#if\s+([a-zA-Z0-9_]+)\s*\}\}([\s\S]*?)\{\{\/if\}\}/g, (_m, field: string, body: string) => {
+    const [trueBranch, falseBranch = ''] = body.split(/\{\{else\}\}/);
+    return isTruthyValue(resolveRaw(field)) ? trueBranch : falseBranch;
+  });
+
+  // 2) Resolve {{#sum subTable.field | pipe}}
+  out = out.replace(/\{\{#sum\s+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)(?:\s*\|\s*([a-zA-Z0-9_]+))?\s*\}\}/g, (_m, tableField: string, colField: string, pipe?: string) => {
+    const arr = ctx.data?.[tableField];
+    if (!Array.isArray(arr)) return formatPipe(0, pipe);
+    const total = arr.reduce((acc, row) => {
+      const n = row && typeof row === 'object' ? Number((row as Record<string, unknown>)[colField] ?? 0) : 0;
+      return acc + (Number.isFinite(n) ? n : 0);
+    }, 0);
+    return formatPipe(total, pipe || 'number');
+  });
+
+  // 3) Resolve {{#each subTable}}...{{/each}}
+  out = out.replace(/\{\{#each\s+([a-zA-Z0-9_]+)\s*\}\}([\s\S]*?)\{\{\/each\}\}/g, (_m, field, inner) => {
     const arr = ctx.data?.[field];
     if (!Array.isArray(arr) || arr.length === 0) return '';
     return arr
@@ -143,13 +262,18 @@ export function renderPrintTemplateHtml(htmlTemplate: string, ctx: PrintRenderCo
       .join('');
   });
 
-  // 2) Resolve scalar {{field | pipe}}
-  out = out.replace(/\{\{\s*([a-zA-Z0-9_]+)(?:\s*\|\s*([a-zA-Z0-9_]+))?\s*\}\}/g, (_m, key: string, pipe?: string) => {
-    const val = key in (ctx.data || {}) ? ctx.data[key] : sysVars[key];
-    return formatPipe(val, pipe);
+  // 4) Resolve {{barcode:field}}
+  out = out.replace(/\{\{\s*barcode:([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key: string) => {
+    const val = resolveRaw(key);
+    return val ? renderCode39SvgString(String(val)) : '';
   });
 
-  return out;
+  // 5) Resolve scalar {{field | pipe}}
+  out = out.replace(/\{\{\s*([a-zA-Z0-9_]+)(?:\s*\|\s*([a-zA-Z0-9_]+))?\s*\}\}/g, (_m, key: string, pipe?: string) => {
+    return formatPipe(resolveRaw(key), pipe);
+  });
+
+  return sanitizePrintHtml(out);
 }
 
 export const PRINT_TEMPLATE_PRESETS: Array<{
