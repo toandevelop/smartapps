@@ -17,6 +17,8 @@ const TemplateInstallModal = dynamic(
   () => import('./studio/StudioModals').then((m) => m.TemplateInstallModal),
   { ssr: false }
 );
+const AiAppModal = dynamic(() => import('./studio/AiAppModal'), { ssr: false });
+import AppCreationHubModal from './components/AppCreationHubModal';
 import { usePlatform } from '@/lib/app-context';
 import { useAuth } from '@/lib/auth-context';
 import { useSettings } from '@/lib/settings-context';
@@ -31,7 +33,6 @@ import TableViewRoundedIcon from '@mui/icons-material/TableViewRounded';
 import StorageRoundedIcon from '@mui/icons-material/StorageRounded';
 import ArrowForwardRoundedIcon from '@mui/icons-material/ArrowForwardRounded';
 import CloudUploadRoundedIcon from '@mui/icons-material/CloudUploadRounded';
-import StorefrontRoundedIcon from '@mui/icons-material/StorefrontRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import DesktopWindowsRoundedIcon from '@mui/icons-material/DesktopWindowsRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
@@ -46,7 +47,9 @@ export default function HomePortalPage() {
   const [appSearch, setAppSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
   const canStudio = hasPermission('studio.manage');
+  const [showCreationHub, setShowCreationHub] = useState(false);
   const [showAppModal, setShowAppModal] = useState(false);
+  const [showAiModal, setShowAiModal] = useState(false);
   const [showExcelModal, setShowExcelModal] = useState(false);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const inDesktop = useIsTauriDesktop();
@@ -151,25 +154,13 @@ export default function HomePortalPage() {
         actions={
           canStudio ? (
             <>
-              <Link href="/store" className="btn btn-outline btn-sm">
-                <StorefrontRoundedIcon sx={{ fontSize: 16 }} />
-                Kho Apps Online
-              </Link>
-              <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowTemplateModal(true)}>
-                <AutoAwesomeRoundedIcon sx={{ fontSize: 16 }} />
-                Cài App Mẫu
-              </button>
-              <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowExcelModal(true)}>
-                <CloudUploadRoundedIcon sx={{ fontSize: 16 }} />
-                Sinh App từ Excel
-              </button>
               <Link href="/studio" className="btn btn-outline btn-sm">
                 <DesignServicesRoundedIcon sx={{ fontSize: 16 }} />
                 App Builder Studio
               </Link>
-              <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowAppModal(true)}>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowCreationHub(true)}>
                 <AddRoundedIcon sx={{ fontSize: 17 }} />
-                Tạo App Mới
+                Thêm / Tạo App
               </button>
             </>
           ) : undefined
@@ -194,7 +185,7 @@ export default function HomePortalPage() {
         {(pendingApprovals.length > 0 || portalKpis.length > 0) && (
           <div style={{ display: 'grid', gridTemplateColumns: pendingApprovals.length > 0 && portalKpis.length > 0 ? '1.3fr 1fr' : '1fr', gap: 16 }}>
             {pendingApprovals.length > 0 && (
-              <div className="card" style={{ padding: 18, borderLeft: '4px solid #ea8600' }}>
+              <div className="card" style={{ padding: 18, borderLeft: '4px solid var(--warning)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                   <div>
                     <strong style={{ fontSize: 14.5 }}>Việc cần tôi phê duyệt ({pendingApprovals.length})</strong>
@@ -574,6 +565,25 @@ export default function HomePortalPage() {
         </div>
       </div>
 
+      <AppCreationHubModal
+        open={showCreationHub}
+        onClose={() => setShowCreationHub(false)}
+        onOpenAiCopilot={() => setShowAiModal(true)}
+        onOpenExcelImport={() => setShowExcelModal(true)}
+        onOpenBlankApp={() => setShowAppModal(true)}
+        onOpenTemplateGallery={() => setShowTemplateModal(true)}
+      />
+
+      <AiAppModal
+        open={showAiModal}
+        onClose={() => setShowAiModal(false)}
+        onGenerated={async (app) => {
+          setShowAiModal(false);
+          await refreshApps();
+          setSnack({ open: true, message: `AI Copilot đã tạo App "${app.name}" thành công!`, severity: 'success' });
+        }}
+      />
+
       <AppModal
         open={showAppModal}
         editing={null}
@@ -647,7 +657,7 @@ export default function HomePortalPage() {
               <button
                 type="button"
                 className="btn btn-sm"
-                style={{ backgroundColor: '#d93025', color: '#ffffff', border: 'none' }}
+                style={{ backgroundColor: 'var(--danger)', color: '#ffffff', border: 'none' }}
                 onClick={async () => {
                   const target = rejectTarget;
                   const reason = rejectReason.trim() || undefined;

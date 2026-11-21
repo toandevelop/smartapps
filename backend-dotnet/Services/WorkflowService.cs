@@ -89,7 +89,11 @@ public class WorkflowService
                 RequireCommentOnReject = s.RequireCommentOnReject,
                 ApprovalMode = NormalizeApprovalMode(s.ApprovalMode),
                 QuorumCount = s.QuorumCount > 0 ? s.QuorumCount : 1,
-                AllowReturnToPrevious = s.AllowReturnToPrevious
+                AllowReturnToPrevious = s.AllowReturnToPrevious,
+                UseOrgManager = s.UseOrgManager,
+                ConditionField = string.IsNullOrWhiteSpace(s.ConditionField) ? null : s.ConditionField.Trim(),
+                ConditionOperator = string.IsNullOrWhiteSpace(s.ConditionOperator) ? null : s.ConditionOperator.Trim().ToUpperInvariant(),
+                ConditionValue = string.IsNullOrWhiteSpace(s.ConditionValue) ? null : s.ConditionValue.Trim()
             })
             .ToList();
 

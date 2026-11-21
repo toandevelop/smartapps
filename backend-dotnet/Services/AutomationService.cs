@@ -55,7 +55,8 @@ public partial class AutomationService
                    target_app_id, target_module_id, target_table_id, action_type,
                    match_source_field, match_target_field,
                    webhook_url, webhook_secret, notify_recipient, notify_template,
-                   field_mappings::text, is_active, run_count, last_run_at
+                   field_mappings::text, is_active, run_count, last_run_at,
+                   COALESCE(chain_steps, '[]'::jsonb)::text
             FROM app_automations
             ORDER BY created_at DESC
             """;
@@ -82,9 +83,9 @@ public partial class AutomationService
                 target_app_id, target_module_id, target_table_id, action_type,
                 match_source_field, match_target_field,
                 webhook_url, webhook_secret, notify_recipient, notify_template,
-                field_mappings, is_active)
+                field_mappings, chain_steps, is_active)
             VALUES (@id, @name, @desc, @sa, @st, @trig, @cf, @co, @cv, @ta, @tm, @tt, @act, @msf, @mtf,
-                    @wu, @ws, @nr, @nt, @map::jsonb, @active)
+                    @wu, @ws, @nr, @nt, @map::jsonb, @chain::jsonb, @active)
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 description = EXCLUDED.description,
@@ -105,6 +106,7 @@ public partial class AutomationService
                 notify_recipient = EXCLUDED.notify_recipient,
                 notify_template = EXCLUDED.notify_template,
                 field_mappings = EXCLUDED.field_mappings,
+                chain_steps = EXCLUDED.chain_steps,
                 is_active = EXCLUDED.is_active
             """;
 
@@ -129,6 +131,28 @@ public partial class AutomationService
         cmd.Parameters.AddWithValue("nr", string.IsNullOrWhiteSpace(req.NotifyRecipient) ? DBNull.Value : req.NotifyRecipient.Trim());
         cmd.Parameters.AddWithValue("nt", string.IsNullOrWhiteSpace(req.NotifyTemplate) ? DBNull.Value : req.NotifyTemplate.Trim());
         cmd.Parameters.AddWithValue("map", JsonSerializer.Serialize(req.FieldMappings ?? new()));
+        var cleanSteps = (req.ChainSteps ?? new())
+            .Take(10)
+            .Select((s, idx) => new AutomationStepDto
+            {
+                Id = string.IsNullOrWhiteSpace(s.Id) ? $"step_{idx + 1}" : s.Id.Trim(),
+                ActionType = string.IsNullOrWhiteSpace(s.ActionType) ? "SEND_NOTIFICATION" : s.ActionType.Trim().ToUpperInvariant(),
+                TargetAppId = string.IsNullOrWhiteSpace(s.TargetAppId) ? null : s.TargetAppId.Trim(),
+                TargetModuleId = string.IsNullOrWhiteSpace(s.TargetModuleId) ? null : s.TargetModuleId.Trim(),
+                TargetTableId = string.IsNullOrWhiteSpace(s.TargetTableId) ? null : s.TargetTableId.Trim(),
+                MatchSourceField = string.IsNullOrWhiteSpace(s.MatchSourceField) ? null : s.MatchSourceField.Trim(),
+                MatchTargetField = string.IsNullOrWhiteSpace(s.MatchTargetField) ? null : s.MatchTargetField.Trim(),
+                WebhookUrl = string.IsNullOrWhiteSpace(s.WebhookUrl) ? null : s.WebhookUrl.Trim(),
+                WebhookSecret = string.IsNullOrWhiteSpace(s.WebhookSecret) ? null : s.WebhookSecret.Trim(),
+                NotifyRecipient = string.IsNullOrWhiteSpace(s.NotifyRecipient) ? null : s.NotifyRecipient.Trim(),
+                NotifyTemplate = string.IsNullOrWhiteSpace(s.NotifyTemplate) ? null : s.NotifyTemplate.Trim(),
+                FieldMappings = s.FieldMappings ?? new(),
+                ConditionField = string.IsNullOrWhiteSpace(s.ConditionField) ? null : s.ConditionField.Trim(),
+                ConditionOperator = string.IsNullOrWhiteSpace(s.ConditionOperator) ? null : s.ConditionOperator.Trim().ToUpperInvariant(),
+                ConditionValue = string.IsNullOrWhiteSpace(s.ConditionValue) ? null : s.ConditionValue.Trim()
+            })
+            .ToList();
+        cmd.Parameters.AddWithValue("chain", JsonSerializer.Serialize(cleanSteps));
         cmd.Parameters.AddWithValue("active", req.IsActive);
         await cmd.ExecuteNonQueryAsync();
 
@@ -271,7 +295,8 @@ public partial class AutomationService
                    target_app_id, target_module_id, target_table_id, action_type,
                    match_source_field, match_target_field,
                    webhook_url, webhook_secret, notify_recipient, notify_template,
-                   field_mappings::text, is_active, run_count, last_run_at
+                   field_mappings::text, is_active, run_count, last_run_at,
+                   COALESCE(chain_steps, '[]'::jsonb)::text
             FROM app_automations
             WHERE source_table_id = @tbl
               AND is_active = TRUE
@@ -313,7 +338,8 @@ public partial class AutomationService
                    target_app_id, target_module_id, target_table_id, action_type,
                    match_source_field, match_target_field,
                    webhook_url, webhook_secret, notify_recipient, notify_template,
-                   field_mappings::text, is_active, run_count, last_run_at
+                   field_mappings::text, is_active, run_count, last_run_at,
+                   COALESCE(chain_steps, '[]'::jsonb)::text
             FROM app_automations
             WHERE is_active = TRUE
               AND trigger_event = 'SCHEDULED_DATE'
@@ -388,7 +414,7 @@ public partial class AutomationService
         return fired;
     }
 
-    private async Task<bool> ExecuteRuleActionAsync(NpgsqlConnection conn, AppAutomationDto rule, AppRecordDto sourceRecord, string triggerEvent)
+    private async Task<bool> ExecuteRuleActionAsync(NpgsqlConnection conn, AppAutomationDto rule, AppRecordDto sourceRecord, string triggerEvent, bool allowChain = true)
     {
         var executedAny = false;
         var targetAppCode = await ResolveAppCodeAsync(conn, rule.TargetAppId ?? rule.SourceAppId);
@@ -660,6 +686,50 @@ public partial class AutomationService
                     }
                 }
             }
+
+        // Execute multi-step chained actions sequentially (SmartApps 3.0 Phase 2)
+        if (allowChain && rule.ChainSteps is { Count: > 0 })
+        {
+            for (var i = 0; i < rule.ChainSteps.Count; i++)
+            {
+                var step = rule.ChainSteps[i];
+                if (!string.IsNullOrWhiteSpace(step.ConditionField) &&
+                    !WorkflowService.MatchesCondition(step.ConditionField, step.ConditionOperator ?? "EQUALS", step.ConditionValue, sourceRecord.Data))
+                {
+                    continue;
+                }
+                var stepRule = new AppAutomationDto
+                {
+                    Id = rule.Id,
+                    Name = $"{rule.Name} [Bước {i + 2}]",
+                    SourceAppId = rule.SourceAppId,
+                    SourceTableId = rule.SourceTableId,
+                    TriggerEvent = rule.TriggerEvent,
+                    TargetAppId = step.TargetAppId ?? rule.TargetAppId,
+                    TargetModuleId = step.TargetModuleId ?? rule.TargetModuleId,
+                    TargetTableId = step.TargetTableId ?? rule.TargetTableId,
+                    ActionType = step.ActionType,
+                    MatchSourceField = step.MatchSourceField,
+                    MatchTargetField = step.MatchTargetField,
+                    WebhookUrl = step.WebhookUrl,
+                    WebhookSecret = step.WebhookSecret,
+                    NotifyRecipient = step.NotifyRecipient,
+                    NotifyTemplate = step.NotifyTemplate,
+                    FieldMappings = step.FieldMappings ?? new(),
+                    ChainSteps = new(),
+                    IsActive = true
+                };
+                try
+                {
+                    if (await ExecuteRuleActionAsync(conn, stepRule, sourceRecord, triggerEvent, allowChain: false))
+                        executedAny = true;
+                }
+                catch (Exception ex)
+                {
+                    await RecordExecutionAsync(conn, rule.Id, sourceRecord.Id, null, "FAILED", $"Lỗi chuỗi bước {i + 2}: {ex.Message}");
+                }
+            }
+        }
         return executedAny;
     }
 
@@ -881,6 +951,9 @@ public partial class AutomationService
             NotifyRecipient = r.IsDBNull(17) ? null : r.GetString(17),
             NotifyTemplate = r.IsDBNull(18) ? null : r.GetString(18),
             FieldMappings = JsonSerializer.Deserialize<Dictionary<string, string>>(r.GetString(19)) ?? new(),
+            ChainSteps = r.FieldCount > 23 && !r.IsDBNull(23)
+                ? (JsonSerializer.Deserialize<List<AutomationStepDto>>(r.GetString(23), new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new())
+                : new(),
             IsActive = r.GetBoolean(20),
             RunCount = r.GetInt32(21),
             LastRunAt = r.IsDBNull(22) ? null : r.GetDateTime(22)

@@ -125,6 +125,7 @@ public class SysTableDto
     public bool IsActive { get; set; } = true;
     public JsonElement UiConfig { get; set; }
     public List<FormRuleDto> FormRules { get; set; } = new();
+    public FormLayoutConfigDto? FormLayout { get; set; }
     public int ColumnCount { get; set; }
     public int RecordCount { get; set; }
 }
@@ -148,6 +149,31 @@ public class UpsertTableRequest
     public int OrderIndex { get; set; } = 1;
     public bool IsActive { get; set; } = true;
     public List<FormRuleDto>? FormRules { get; set; }
+    public FormLayoutConfigDto? FormLayout { get; set; }
+}
+
+public class FormLayoutFieldItemDto
+{
+    public string ColumnCode { get; set; } = string.Empty;
+    public int ColSpan { get; set; } = 1;
+}
+
+public class FormLayoutSectionDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public int Columns { get; set; } = 2;
+    public bool Collapsible { get; set; }
+    public string? CalloutText { get; set; }
+    public string? CalloutTone { get; set; }
+    public List<FormLayoutFieldItemDto> Fields { get; set; } = new();
+}
+
+public class FormLayoutConfigDto
+{
+    public string Mode { get; set; } = "sections";
+    public List<FormLayoutSectionDto> Sections { get; set; } = new();
 }
 
 public class FormConditionDto
@@ -191,6 +217,7 @@ public class SysColumnDto
     public string? RefDisplayField { get; set; }
     public string? LookupFilterField { get; set; }
     public string? LookupSourceField { get; set; }
+    public bool IsIndexed { get; set; }
     public string? Formula { get; set; }
     public string? DefaultValue { get; set; }
     public List<string> HiddenForRoles { get; set; } = new();
@@ -222,6 +249,7 @@ public class UpsertColumnRequest
     public string? RefDisplayField { get; set; }
     public string? LookupFilterField { get; set; }
     public string? LookupSourceField { get; set; }
+    public bool IsIndexed { get; set; }
     public string? Formula { get; set; }
     public string? DefaultValue { get; set; }
     public List<string> HiddenForRoles { get; set; } = new();
@@ -353,6 +381,36 @@ public class PatchCellRequest
 public class BatchDeleteRequest
 {
     public List<string> Ids { get; set; } = new();
+}
+
+public class BatchPatchRecordsRequest
+{
+    public string TableId { get; set; } = string.Empty;
+    public List<string> RecordIds { get; set; } = new();
+    public string ColumnCode { get; set; } = string.Empty;
+    public object? Value { get; set; }
+}
+
+public class BatchApproveRecordsRequest
+{
+    public List<string> RecordIds { get; set; } = new();
+    public bool Approve { get; set; } = true;
+    public string? Reason { get; set; }
+}
+
+public class BatchOperationItemError
+{
+    public string RecordId { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+}
+
+public class BatchOperationResultDto
+{
+    public int Requested { get; set; }
+    public int Succeeded { get; set; }
+    public int Failed { get; set; }
+    public List<string> SucceededIds { get; set; } = new();
+    public List<BatchOperationItemError> Errors { get; set; } = new();
 }
 
 public class BulkImportRequest
@@ -544,6 +602,7 @@ public class AppAutomationDto
     public string? NotifyRecipient { get; set; }
     public string? NotifyTemplate { get; set; }
     public Dictionary<string, string> FieldMappings { get; set; } = new();
+    public List<AutomationStepDto> ChainSteps { get; set; } = new();
     public bool IsActive { get; set; } = true;
     public int RunCount { get; set; }
     public DateTime? LastRunAt { get; set; }
@@ -571,6 +630,7 @@ public class UpsertAutomationRequest
     public string? NotifyRecipient { get; set; }
     public string? NotifyTemplate { get; set; }
     public Dictionary<string, string> FieldMappings { get; set; } = new();
+    public List<AutomationStepDto> ChainSteps { get; set; } = new();
     public bool IsActive { get; set; } = true;
 }
 
@@ -997,6 +1057,8 @@ public class UserSettingsDto
     public string ThemeMode { get; set; } = "light";
     public string AccentColor { get; set; } = "#1a73e8";
     public bool CompactMode { get; set; }
+    public string DensityMode { get; set; } = "comfortable";
+    public List<string> PinnedApps { get; set; } = new();
     public string Language { get; set; } = "vi";
     public bool NotifyInApp { get; set; } = true;
     public bool NotifySound { get; set; } = true;
@@ -1020,6 +1082,8 @@ public class UpdateUserSettingsRequest
     public string ThemeMode { get; set; } = "light";
     public string AccentColor { get; set; } = "#1a73e8";
     public bool CompactMode { get; set; }
+    public string? DensityMode { get; set; }
+    public List<string>? PinnedApps { get; set; }
     public string Language { get; set; } = "vi";
     public bool NotifyInApp { get; set; } = true;
     public bool NotifySound { get; set; } = true;
@@ -1085,6 +1149,7 @@ public class SystemSettingsDto
 {
     public string CompanyName { get; set; } = "SmartApps Enterprise";
     public string WorkspaceTitle { get; set; } = "SmartApps Enterprise — Không gian làm việc Đa ứng dụng";
+    public string BrandColor { get; set; } = "#1a73e8";
     public string LogoUrl { get; set; } = string.Empty;
     public string BrandIcon { get; set; } = string.Empty;
     public string FaviconUrl { get; set; } = string.Empty;
@@ -1502,6 +1567,29 @@ public class WorkflowStepDto
     public string ApprovalMode { get; set; } = "ANY"; // ANY | ALL | QUORUM
     public int QuorumCount { get; set; } = 1;
     public bool AllowReturnToPrevious { get; set; }
+    public bool UseOrgManager { get; set; }
+    public string? ConditionField { get; set; }
+    public string? ConditionOperator { get; set; }
+    public string? ConditionValue { get; set; }
+}
+
+public class AutomationStepDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string ActionType { get; set; } = "SEND_NOTIFICATION";
+    public string? TargetAppId { get; set; }
+    public string? TargetModuleId { get; set; }
+    public string? TargetTableId { get; set; }
+    public string? MatchSourceField { get; set; }
+    public string? MatchTargetField { get; set; }
+    public string? WebhookUrl { get; set; }
+    public string? WebhookSecret { get; set; }
+    public string? NotifyRecipient { get; set; }
+    public string? NotifyTemplate { get; set; }
+    public Dictionary<string, string> FieldMappings { get; set; } = new();
+    public string? ConditionField { get; set; }
+    public string? ConditionOperator { get; set; }
+    public string? ConditionValue { get; set; }
 }
 
 public class WorkflowStepApprovalVoteDto
@@ -2007,6 +2095,7 @@ public class StorePackageColumnDto
     public string? RefDisplayField { get; set; }
     public string? LookupFilterField { get; set; }
     public string? LookupSourceField { get; set; }
+    public bool IsIndexed { get; set; }
     public string? Formula { get; set; }
     public string? DefaultValue { get; set; }
     public List<string> HiddenForRoles { get; set; } = new();
@@ -2199,4 +2288,50 @@ public class StoreInstallHistoryDto
     public string ActionType { get; set; } = "INSTALL";
     public string Actor { get; set; } = "admin";
     public DateTime CreatedAt { get; set; }
+}
+
+public class StoreSolutionSuiteAppItemDto
+{
+    public string PackageCode { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Icon { get; set; } = "Apps";
+    public string Color { get; set; } = "#1a73e8";
+    public bool IsInstalled { get; set; }
+    public string? InstalledAppCode { get; set; }
+}
+
+public class StoreSolutionSuiteDto
+{
+    public string SuiteCode { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Tagline { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string TargetAudience { get; set; } = string.Empty;
+    public string Icon { get; set; } = "AutoAwesome";
+    public string Color { get; set; } = "#1a73e8";
+    public string BgColor { get; set; } = "#e8f0fe";
+    public List<string> Highlights { get; set; } = new();
+    public List<StoreSolutionSuiteAppItemDto> Apps { get; set; } = new();
+    public int InstalledCount { get; set; }
+    public int TotalCount { get; set; }
+}
+
+public class InstallSuiteAppOutcomeDto
+{
+    public string PackageCode { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Status { get; set; } = "INSTALLED"; // INSTALLED | ALREADY_INSTALLED | FAILED
+    public string? AppId { get; set; }
+    public string? AppCode { get; set; }
+    public string? Message { get; set; }
+}
+
+public class InstallSuiteResultDto
+{
+    public string SuiteCode { get; set; } = string.Empty;
+    public string SuiteName { get; set; } = string.Empty;
+    public int InstalledCount { get; set; }
+    public int SkippedCount { get; set; }
+    public int FailedCount { get; set; }
+    public List<InstallSuiteAppOutcomeDto> Outcomes { get; set; } = new();
 }

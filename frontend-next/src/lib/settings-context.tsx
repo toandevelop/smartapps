@@ -1,9 +1,17 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { UserSettings, SystemSettings } from './types';
 import { useAuth } from './auth-context';
 import { AppLanguage, TranslationKey, normalizeLanguage, translate } from './i18n';
+import {
+  buildBrandPalette,
+  DEFAULT_BRAND_HEX,
+  DensityMode,
+  normalizeDensityMode,
+  normalizePinnedApps,
+  resolveEffectiveBrandColor,
+} from './color-theme';
 
 export interface UnreadSummary {
   unreadChatCount: number;
@@ -14,8 +22,10 @@ export interface UnreadSummary {
 const DEFAULT_USER_SETTINGS: UserSettings = {
   userId: '',
   themeMode: 'light',
-  accentColor: '#1a73e8',
+  accentColor: 'brand',
   compactMode: false,
+  densityMode: 'comfortable',
+  pinnedApps: [],
   language: 'vi',
   notifyInApp: true,
   notifySound: true,
@@ -36,6 +46,7 @@ const DEFAULT_USER_SETTINGS: UserSettings = {
 const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
   companyName: 'SmartApps Enterprise',
   workspaceTitle: 'SmartApps Enterprise — Không gian làm việc Đa ứng dụng',
+  brandColor: DEFAULT_BRAND_HEX,
   logoUrl: '',
   brandIcon: '',
   faviconUrl: '',
@@ -51,7 +62,13 @@ interface SettingsContextValue {
   systemSettings: SystemSettings;
   unreadSummary: UnreadSummary;
   language: AppLanguage;
+  resolvedThemeMode: 'light' | 'dark';
+  effectiveBrandColor: string;
+  densityMode: DensityMode;
+  pinnedApps: string[];
   setLanguage: (lang: AppLanguage) => Promise<void>;
+  setDensityMode: (mode: DensityMode) => Promise<void>;
+  togglePinnedApp: (appCode: string) => Promise<void>;
   t: (key: TranslationKey, vars?: Record<string, string | number>) => string;
   refreshSettings: () => Promise<void>;
   refreshUnreadSummary: () => Promise<void>;
@@ -66,7 +83,13 @@ const SettingsContext = createContext<SettingsContextValue>({
   systemSettings: DEFAULT_SYSTEM_SETTINGS,
   unreadSummary: { unreadChatCount: 0, pendingTaskCount: 0, unreadNotifCount: 0 },
   language: 'vi',
+  resolvedThemeMode: 'light',
+  effectiveBrandColor: DEFAULT_BRAND_HEX,
+  densityMode: 'comfortable',
+  pinnedApps: [],
   setLanguage: async () => {},
+  setDensityMode: async () => {},
+  togglePinnedApp: async () => {},
   t: (key, vars) => translate('vi', key, vars),
   refreshSettings: async () => {},
   refreshUnreadSummary: async () => {},
@@ -76,19 +99,11 @@ const SettingsContext = createContext<SettingsContextValue>({
   showDesktopNotification: () => {},
 });
 
-function darkenHex(hex: string, amount = 24): string {
-  const clean = hex.replace('#', '');
-  if (clean.length !== 6) return '#1557b0';
-  const r = Math.max(0, parseInt(clean.slice(0, 2), 16) - amount);
-  const g = Math.max(0, parseInt(clean.slice(2, 4), 16) - amount);
-  const b = Math.max(0, parseInt(clean.slice(4, 6), 16) - amount);
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-}
-
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const { user, loadingAuth } = useAuth();
   const [userSettings, setUserSettings] = useState<UserSettings>(DEFAULT_USER_SETTINGS);
   const [systemSettings, setSystemSettings] = useState<SystemSettings>(DEFAULT_SYSTEM_SETTINGS);
+  const [osPrefersDark, setOsPrefersDark] = useState(false);
   const [unreadSummary, setUnreadSummary] = useState<UnreadSummary>({
     unreadChatCount: 0,
     pendingTaskCount: 0,
@@ -99,7 +114,25 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     return normalizeLanguage(localStorage.getItem('smartapps_lang'));
   });
 
+  // Track OS prefers-color-scheme changes for themeMode === 'auto'
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const sync = () => setOsPrefersDark(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
   const language: AppLanguage = user ? normalizeLanguage(userSettings.language || localLang) : localLang;
+  const resolvedThemeMode: 'light' | 'dark' =
+    userSettings.themeMode === 'dark' || (userSettings.themeMode === 'auto' && osPrefersDark) ? 'dark' : 'light';
+  const densityMode: DensityMode = normalizeDensityMode(userSettings.densityMode, userSettings.compactMode);
+  const pinnedApps = useMemo(() => normalizePinnedApps(userSettings.pinnedApps), [userSettings.pinnedApps]);
+  const effectiveBrandColor = useMemo(
+    () => resolveEffectiveBrandColor(userSettings.accentColor, systemSettings.brandColor),
+    [userSettings.accentColor, systemSettings.brandColor],
+  );
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -112,28 +145,33 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
 
   const t = useCallback(
     (key: TranslationKey, vars?: Record<string, string | number>) => translate(language, key, vars),
-    [language]
+    [language],
   );
 
-  const applyVisualTheme = useCallback((settings: UserSettings) => {
+  // Sync visual tokens, color-scheme, density, and dynamic brand palette to :root & body
+  useEffect(() => {
     if (typeof document === 'undefined') return;
     const root = document.documentElement;
     const body = document.body;
+    const isDark = resolvedThemeMode === 'dark';
 
-    let isDark = settings.themeMode === 'dark';
-    if (settings.themeMode === 'auto' && typeof window !== 'undefined') {
-      isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    }
-
+    root.classList.toggle('theme-dark', isDark);
     body.classList.toggle('theme-dark', isDark);
-    body.classList.toggle('density-compact', Boolean(settings.compactMode));
+    root.style.colorScheme = isDark ? 'dark' : 'light';
 
-    const accent = settings.accentColor || '#1a73e8';
-    root.style.setProperty('--accent-primary', accent);
-    root.style.setProperty('--accent-primary-hover', darkenHex(accent, 22));
-    root.style.setProperty('--accent-primary-container', isDark ? `${accent}29` : `${accent}1a`);
-    root.style.setProperty('--border-focus', accent);
-  }, []);
+    body.classList.toggle('density-compact', densityMode === 'compact');
+    body.classList.toggle('density-spacious', densityMode === 'spacious');
+
+    const palette = buildBrandPalette(effectiveBrandColor, isDark);
+    root.style.setProperty('--accent-primary', palette.primary);
+    root.style.setProperty('--accent-primary-hover', palette.hover);
+    root.style.setProperty('--accent-primary-active', palette.active);
+    root.style.setProperty('--accent-on-primary', palette.onPrimary);
+    root.style.setProperty('--accent-primary-container', palette.container);
+    root.style.setProperty('--accent-on-container', palette.onContainer);
+    root.style.setProperty('--border-focus', palette.primary);
+    root.style.setProperty('--border-glow', palette.ring);
+  }, [resolvedThemeMode, densityMode, effectiveBrandColor]);
 
   const refreshUnreadSummary = useCallback(async () => {
     if (!user) {
@@ -158,7 +196,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
 
   const refreshSettings = useCallback(async () => {
     if (!user) {
-      applyVisualTheme(DEFAULT_USER_SETTINGS);
+      setUserSettings(DEFAULT_USER_SETTINGS);
       return;
     }
     try {
@@ -169,20 +207,27 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       if (meRes.ok) {
         const j = await meRes.json();
         if (j.success && j.data?.settings) {
-          setUserSettings(j.data.settings);
-          applyVisualTheme(j.data.settings);
+          const s = j.data.settings as UserSettings;
+          const nextDensity = normalizeDensityMode(s.densityMode, s.compactMode);
+          setUserSettings({
+            ...DEFAULT_USER_SETTINGS,
+            ...s,
+            densityMode: nextDensity,
+            compactMode: nextDensity === 'compact',
+            pinnedApps: normalizePinnedApps(s.pinnedApps),
+          });
         }
       }
       if (sysRes.ok) {
         const j = await sysRes.json();
         if (j.success && j.data) {
-          setSystemSettings(j.data);
+          setSystemSettings({ ...DEFAULT_SYSTEM_SETTINGS, ...j.data });
         }
       }
     } catch {
       // ignore
     }
-  }, [user, applyVisualTheme]);
+  }, [user]);
 
   useEffect(() => {
     if (loadingAuth) return;
@@ -202,7 +247,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       const detail = (e as CustomEvent<{ type?: string; data?: SystemSettings }>).detail;
       if (!detail) return;
       if (detail.type === 'system_settings_updated' && detail.data) {
-        setSystemSettings(detail.data);
+        setSystemSettings({ ...DEFAULT_SYSTEM_SETTINGS, ...detail.data });
       }
       if (
         detail.type === 'chat_message' ||
@@ -228,39 +273,94 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     link.href = iconUrl;
   }, [systemSettings.faviconUrl]);
 
-  const saveUserSettings = useCallback(
-    async (next: UserSettings) => {
-      setUserSettings(next);
-      applyVisualTheme(next);
+  const saveUserSettings = useCallback(async (next: UserSettings) => {
+    const normalizedDensity = normalizeDensityMode(next.densityMode, next.compactMode);
+    const payload: UserSettings = {
+      ...next,
+      densityMode: normalizedDensity,
+      compactMode: normalizedDensity === 'compact',
+      pinnedApps: normalizePinnedApps(next.pinnedApps),
+    };
+    setUserSettings(payload);
+    try {
       const res = await fetch('/api/settings/me', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      }).then((r) => r.json());
+      if (res.success && res.data) {
+        const d = res.data as UserSettings;
+        const dMode = normalizeDensityMode(d.densityMode, d.compactMode);
+        setUserSettings({
+          ...DEFAULT_USER_SETTINGS,
+          ...d,
+          densityMode: dMode,
+          compactMode: dMode === 'compact',
+          pinnedApps: normalizePinnedApps(d.pinnedApps),
+        });
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const saveSystemSettings = useCallback(async (next: SystemSettings) => {
+    try {
+      const res = await fetch('/api/settings/system', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify(next),
       }).then((r) => r.json());
       if (res.success && res.data) {
-        setUserSettings(res.data);
-        applyVisualTheme(res.data);
+        setSystemSettings({ ...DEFAULT_SYSTEM_SETTINGS, ...res.data });
         return true;
       }
       return false;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const setDensityMode = useCallback(
+    async (mode: DensityMode) => {
+      const updated: UserSettings = {
+        ...userSettings,
+        densityMode: mode,
+        compactMode: mode === 'compact',
+      };
+      if (user) {
+        await saveUserSettings(updated);
+      } else {
+        setUserSettings(updated);
+      }
     },
-    [applyVisualTheme]
+    [user, userSettings, saveUserSettings],
   );
 
-  const saveSystemSettings = useCallback(async (next: SystemSettings) => {
-    const res = await fetch('/api/settings/system', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(next),
-    }).then((r) => r.json());
-    if (res.success && res.data) {
-      setSystemSettings(res.data);
-      return true;
-    }
-    return false;
-  }, []);
+  const togglePinnedApp = useCallback(
+    async (appCode: string) => {
+      const code = appCode.trim().toUpperCase();
+      if (!code) return;
+      const current = normalizePinnedApps(userSettings.pinnedApps);
+      const nextPinned = current.includes(code)
+        ? current.filter((c) => c !== code)
+        : normalizePinnedApps([code, ...current]);
+      const updated: UserSettings = {
+        ...userSettings,
+        pinnedApps: nextPinned,
+      };
+      if (user) {
+        await saveUserSettings(updated);
+      } else {
+        setUserSettings(updated);
+      }
+    },
+    [user, userSettings, saveUserSettings],
+  );
 
   const playNotificationSound = useCallback(() => {
     if (!userSettings.notifySound || typeof window === 'undefined') return;
@@ -300,7 +400,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         // ignore
       }
     },
-    [userSettings.notifyDesktop]
+    [userSettings.notifyDesktop],
   );
 
   return (
@@ -310,6 +410,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         systemSettings,
         unreadSummary,
         language,
+        resolvedThemeMode,
+        effectiveBrandColor,
+        densityMode,
+        pinnedApps,
         setLanguage: async (nextLang: AppLanguage) => {
           const normalized = normalizeLanguage(nextLang);
           setLocalLang(normalized);
@@ -325,6 +429,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
             await saveUserSettings(updated);
           }
         },
+        setDensityMode,
+        togglePinnedApp,
         t,
         refreshSettings,
         refreshUnreadSummary,

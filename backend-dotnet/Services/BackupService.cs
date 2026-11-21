@@ -448,11 +448,14 @@ public sealed class BackupService
 
 public sealed class BackupSchedulerService : BackgroundService
 {
+    private readonly string _connStr;
     private readonly BackupService _backups;
     private readonly ILogger<BackupSchedulerService> _logger;
 
-    public BackupSchedulerService(BackupService backups, ILogger<BackupSchedulerService> logger)
+    public BackupSchedulerService(IConfiguration config, BackupService backups, ILogger<BackupSchedulerService> logger)
     {
+        _connStr = config.GetConnectionString("Postgres")
+            ?? throw new InvalidOperationException("Missing Postgres connection string");
         _backups = backups;
         _logger = logger;
     }
@@ -463,15 +466,7 @@ public sealed class BackupSchedulerService : BackgroundService
         {
             try
             {
-                var cfg = await _backups.GetConfigAsync();
-                if (cfg.IsEnabled)
-                {
-                    var due = !cfg.LastRunAt.HasValue || cfg.LastRunAt.Value.AddHours(cfg.IntervalHours) <= DateTime.UtcNow;
-                    if (due)
-                    {
-                        await _backups.RunBackupAsync("SCHEDULED", "scheduler", ct: stoppingToken);
-                    }
-                }
+                await RunLockedBackupCheckAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -482,6 +477,41 @@ public sealed class BackupSchedulerService : BackgroundService
                 _logger.LogWarning(ex, "Scheduled backup check failed.");
             }
             await Task.Delay(TimeSpan.FromMinutes(15), stoppingToken);
+        }
+    }
+
+    public async Task<bool> RunLockedBackupCheckAsync(CancellationToken ct = default)
+    {
+        await using var lockConn = new NpgsqlConnection(_connStr);
+        await lockConn.OpenAsync(ct);
+
+        await using var tryCmd = new NpgsqlCommand(
+            "SELECT pg_try_advisory_lock(hashtextextended('smartapps_backup_scheduler_tick', 0))", lockConn);
+        var acquired = Convert.ToBoolean(await tryCmd.ExecuteScalarAsync(ct));
+        if (!acquired)
+        {
+            _logger.LogDebug("BackupSchedulerService advisory lock held by peer instance; skipping check.");
+            return false;
+        }
+
+        try
+        {
+            var cfg = await _backups.GetConfigAsync();
+            if (cfg.IsEnabled)
+            {
+                var due = !cfg.LastRunAt.HasValue || cfg.LastRunAt.Value.AddHours(cfg.IntervalHours) <= DateTime.UtcNow;
+                if (due)
+                {
+                    await _backups.RunBackupAsync("SCHEDULED", "scheduler", ct: ct);
+                }
+            }
+            return true;
+        }
+        finally
+        {
+            await using var unlockCmd = new NpgsqlCommand(
+                "SELECT pg_advisory_unlock(hashtextextended('smartapps_backup_scheduler_tick', 0))", lockConn);
+            await unlockCmd.ExecuteNonQueryAsync(CancellationToken.None);
         }
     }
 }

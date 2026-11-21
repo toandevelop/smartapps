@@ -41,7 +41,7 @@ function CommandPaletteBody({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const { apps } = usePlatform();
   const { canAccessApp, hasPermission } = useAuth();
-  const { userSettings, saveUserSettings, t } = useSettings();
+  const { userSettings, densityMode, setDensityMode, saveUserSettings, t } = useSettings();
   const [query, setQuery] = useState('');
   const [activeIdx, setActiveIdx] = useState(0);
   const [recordHits, setRecordHits] = useState<PaletteItem[]>([]);
@@ -120,6 +120,7 @@ function CommandPaletteBody({ onClose }: { onClose: () => void }) {
 
     const navItems: PaletteItem[] = [
       { id: 'nav_home', group: 'Điều hướng nhanh', title: 'Cổng Ứng dụng & Điều hành', subtitle: '/', href: '/', kind: 'nav' },
+      { id: 'nav_store', group: 'Điều hướng nhanh', title: 'Kho Apps Online (Marketplace)', subtitle: '/store', href: '/store', kind: 'nav' },
       { id: 'nav_tasks', group: 'Điều hướng nhanh', title: 'Quản lý Công việc', subtitle: '/tasks', href: '/tasks', kind: 'nav' },
       { id: 'nav_chat', group: 'Điều hướng nhanh', title: 'Trò chuyện nội bộ', subtitle: '/chat', href: '/chat', kind: 'nav' },
       { id: 'nav_notif', group: 'Điều hướng nhanh', title: 'Trung tâm Thông báo', subtitle: '/notifications', href: '/notifications', kind: 'nav' },
@@ -127,12 +128,29 @@ function CommandPaletteBody({ onClose }: { onClose: () => void }) {
       ...(hasPermission('studio.manage')
         ? [{ id: 'nav_studio', group: 'Điều hướng nhanh', title: 'App Builder Studio', subtitle: '/studio', href: '/studio', kind: 'nav' as const }]
         : []),
-      ...(hasPermission('user.manage') || hasPermission('role.manage') || hasPermission('workflow.manage')
-        ? [{ id: 'nav_admin', group: 'Điều hướng nhanh', title: 'Quản trị & Quy trình', subtitle: '/admin', href: '/admin', kind: 'nav' as const }]
+      ...(hasPermission('user.manage') || hasPermission('role.manage') || hasPermission('workflow.manage') || hasPermission('audit.view')
+        ? [
+            { id: 'nav_admin', group: 'Điều hướng nhanh', title: 'Quản trị & Quy trình', subtitle: '/admin', href: '/admin', kind: 'nav' as const },
+            { id: 'nav_audit', group: 'Điều hướng nhanh', title: 'Nhật ký Kiểm toán Toàn hệ thống', subtitle: '/admin?tab=audit', href: '/admin?tab=audit', kind: 'nav' as const },
+          ]
         : []),
     ];
 
+    const nextDensity = densityMode === 'compact' ? 'comfortable' : densityMode === 'comfortable' ? 'spacious' : 'compact';
+    const nextDensityLabel =
+      nextDensity === 'compact' ? 'Gọn (Compact)' : nextDensity === 'spacious' ? 'Thoải mái (Spacious)' : 'Tiêu chuẩn (Comfortable)';
+
     const actionItems: PaletteItem[] = [
+      {
+        id: 'act_ai_copilot',
+        group: 'Hành động nhanh',
+        title: 'Mở Trợ lý AI Doanh nghiệp (SmartApps Copilot • Alt+A)',
+        subtitle: 'ai copilot assistant trợ lý hỏi đáp tìm kiếm đề xuất',
+        kind: 'action',
+        onAction: () => {
+          window.dispatchEvent(new CustomEvent('smartapps_open_copilot'));
+        },
+      },
       {
         id: 'act_theme',
         group: 'Hành động nhanh',
@@ -147,11 +165,11 @@ function CommandPaletteBody({ onClose }: { onClose: () => void }) {
       {
         id: 'act_density',
         group: 'Hành động nhanh',
-        title: userSettings.compactMode ? 'Chuyển mật độ hiển thị Thoải mái' : 'Bật mật độ hiển thị Gọn (Compact)',
-        subtitle: 'compact density gọn thoải mái',
+        title: `Đổi mật độ hiển thị sang ${nextDensityLabel}`,
+        subtitle: 'compact comfortable spacious density gọn thoải mái',
         kind: 'action',
         onAction: () => {
-          void saveUserSettings({ ...userSettings, compactMode: !userSettings.compactMode });
+          void setDensityMode(nextDensity);
         },
       },
     ];
@@ -160,7 +178,7 @@ function CommandPaletteBody({ onClose }: { onClose: () => void }) {
       (it) => !q || it.title.toLowerCase().includes(q) || (it.subtitle || '').toLowerCase().includes(q),
     );
     return [...activeRecordHits, ...staticFiltered].slice(0, 20);
-  }, [apps, canAccessApp, hasPermission, query, recordHits, userSettings, saveUserSettings]);
+  }, [apps, canAccessApp, hasPermission, query, recordHits, userSettings, densityMode, setDensityMode, saveUserSettings]);
 
   const safeIdx = items.length > 0 ? Math.min(activeIdx, items.length - 1) : 0;
 

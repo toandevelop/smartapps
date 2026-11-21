@@ -222,7 +222,9 @@ public partial class RecordService
               AND (@tblId IS NULL OR table_id = @tblId)
               AND (@status IS NULL OR @status = 'ALL' OR status = @status)
               AND {OwnerFilterSqlClause}
-              AND (@search IS NULL OR record_key ILIKE '%' || @search || '%' OR data::text ILIKE '%' || @search || '%')
+              AND (@search IS NULL
+                   OR smartapps_vn_norm(COALESCE(record_key, '')) LIKE '%' || smartapps_vn_norm(@search) || '%'
+                   OR smartapps_vn_norm(data::text) LIKE '%' || smartapps_vn_norm(@search) || '%')
             """);
 
         var dynamicParams = new List<(string Name, object Value)>();
@@ -573,15 +575,7 @@ public partial class RecordService
 
         var table = (await _metadata.GetTablesAsync(rec.AppId, null)).FirstOrDefault(t => t.Id == rec.TableId);
         var wf = await _workflows.ResolveWorkflowForRecordAsync(rec.TableId, rec.Data);
-        var firstStep = wf?.Steps.OrderBy(s => s.StepOrder).FirstOrDefault();
-
-        var field = table?.ApprovalField;
-        if (!string.IsNullOrWhiteSpace(field) && rec.Data.ContainsKey(field))
-        {
-            rec.Data[field] = "CHO_DUYET";
-        }
-        if (table?.FormRules.Count > 0)
-            await new FormRuleService(_metadata, _compute).PrepareWriteAsync(rec.TableId, new(), rec.Data);
+        var orderedSteps = wf?.Steps.OrderBy(s => s.StepOrder).ToList() ?? new List<WorkflowStepDto>();
 
         var history = new List<WorkflowHistoryEntryDto>(rec.WorkflowHistory)
         {
@@ -596,13 +590,45 @@ public partial class RecordService
             }
         };
 
-        var stepOrder = firstStep?.StepOrder ?? 1;
-        var stepName = firstStep?.Name ?? "Phê duyệt";
+        WorkflowStepDto? firstStep = null;
+        foreach (var cand in orderedSteps)
+        {
+            if (StepMatchesRecord(cand, rec.Data))
+            {
+                firstStep = cand;
+                break;
+            }
+            history.Add(new WorkflowHistoryEntryDto
+            {
+                StepOrder = cand.StepOrder,
+                StepName = cand.Name,
+                Action = "AUTO_SKIPPED",
+                Actor = "system",
+                Note = $"Tự động bỏ qua do không thỏa điều kiện ({cand.ConditionField} {cand.ConditionOperator} {cand.ConditionValue})",
+                At = DateTime.UtcNow
+            });
+        }
+
+        var autoApproved = orderedSteps.Count > 0 && firstStep == null;
+        var targetApprovalStatus = autoApproved ? "APPROVED" : "PENDING";
+
+        var field = table?.ApprovalField;
+        if (!string.IsNullOrWhiteSpace(field) && rec.Data.ContainsKey(field))
+        {
+            rec.Data[field] = autoApproved ? "DA_DUYET" : "CHO_DUYET";
+        }
+        if (table?.FormRules.Count > 0)
+            await new FormRuleService(_metadata, _compute).PrepareWriteAsync(rec.TableId, new(), rec.Data);
+
+        var stepOrder = firstStep?.StepOrder ?? (autoApproved ? orderedSteps.Last().StepOrder : 1);
+        var stepName = firstStep?.Name ?? (autoApproved ? "Tự động phê duyệt (đạt điều kiện)" : "Phê duyệt");
         var snapshotJson = wf?.Steps != null ? JsonSerializer.Serialize(wf.Steps) : null;
 
         await using var up = new NpgsqlCommand($"""
             UPDATE app_records
-            SET approval_status = 'PENDING', rejection_reason = NULL, data = @data::jsonb,
+            SET approval_status = @st, rejection_reason = NULL, data = @data::jsonb,
+                approved_by = CASE WHEN @autoApp THEN @actor ELSE approved_by END,
+                approved_at = CASE WHEN @autoApp THEN CURRENT_TIMESTAMP ELSE approved_at END,
                 workflow_id = @wfid, current_step_order = @so, current_step_name = @sn,
                 workflow_history = @wh::jsonb, workflow_snapshot = @wfs::jsonb,
                 step_approvals = '[]'::jsonb,
@@ -612,6 +638,8 @@ public partial class RecordService
               AND COALESCE(version, 1) = @expectedVer
             RETURNING {SelectColumns}
             """, conn);
+        up.Parameters.AddWithValue("st", targetApprovalStatus);
+        up.Parameters.AddWithValue("autoApp", autoApproved);
         up.Parameters.AddWithValue("data", JsonSerializer.Serialize(rec.Data));
         up.Parameters.AddWithValue("wfid", (object?)wf?.Id ?? DBNull.Value);
         up.Parameters.AddWithValue("so", stepOrder);
@@ -727,7 +755,7 @@ public partial class RecordService
 
         var fallbackRoles = table?.ApproverRoles ?? new List<string>();
         var (isAuthorized, delegatedFrom) = await ResolveApprovalAuthorizationAsync(
-            conn, actorUser, rec.AppId, appCode, currentStep, fallbackRoles);
+            conn, actorUser, rec.AppId, appCode, currentStep, fallbackRoles, rec.CreatedBy);
 
         if (!isAuthorized)
         {
@@ -757,6 +785,7 @@ public partial class RecordService
         string? historyNote = noteWithDelegation;
         WorkflowStepDto? nextStep = null;
 
+        var skippedEntries = new List<WorkflowHistoryEntryDto>();
         if (op == "RETURN")
         {
             var prevStep = orderedSteps
@@ -824,7 +853,24 @@ public partial class RecordService
             else
             {
                 nextApprovals.RemoveAll(v => v.StepOrder == stepOrder);
-                nextStep = orderedSteps.Count > 0 ? orderedSteps.FirstOrDefault(s => s.StepOrder > stepOrder) : null;
+                nextStep = null;
+                foreach (var cand in orderedSteps.Where(s => s.StepOrder > stepOrder))
+                {
+                    if (StepMatchesRecord(cand, rec.Data))
+                    {
+                        nextStep = cand;
+                        break;
+                    }
+                    skippedEntries.Add(new WorkflowHistoryEntryDto
+                    {
+                        StepOrder = cand.StepOrder,
+                        StepName = cand.Name,
+                        Action = "AUTO_SKIPPED",
+                        Actor = "system",
+                        Note = $"Tự động bỏ qua do không thỏa điều kiện ({cand.ConditionField} {cand.ConditionOperator} {cand.ConditionValue})",
+                        At = DateTime.UtcNow
+                    });
+                }
                 isFinalApproval = nextStep == null;
                 nextStatus = nextStep != null ? "PENDING" : "APPROVED";
                 nextStepOrder = nextStep != null ? nextStep.StepOrder : stepOrder;
@@ -845,6 +891,7 @@ public partial class RecordService
                 At = DateTime.UtcNow
             }
         };
+        if (skippedEntries.Count > 0) history.AddRange(skippedEntries);
 
         var field = table?.ApprovalField;
         if (!string.IsNullOrWhiteSpace(field) && rec.Data.ContainsKey(field))
@@ -1326,7 +1373,7 @@ public partial class RecordService
                 continue;
 
             var (canApprove, _) = await ResolveApprovalAuthorizationAsync(
-                conn, user, row.AppId, row.AppCode, activeStep, row.FallbackRoles);
+                conn, user, row.AppId, row.AppCode, activeStep, row.FallbackRoles, row.CreatedBy);
             if (!canApprove) continue;
 
             var dict = ParseJsonDict(row.DataJson);
@@ -1357,16 +1404,52 @@ public partial class RecordService
         return list;
     }
 
+    private static bool StepMatchesRecord(WorkflowStepDto step, Dictionary<string, object?> data)
+    {
+        if (string.IsNullOrWhiteSpace(step.ConditionField)) return true;
+        return WorkflowService.MatchesCondition(
+            step.ConditionField,
+            string.IsNullOrWhiteSpace(step.ConditionOperator) ? "EQUALS" : step.ConditionOperator,
+            step.ConditionValue,
+            data);
+    }
+
+    private static async Task<string?> ResolveOrgManagerUsernameAsync(NpgsqlConnection conn, string? creatorUsername)
+    {
+        if (string.IsNullOrWhiteSpace(creatorUsername)) return null;
+        await using var cmd = new NpgsqlCommand("""
+            SELECT mgr.username
+            FROM sys_users u
+            JOIN sys_org_units ou ON ou.id = u.org_unit_id
+            JOIN sys_users mgr ON mgr.id = ou.manager_user_id AND mgr.is_active = TRUE
+            WHERE LOWER(u.username) = LOWER(@u)
+            LIMIT 1
+            """, conn);
+        cmd.Parameters.AddWithValue("u", creatorUsername.Trim());
+        return (await cmd.ExecuteScalarAsync())?.ToString();
+    }
+
     private async Task<(bool Authorized, string? DelegatedFrom)> ResolveApprovalAuthorizationAsync(
         NpgsqlConnection conn,
         SysUserDto user,
         string appId,
         string? appCode,
         WorkflowStepDto? activeStep,
-        List<string> fallbackRoles)
+        List<string> fallbackRoles,
+        string? recordCreatedBy = null)
     {
         if (CanUserApproveStep(user, appCode, activeStep, fallbackRoles))
             return (true, null);
+
+        if (activeStep?.UseOrgManager == true && !string.IsNullOrWhiteSpace(recordCreatedBy))
+        {
+            var mgrUsername = await ResolveOrgManagerUsernameAsync(conn, recordCreatedBy);
+            if (!string.IsNullOrWhiteSpace(mgrUsername) &&
+                mgrUsername.Equals(user.Username, StringComparison.OrdinalIgnoreCase))
+            {
+                return (true, null);
+            }
+        }
 
         var delegators = await _workflows.GetActiveDelegatorsForDelegateAsync(conn, user.Username, appId);
         foreach (var delegatorUsername in delegators)
@@ -1374,6 +1457,15 @@ public partial class RecordService
             var delegatorDto = await LoadLiteUserByUsernameAsync(conn, delegatorUsername);
             if (delegatorDto != null && CanUserApproveStep(delegatorDto, appCode, activeStep, fallbackRoles))
                 return (true, delegatorDto.Username);
+            if (activeStep?.UseOrgManager == true && !string.IsNullOrWhiteSpace(recordCreatedBy))
+            {
+                var mgrUsername = await ResolveOrgManagerUsernameAsync(conn, recordCreatedBy);
+                if (!string.IsNullOrWhiteSpace(mgrUsername) &&
+                    mgrUsername.Equals(delegatorUsername, StringComparison.OrdinalIgnoreCase))
+                {
+                    return (true, delegatorUsername);
+                }
+            }
         }
         return (false, null);
     }
@@ -2041,6 +2133,21 @@ public partial class RecordService
     /// <summary>
     /// Searches Apps, RBAC/RLS-filtered Records, accessible Chat messages, and Attachments (FUN-13).
     /// </summary>
+    public static string NormalizeVietnamese(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+        var formD = input.Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder(formD.Length);
+        foreach (var ch in formD)
+        {
+            var cat = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch);
+            if (cat == System.Globalization.UnicodeCategory.NonSpacingMark) continue;
+            if (ch is 'đ' or 'Đ') sb.Append('d');
+            else sb.Append(char.ToLowerInvariant(ch));
+        }
+        return sb.ToString();
+    }
+
     public async Task<GlobalSearchResultDto> GlobalSearchAsync(SysUserDto user, string query, int limitPerKind = 6)
     {
         var q = query.Trim();
@@ -2055,11 +2162,12 @@ public partial class RecordService
             .ToList();
         var appById = accessibleApps.ToDictionary(a => a.Id, StringComparer.OrdinalIgnoreCase);
 
+        var qNorm = NormalizeVietnamese(q);
         foreach (var app in accessibleApps)
         {
-            if (app.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                app.Code.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                (app.Description?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
+            if (NormalizeVietnamese(app.Name).Contains(qNorm, StringComparison.Ordinal) ||
+                NormalizeVietnamese(app.Code).Contains(qNorm, StringComparison.Ordinal) ||
+                NormalizeVietnamese(app.Description ?? "").Contains(qNorm, StringComparison.Ordinal))
             {
                 result.Apps.Add(new GlobalSearchHitDto
                 {
@@ -2092,8 +2200,8 @@ public partial class RecordService
                 FROM app_records
                 WHERE deleted_at IS NULL
                   AND app_id = ANY(@apps)
-                  AND (LOWER(COALESCE(record_key, '')) LIKE '%' || LOWER(@q) || '%'
-                       OR LOWER(data::text) LIKE '%' || LOWER(@q) || '%')
+                  AND (smartapps_vn_norm(COALESCE(record_key, '')) LIKE '%' || smartapps_vn_norm(@q) || '%'
+                       OR smartapps_vn_norm(data::text) LIKE '%' || smartapps_vn_norm(@q) || '%')
                 ORDER BY updated_at DESC
                 LIMIT 60
                 """, conn);
@@ -2128,9 +2236,9 @@ public partial class RecordService
                         data.Remove(hc.ColumnCode);
                 }
 
-                // Re-verify query hits either recordKey or unmasked visible field values
-                var visibleHit = (cand.Key?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                    data.Values.Any(v => v?.ToString()?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false);
+                // Re-verify query hits either recordKey or unmasked visible field values (accent-insensitive)
+                var visibleHit = NormalizeVietnamese(cand.Key ?? "").Contains(qNorm, StringComparison.Ordinal) ||
+                    data.Values.Any(v => NormalizeVietnamese(v?.ToString() ?? "").Contains(qNorm, StringComparison.Ordinal));
                 if (!visibleHit) continue;
 
                 var preview = string.Join(" • ", data.Values

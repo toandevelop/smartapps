@@ -13,8 +13,9 @@ import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { ClusterIcon, APP_ICON_OPTIONS } from '@/app/components/ui';
 import { APP_COLOR_PRESETS } from '@/lib/design-tokens';
 import { usePlatform } from '@/lib/app-context';
-import { AppAutomation, SysApp, SysCategory, SysColumn, SysModule, SysRole, SysTable, AppTemplateSummary, FormRule } from '@/lib/types';
+import { AppAutomation, AutomationStep, FormLayoutConfig, SysApp, SysCategory, SysColumn, SysModule, SysRole, SysTable, AppTemplateSummary, FormRule } from '@/lib/types';
 import FormRulesEditor from './FormRulesEditor';
+import FormLayoutDesigner from './FormLayoutDesigner';
 import { parseSubTableSchema, serializeSubTableSchema, SubTableColumnDef, SubTableDataType } from '@/lib/sub-table';
 
 /* =========================================================
@@ -381,6 +382,7 @@ export interface TableFormState {
   publicFormMaxSubmissions?: number | '';
   orderIndex: number;
   formRules?: FormRule[];
+  formLayout?: FormLayoutConfig | null;
 }
 
 export function TableModal({
@@ -629,7 +631,15 @@ function TableModalBody({
           {loadingRuleColumns && <p role="status">Đang tải các trường để cấu hình quy tắc...</p>}
           {ruleColumnError && <p role="alert">{ruleColumnError}</p>}
           {!loadingRuleColumns && !ruleColumnError && (
-            <FormRulesEditor columns={ruleColumns} rules={form.formRules || []} onChange={formRules => setForm({ ...form, formRules })} />
+            <>
+              <FormRulesEditor columns={ruleColumns} rules={form.formRules || []} onChange={formRules => setForm({ ...form, formRules })} />
+              <FormLayoutDesigner
+                columns={ruleColumns}
+                formRules={form.formRules || []}
+                value={form.formLayout}
+                onChange={(formLayout) => setForm({ ...form, formLayout })}
+              />
+            </>
           )}
           <div className="form-group">
             <label className="form-label">Mô tả</label>
@@ -676,6 +686,9 @@ export interface ColumnFormState {
   refTableId: string;
   refValueField: string;
   refDisplayField: string;
+  lookupFilterField?: string;
+  lookupSourceField?: string;
+  isIndexed?: boolean;
   formula: string;
   defaultValue: string;
   hiddenForRoles: string[];
@@ -969,6 +982,30 @@ function ColumnModalBody({
                   </select>
                 </div>
               </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10, paddingTop: 10, borderTop: '1px dashed rgba(3, 105, 161, 0.25)' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Lọc phụ thuộc: Trường nguồn trên Form hiện tại</label>
+                  <input
+                    className="form-input"
+                    value={form.lookupSourceField || ''}
+                    onChange={(e) => setForm({ ...form, lookupSourceField: e.target.value })}
+                    placeholder="VD: phong_ban (để trống = không lọc)"
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Khớp với cột trên Bảng đích</label>
+                  <select
+                    className="form-select"
+                    value={form.lookupFilterField || ''}
+                    onChange={(e) => setForm({ ...form, lookupFilterField: e.target.value })}
+                  >
+                    <option value="">-- Không lọc phụ thuộc --</option>
+                    {targetCols.map((c) => (
+                      <option key={c.id} value={c.columnCode}>{c.columnCode} ({c.columnName})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12.5, cursor: 'pointer' }}>
                 <input
                   type="checkbox"
@@ -979,6 +1016,17 @@ function ColumnModalBody({
               </label>
             </div>
           )}
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer', color: 'var(--text-primary)' }}>
+              <input
+                type="checkbox"
+                checked={Boolean(form.isIndexed)}
+                onChange={(e) => setForm({ ...form, isIndexed: e.target.checked })}
+              />
+              <span><strong>Đánh chỉ mục tăng tốc PostgreSQL JSONB (Auto Expression Index)</strong> — tối ưu lọc &amp; sắp xếp trên bảng lớn</span>
+            </label>
+          </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
             <div className="form-group">
@@ -994,6 +1042,8 @@ function ColumnModalBody({
                   { label: 'IF(...)', tpl: "IF(field>0,'Đạt','Chưa đạt')" },
                   { label: 'ROUND(...)', tpl: 'ROUND(so_luong * don_gia, 0)' },
                   { label: 'DATEDIF', tpl: 'DATEDIF(tu_ngay, den_ngay)' },
+                  { label: 'WORKDAYS', tpl: 'WORKDAYS(tu_ngay, den_ngay)' },
+                  { label: 'READ_MONEY_VN', tpl: 'READ_MONEY_VN(tong_tien)' },
                   { label: 'SUM(sub)', tpl: 'SUM(chi_tiet.thanh_tien)' },
                   { label: 'COUNT(sub)', tpl: 'COUNT(chi_tiet)' },
                 ].map((snip) => (
@@ -1926,6 +1976,7 @@ function AutomationModalBody({
   const [notifyTemplate, setNotifyTemplate] = useState(editing?.notifyTemplate || 'Cập nhật bản ghi {{record_key}}');
   const [webhookUrl, setWebhookUrl] = useState(editing?.webhookUrl || '');
   const [webhookSecret, setWebhookSecret] = useState(editing?.webhookSecret || '');
+  const [chainSteps, setChainSteps] = useState<AutomationStep[]>(() => editing?.chainSteps || []);
   const [mappingsJson, setMappingsJson] = useState(
     editing
       ? JSON.stringify(editing.fieldMappings || {}, null, 2)
@@ -2159,6 +2210,7 @@ function AutomationModalBody({
           webhookUrl: actionType === 'CALL_WEBHOOK' ? webhookUrl : null,
           webhookSecret: actionType === 'CALL_WEBHOOK' ? webhookSecret : null,
           fieldMappings: parsedMap,
+          chainSteps,
           isActive: editing ? editing.isActive : true,
         }),
       }).then((r) => r.json());
@@ -2568,6 +2620,147 @@ function AutomationModalBody({
               <textarea className="form-textarea" rows={4} style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} value={mappingsJson} onChange={(e) => setMappingsJson(e.target.value)} />
             </div>
           )}
+
+          {/* Multi-step Chained Actions (SmartApps 3.0 Phase 2) */}
+          <div style={{ padding: 12, borderRadius: 10, backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-light)', marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div>
+                <strong style={{ fontSize: 12.5 }}>Chuỗi hành động tiếp theo ({chainSteps.length} bước nối tiếp)</strong>
+                <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                  Thực thi tuần tự sau hành động chính trên cùng 1 sự kiện Trigger (VD: cập nhật trạng thái → gửi thông báo → gọi Webhook).
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-outline btn-xs"
+                onClick={() =>
+                  setChainSteps((prev) => [
+                    ...prev,
+                    {
+                      id: `step_${Date.now().toString(36)}`,
+                      actionType: 'SEND_NOTIFICATION',
+                      notifyRecipient: '*',
+                      notifyTemplate: 'Hồ sơ {{record_key}} vừa được xử lý tự động.',
+                      fieldMappings: {},
+                    },
+                  ])
+                }
+              >
+                + Thêm bước nối tiếp
+              </button>
+            </div>
+            {chainSteps.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {chainSteps.map((cs, cIdx) => (
+                  <div
+                    key={cs.id}
+                    style={{
+                      padding: 10,
+                      borderRadius: 8,
+                      backgroundColor: 'var(--bg-surface)',
+                      border: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+                        <span className="badge badge-info" style={{ fontSize: 10.5 }}>Bước {cIdx + 2}</span>
+                        <select
+                          className="form-select"
+                          style={{ height: 30, fontSize: 12, maxWidth: 240 }}
+                          value={cs.actionType}
+                          onChange={(e) =>
+                            setChainSteps((prev) =>
+                              prev.map((item, i) => (i === cIdx ? { ...item, actionType: e.target.value } : item)),
+                            )
+                          }
+                        >
+                          <option value="SEND_NOTIFICATION">Gửi Thông báo nội bộ</option>
+                          <option value="CALL_WEBHOOK">Gọi Webhook ngoài</option>
+                          <option value="UPDATE_SELF">Tự cập nhật bản ghi nguồn</option>
+                          <option value="CREATE_TASK">Giao Công việc mới</option>
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-xs"
+                        style={{ color: 'var(--danger)' }}
+                        onClick={() => setChainSteps((prev) => prev.filter((_, i) => i !== cIdx))}
+                      >
+                        Xóa
+                      </button>
+                    </div>
+
+                    {cs.actionType === 'SEND_NOTIFICATION' && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '0.7fr 1.3fr', gap: 8 }}>
+                        <input
+                          className="form-input"
+                          style={{ height: 30, fontSize: 12 }}
+                          placeholder="Người nhận (* hoặc username)"
+                          value={cs.notifyRecipient || ''}
+                          onChange={(e) =>
+                            setChainSteps((prev) =>
+                              prev.map((item, i) => (i === cIdx ? { ...item, notifyRecipient: e.target.value } : item)),
+                            )
+                          }
+                        />
+                        <input
+                          className="form-input"
+                          style={{ height: 30, fontSize: 12 }}
+                          placeholder="Nội dung thông báo ({{record_key}}...)"
+                          value={cs.notifyTemplate || ''}
+                          onChange={(e) =>
+                            setChainSteps((prev) =>
+                              prev.map((item, i) => (i === cIdx ? { ...item, notifyTemplate: e.target.value } : item)),
+                            )
+                          }
+                        />
+                      </div>
+                    )}
+
+                    {cs.actionType === 'CALL_WEBHOOK' && (
+                      <input
+                        className="form-input"
+                        style={{ height: 30, fontSize: 12 }}
+                        placeholder="https://hooks.example.com/..."
+                        value={cs.webhookUrl || ''}
+                        onChange={(e) =>
+                          setChainSteps((prev) =>
+                            prev.map((item, i) => (i === cIdx ? { ...item, webhookUrl: e.target.value } : item)),
+                          )
+                        }
+                      />
+                    )}
+
+                    {(cs.actionType === 'UPDATE_SELF' || cs.actionType === 'CREATE_TASK') && (
+                      <input
+                        className="form-input"
+                        style={{ height: 30, fontSize: 12, fontFamily: 'var(--font-mono)' }}
+                        placeholder={
+                          cs.actionType === 'CREATE_TASK'
+                            ? '{"title":"Xử lý {{record_key}}","assigneeUsername":"admin","priority":"HIGH"}'
+                            : '{"trang_thai":"DA_XU_LY"}'
+                        }
+                        value={JSON.stringify(cs.fieldMappings || {})}
+                        onChange={(e) => {
+                          try {
+                            const parsed = JSON.parse(e.target.value) as Record<string, string>;
+                            setChainSteps((prev) =>
+                              prev.map((item, i) => (i === cIdx ? { ...item, fieldMappings: parsed } : item)),
+                            );
+                          } catch {
+                            // wait until valid JSON
+                          }
+                        }}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {errorMsg && (
             <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 8, backgroundColor: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: 12.5 }}>

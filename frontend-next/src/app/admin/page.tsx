@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, Suspense } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   PageHeader,
   EmptyState,
@@ -20,6 +21,7 @@ import { OutboxMonitorPanel } from '@/app/studio/StudioPlatformPanels';
 import { usePlatform } from '@/lib/app-context';
 import { useAuth } from '@/lib/auth-context';
 import {
+  AppAuditLog,
   AppAutomation,
   AppAutomationLog,
   AppRoleMatrixItem,
@@ -48,9 +50,11 @@ import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import KeyRoundedIcon from '@mui/icons-material/KeyRounded';
 import CorporateFareRoundedIcon from '@mui/icons-material/CorporateFareRounded';
 import CloudQueueRoundedIcon from '@mui/icons-material/CloudQueueRounded';
+import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded';
+import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded';
 import { useEscapeKey } from '@/lib/ui-hooks';
 
-type AdminTab = 'users' | 'orgUnits' | 'roles' | 'workflows' | 'automations' | 'storage';
+type AdminTab = 'users' | 'orgUnits' | 'roles' | 'workflows' | 'automations' | 'audit' | 'storage';
 
 const TRIGGER_LABELS: Record<string, string> = {
   RECORD_CREATED: 'Khi Tạo mới',
@@ -74,6 +78,25 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 export default function AdminGovernancePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="page-content">
+          <div className="card" style={{ padding: 28, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div className="skeleton-box" style={{ height: 28, width: 280 }} />
+            <div className="skeleton-box" style={{ height: 180, width: '100%' }} />
+          </div>
+        </div>
+      }
+    >
+      <AdminGovernanceContent />
+    </Suspense>
+  );
+}
+
+function AdminGovernanceContent() {
+  const searchParams = useSearchParams();
+  const requestedTabRaw = (searchParams?.get('tab') || '').trim();
   const { apps } = usePlatform();
   const { user: currentUser, hasPermission, refreshAuth } = useAuth();
 
@@ -81,10 +104,28 @@ export default function AdminGovernancePage() {
   const canRoles = hasPermission('role.manage') || hasPermission('user.manage') || hasPermission('studio.manage');
   const canWorkflows = hasPermission('workflow.manage') || hasPermission('studio.manage');
   const canAutomations = hasPermission('automation.manage') || hasPermission('studio.manage');
+  const canAudit = hasPermission('audit.view') || hasPermission('user.manage') || hasPermission('studio.manage') || Boolean(currentUser?.isAdmin);
   const canStorage = hasPermission('studio.manage') || Boolean(currentUser?.isAdmin);
-  const hasAnyAdminPerm = canUsers || canRoles || canWorkflows || canAutomations || canStorage;
+  const hasAnyAdminPerm = canUsers || canRoles || canWorkflows || canAutomations || canAudit || canStorage;
 
   const [selectedTab, setActiveTab] = useState<AdminTab | null>(null);
+  const validRequestedTab: AdminTab | null =
+    requestedTabRaw === 'users' && canUsers
+      ? 'users'
+      : requestedTabRaw === 'orgUnits' && canUsers
+      ? 'orgUnits'
+      : requestedTabRaw === 'roles' && canRoles
+      ? 'roles'
+      : requestedTabRaw === 'workflows' && canWorkflows
+      ? 'workflows'
+      : requestedTabRaw === 'automations' && canAutomations
+      ? 'automations'
+      : requestedTabRaw === 'audit' && canAudit
+      ? 'audit'
+      : requestedTabRaw === 'storage' && canStorage
+      ? 'storage'
+      : null;
+
   const defaultTab: AdminTab = canUsers
     ? 'users'
     : canRoles
@@ -93,10 +134,12 @@ export default function AdminGovernancePage() {
     ? 'workflows'
     : canAutomations
     ? 'automations'
+    : canAudit
+    ? 'audit'
     : canStorage
     ? 'storage'
     : 'users';
-  const activeTab: AdminTab = selectedTab ?? defaultTab;
+  const activeTab: AdminTab = selectedTab ?? validRequestedTab ?? defaultTab;
 
   // Shared metadata
   const [allTables, setAllTables] = useState<SysTable[]>([]);
@@ -136,6 +179,12 @@ export default function AdminGovernancePage() {
   } | null>(null);
   useEscapeKey(Boolean(resetPwUser), () => setResetPwUser(null));
   useEscapeKey(Boolean(dryRunResult), () => setDryRunResult(null));
+
+  // Global Audit Logs
+  const [auditLogs, setAuditLogs] = useState<AppAuditLog[]>([]);
+  const [auditAppFilter, setAuditAppFilter] = useState('');
+  const [auditQuery, setAuditQuery] = useState('');
+  const [loadingAudit, setLoadingAudit] = useState(false);
 
   // Dialogs & snackbar
   const [confirm, setConfirm] = useState<{ open: boolean; title: string; message: string; onConfirm: () => void }>({
@@ -218,6 +267,41 @@ export default function AdminGovernancePage() {
       cancelled = true;
     };
   }, [matrixAppId, canRoles, loadAppMatrix]);
+
+  const loadAuditLogs = useCallback(async (appIdFilter: string) => {
+    if (!canAudit) return;
+    setLoadingAudit(true);
+    try {
+      const qs = appIdFilter ? `?appId=${encodeURIComponent(appIdFilter)}&limit=120` : '?limit=120';
+      const res = await fetch(`/api/records/audit-logs${qs}`, { credentials: 'include' }).then((r) => r.json());
+      if (res.success) setAuditLogs(res.data || []);
+    } finally {
+      setLoadingAudit(false);
+    }
+  }, [canAudit]);
+
+  useEffect(() => {
+    if (activeTab !== 'audit' || !canAudit) return;
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadAuditLogs(auditAppFilter);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, auditAppFilter, canAudit, loadAuditLogs]);
+
+  const filteredAuditLogs = useMemo(() => {
+    const q = auditQuery.trim().toLowerCase();
+    if (!q) return auditLogs;
+    return auditLogs.filter(
+      (log) =>
+        (log.actor || '').toLowerCase().includes(q) ||
+        (log.action || '').toLowerCase().includes(q) ||
+        (log.summary || '').toLowerCase().includes(q) ||
+        (log.recordId || '').toLowerCase().includes(q),
+    );
+  }, [auditLogs, auditQuery]);
 
   const filteredUsers = useMemo(() => {
     return users.filter((u) => {
@@ -408,6 +492,15 @@ export default function AdminGovernancePage() {
                 onClick={() => setActiveTab('automations')}
               >
                 <BoltRoundedIcon sx={{ fontSize: 16 }} /> Automation ({automations.length})
+              </button>
+            )}
+            {canAudit && (
+              <button
+                type="button"
+                className={`segmented-tab ${activeTab === 'audit' ? 'active' : ''}`}
+                onClick={() => setActiveTab('audit')}
+              >
+                <HistoryRoundedIcon sx={{ fontSize: 16 }} /> Nhật ký Kiểm toán
               </button>
             )}
             {canStorage && (
@@ -1107,6 +1200,109 @@ export default function AdminGovernancePage() {
 
         {activeTab === 'orgUnits' && (
           <OrgUnitsPanel users={users} toast={toast} onOrgUnitsChanged={loadUsersAndRoles} />
+        )}
+
+        {activeTab === 'audit' && canAudit && (
+          <div className="card" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+              <div>
+                <strong style={{ fontSize: 15 }}>Nhật ký Kiểm toán Toàn hệ thống (Global Audit Trail)</strong>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                  Theo dõi mọi thao tác tạo, sửa, xóa, phê duyệt, thu hồi và khôi phục bản ghi xuyên suốt các ứng dụng.
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <select
+                  className="form-select"
+                  style={{ width: 200, height: 34, fontSize: 12.5 }}
+                  aria-label="Lọc nhật ký theo ứng dụng"
+                  value={auditAppFilter}
+                  onChange={(e) => setAuditAppFilter(e.target.value)}
+                >
+                  <option value="">Tất cả ứng dụng</option>
+                  {apps.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name} ({a.code})</option>
+                  ))}
+                </select>
+                <div style={{ position: 'relative', width: 220 }}>
+                  <SearchRoundedIcon sx={{ fontSize: 16, position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <input
+                    className="form-input"
+                    style={{ height: 34, paddingLeft: 32, fontSize: 12.5 }}
+                    placeholder="Tìm người thực hiện, hành động..."
+                    value={auditQuery}
+                    onChange={(e) => setAuditQuery(e.target.value)}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-xs"
+                  onClick={() => void loadAuditLogs(auditAppFilter)}
+                  disabled={loadingAudit}
+                >
+                  <RefreshRoundedIcon sx={{ fontSize: 15 }} /> Làm mới
+                </button>
+              </div>
+            </div>
+
+            {loadingAudit ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div className="skeleton-box" style={{ height: 36, width: '100%' }} />
+                <div className="skeleton-box" style={{ height: 36, width: '100%' }} />
+                <div className="skeleton-box" style={{ height: 36, width: '100%' }} />
+              </div>
+            ) : filteredAuditLogs.length === 0 ? (
+              <EmptyState
+                title="Chưa có nhật ký kiểm toán khớp bộ lọc"
+                description="Các thao tác dữ liệu và phê duyệt trong hệ thống sẽ tự động được ghi vết tại đây."
+                icon={<HistoryRoundedIcon sx={{ fontSize: 28, color: 'var(--text-muted)' }} />}
+              />
+            ) : (
+              <div className="table-responsive">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Thời gian</th>
+                      <th>Hành động</th>
+                      <th>Người thực hiện</th>
+                      <th>Ứng dụng / Bảng</th>
+                      <th>Ghi chú &amp; Chi tiết</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredAuditLogs.map((log) => {
+                      const appObj = apps.find((a) => a.id === log.appId);
+                      const tblObj = allTables.find((t) => t.id === log.tableId);
+                      const changedKeys = Object.keys(log.newData || log.oldData || {}).slice(0, 4);
+                      return (
+                        <tr key={log.id}>
+                          <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: 'var(--text-muted)' }}>
+                            {log.createdAt ? new Date(log.createdAt).toLocaleString('vi-VN') : '—'}
+                          </td>
+                          <td>
+                            <span className="badge badge-info" style={{ fontSize: 11 }}>{log.action}</span>
+                          </td>
+                          <td style={{ fontWeight: 600 }}>{log.actor || 'system'}</td>
+                          <td style={{ fontSize: 12.5 }}>
+                            <div>{appObj?.name || log.appId}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{tblObj?.displayName || log.tableId}</div>
+                          </td>
+                          <td style={{ fontSize: 12 }}>
+                            {log.summary && <div>{log.summary}</div>}
+                            {changedKeys.length > 0 && (
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                                Trường: <code>{changedKeys.join(', ')}</code>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         )}
 
         {activeTab === 'storage' && (

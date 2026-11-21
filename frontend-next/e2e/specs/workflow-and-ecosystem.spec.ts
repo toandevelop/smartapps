@@ -332,3 +332,186 @@ test('online app store browses, downloads .smartapp.json, installs apps, and syn
     }
   }
 });
+
+test('UI/UX 3.0 Phase 1: Creation Hub, Sidebar Pinning, Admin Audit Tab, Density & Runtime Split View + Floating Bulk Bar', async ({ page, qa }) => {
+  await qa.signIn(page);
+  await qa.save({ code: 'UX3-001', mode: 'normal', amount: 120, reason: 'Kiểm thử Split View & Bulk' });
+
+  // 1. Portal Creation Hub
+  await page.goto('/');
+  await page.getByRole('button', { name: /Thêm \/ Tạo App/ }).click();
+  const hubDialog = page.getByRole('dialog', { name: 'Trung tâm Tạo & Cài đặt Ứng dụng' });
+  await expect(hubDialog).toBeVisible();
+  await expect(hubDialog.getByText('Kho Apps Online (20 gói v2.0)')).toBeVisible();
+  await expect(hubDialog.getByText('Tạo App bằng AI Copilot')).toBeVisible();
+  await expect(hubDialog.getByText('Sinh App từ File Excel (.xlsx)')).toBeVisible();
+  await expect(hubDialog.getByText('Tạo App Trống Từ Đầu')).toBeVisible();
+  await hubDialog.getByRole('button', { name: 'Đóng', exact: true }).click();
+
+  // 2. Sidebar Pinning persists across reload
+  const pinBtn = page.locator('.sidebar-pin-btn').first();
+  const savePinRes = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/settings/me' && res.request().method() === 'PUT');
+  await pinBtn.click({ force: true });
+  expect((await savePinRes).status()).toBe(200);
+  await page.reload();
+  await expect(page.getByText(/Đã ghim \(1\)/)).toBeVisible();
+  // Unpin to restore clean state
+  const unpinRes = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/settings/me' && res.request().method() === 'PUT');
+  await page.locator('.sidebar-pin-btn.pinned').first().click({ force: true });
+  expect((await unpinRes).status()).toBe(200);
+
+  // 3. Admin Global Audit Trail deep link (/admin?tab=audit)
+  await page.goto('/admin?tab=audit');
+  await expect(page.getByText('Nhật ký Kiểm toán Toàn hệ thống (Global Audit Trail)')).toBeVisible();
+
+  // 4. 3-level Display Density in Settings
+  await page.goto('/settings');
+  await page.getByRole('button', { name: /Giao diện/ }).click();
+  await page.getByRole('button', { name: /Thoải mái \(Spacious\)/ }).click();
+  const saveDensityRes = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/settings/me' && res.request().method() === 'PUT');
+  await page.getByRole('button', { name: /Áp dụng & Lưu giao diện/ }).click();
+  expect((await saveDensityRes).status()).toBe(200);
+  await expect.poll(() => page.evaluate(() => document.body.classList.contains('density-spacious'))).toBe(true);
+  // Restore default density
+  await page.getByRole('button', { name: /Tiêu chuẩn/ }).click();
+  const restoreDensityRes = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/settings/me' && res.request().method() === 'PUT');
+  await page.getByRole('button', { name: /Áp dụng & Lưu giao diện/ }).click();
+  expect((await restoreDensityRes).status()).toBe(200);
+
+  // 5. Runtime Split View & Floating Bulk Action Bar
+  await qa.openRuntime(page);
+  await expect(page.getByRole('button', { name: /Chia đôi/ })).toBeVisible();
+  await page.getByRole('button', { name: /Chia đôi/ }).click();
+  await expect(page.locator('.runtime-split-grid')).toBeVisible();
+  await expect(page.locator('.runtime-split-detail')).toBeVisible();
+  await expect(page.locator('.runtime-split-detail').getByText('UX3-001').first()).toBeVisible();
+
+  // Back to Table View & select row to trigger Floating Bulk Action Bar
+  await page.getByRole('button', { name: /Bảng động/ }).click();
+  const rowCheckbox = page.getByRole('row').filter({ hasText: 'UX3-001' }).locator('input[type="checkbox"]').first();
+  await expect(rowCheckbox).toBeVisible();
+  await rowCheckbox.check();
+  const bulkBar = page.locator('.floating-bulk-bar');
+  await expect(bulkBar).toBeVisible();
+  await expect(bulkBar.getByText(/Đã chọn 1 bản ghi/)).toBeVisible();
+  await bulkBar.getByRole('button', { name: 'Bỏ chọn' }).click();
+  await expect(bulkBar).toBeHidden();
+});
+
+test('Phase 2: Form Layout Wizard, Vietnamese accent-insensitive search, Gallery & Timeline Views, and QR Scanner input', async ({ page, adminApi, qa }) => {
+  await qa.signIn(page);
+
+  // Add a DATE column so Timeline/Gantt View activates, then configure 2-step Wizard FormLayout
+  await post(adminApi, '/api/columns', {
+    tableId: qa.table.id,
+    columnCode: 'due_date',
+    columnName: 'Hạn hoàn thành',
+    dataType: 'DATE',
+    orderIndex: 7,
+  });
+  await post(adminApi, '/api/tables', {
+    ...qa.table,
+    formLayout: {
+      mode: 'wizard',
+      sections: [
+        {
+          id: 'step_1',
+          title: 'Thông tin cơ bản',
+          columns: 2,
+          calloutText: 'Nhập mã và chế độ xử lý trước khi qua bước 2',
+          fields: [
+            { columnCode: 'code', colSpan: 1 },
+            { columnCode: 'mode', colSpan: 1 },
+          ],
+        },
+        {
+          id: 'step_2',
+          title: 'Số tiền & Diễn giải',
+          columns: 2,
+          fields: [
+            { columnCode: 'amount', colSpan: 1 },
+            { columnCode: 'approved', colSpan: 1 },
+            { columnCode: 'reason', colSpan: 2 },
+            { columnCode: 'due_date', colSpan: 1 },
+          ],
+        },
+      ],
+    },
+  });
+  await qa.save({
+    code: 'P2-VN-01',
+    mode: 'normal',
+    amount: 250,
+    reason: 'Hồ sơ Nguyễn Văn Đức chuyển đổi số',
+    due_date: '2026-11-25',
+  });
+
+  // 1. Runtime opens Wizard Form Layout & QR Scanner injects code into field
+  await qa.openRuntime(page);
+  await page.getByRole('button', { name: 'Thêm Phiếu E2E điều kiện', exact: true }).click();
+  await expect(page.getByText('Bước 1/2: Thông tin cơ bản')).toBeVisible();
+  await expect(page.getByText('Nhập mã và chế độ xử lý trước khi qua bước 2')).toBeVisible();
+
+  await page.getByRole('button', { name: /Quét mã QR vào/ }).first().click();
+  const qrDialog = page.getByRole('dialog', { name: /Quét mã vào:/ });
+  await expect(qrDialog).toBeVisible();
+  await qrDialog.getByPlaceholder('Hoặc nhập / dán mã quét thủ công...').fill('QR-SCANNED-99');
+  await qrDialog.getByRole('button', { name: 'Áp dụng', exact: true }).click();
+  await expect(qrDialog).toBeHidden();
+  await expect(input(page, 'mã phiếu')).toHaveValue('QR-SCANNED-99');
+
+  await page.getByRole('button', { name: /Bước tiếp theo/ }).click();
+  await expect(page.getByText('Bước 2/2: Số tiền & Diễn giải')).toBeVisible();
+  await page.getByRole('button', { name: 'Hủy', exact: true }).click();
+  await page.getByRole('button', { name: 'Bỏ thay đổi', exact: true }).click();
+
+  // 2. Vietnamese accent-insensitive search on Runtime table
+  const searchBox = page.getByPlaceholder('Tìm nhanh trên bảng...', { exact: true });
+  await searchBox.fill('nguyen van duc');
+  await expect(page.getByRole('row').filter({ hasText: 'P2-VN-01' })).toBeVisible();
+  await searchBox.fill('');
+
+  // 3. Switch to Gallery View & Timeline/Gantt View
+  await page.getByRole('button', { name: /Thư viện/ }).click();
+  await expect(page.locator('.runtime-gallery-grid')).toBeVisible();
+  await expect(page.locator('.runtime-gallery-card').filter({ hasText: 'P2-VN-01' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Tiến độ', exact: true }).click();
+  await expect(page.getByText(/Tiến độ Timeline/)).toBeVisible();
+  await expect(page.getByRole('button', { name: /P2-VN-01/ }).first()).toBeVisible();
+});
+
+test('Phase 3: Global AI Copilot Drawer, Solution Suites 1-Click & DMS_VAN_BAN, and Admin HA Cluster Health', async ({ page, qa }) => {
+  await qa.signIn(page);
+  await qa.save({
+    code: 'P3-COPILOT-01',
+    mode: 'normal',
+    amount: 500,
+    reason: 'Nghị quyết chuyển đổi số tập đoàn Hoàng Gia',
+  });
+
+  // 1. Open Global AI Copilot Drawer from Navbar and search accent-insensitively
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Mở Trợ lý AI Copilot', exact: true }).click();
+  const copilotDialog = page.getByRole('dialog', { name: 'Trợ lý AI Doanh nghiệp SmartApps Copilot', exact: true });
+  await expect(copilotDialog).toBeVisible();
+
+  await copilotDialog.getByRole('textbox', { name: 'Nhập câu hỏi cho Trợ lý AI Copilot', exact: true }).fill('Tìm hồ sơ hoang gia');
+  await copilotDialog.getByRole('button', { name: 'Gửi câu hỏi tới AI Copilot', exact: true }).click();
+  await expect(copilotDialog.getByText(/search_records/)).toBeVisible();
+  await expect(copilotDialog.getByRole('button', { name: /P3-COPILOT-01/ })).toBeVisible();
+  await copilotDialog.getByRole('button', { name: 'Đóng Trợ lý AI', exact: true }).click();
+  await expect(copilotDialog).toBeHidden();
+
+  // 2. Open Online App Store -> verify Solution Suites 1-Click & DMS_VAN_BAN package
+  await page.goto('/store');
+  await expect(page.getByText('Bộ Giải pháp Doanh nghiệp 1-Click (Solution Suites)')).toBeVisible();
+  await expect(page.getByText('Bộ Giải pháp Vận hành & Hành chính Số (SME Core)')).toBeVisible();
+  await expect(page.getByText('Quản lý Văn bản Đi/Đến & Trình Ký số (NĐ30)').first()).toBeVisible();
+
+  // 3. Open Admin Storage & HA Cluster Health -> verify Multi-Instance Cluster Health card
+  await page.goto('/admin?tab=storage');
+  await expect(page.getByText('Trạng thái Cụm HA (Multi-Instance Cluster Health)')).toBeVisible();
+  await expect(page.getByText(/API Node hoạt động/)).toBeVisible();
+});
+

@@ -16,6 +16,10 @@ import {
   AnalyticsPanel,
   AppDashboardView,
   StructuredFilterBuilder,
+  FloatingBulkActionBar,
+  RuntimeSplitView,
+  GalleryView,
+  TimelineGanttView,
 } from '@/app/components/ui';
 import TasksAppWorkspace from '@/app/components/tasks/TasksAppWorkspace';
 import { usePlatform } from '@/lib/app-context';
@@ -50,6 +54,9 @@ import CloudDownloadRoundedIcon from '@mui/icons-material/CloudDownloadRounded';
 import CloudUploadRoundedIcon from '@mui/icons-material/CloudUploadRounded';
 import FactCheckRoundedIcon from '@mui/icons-material/FactCheckRounded';
 import TableViewRoundedIcon from '@mui/icons-material/TableViewRounded';
+import VerticalSplitRoundedIcon from '@mui/icons-material/VerticalSplitRounded';
+import PhotoLibraryRoundedIcon from '@mui/icons-material/PhotoLibraryRounded';
+import TimelineRoundedIcon from '@mui/icons-material/TimelineRounded';
 import ViewKanbanRoundedIcon from '@mui/icons-material/ViewKanbanRounded';
 import CalendarMonthRoundedIcon from '@mui/icons-material/CalendarMonthRounded';
 import BarChartRoundedIcon from '@mui/icons-material/BarChartRounded';
@@ -108,7 +115,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
   const [loadingTree, setLoadingTree] = useState(true);
   const [activeModId, setActiveModId] = useState<string>('');
   const [activeTableId, setActiveTableId] = useState<string>('');
-  const [viewMode, setViewMode] = useState<'table' | 'kanban' | 'calendar' | 'analytics'>('table');
+  const [viewMode, setViewMode] = useState<'table' | 'split' | 'gallery' | 'timeline' | 'kanban' | 'calendar' | 'analytics'>('table');
 
   const [records, setRecords] = useState<AppRecord[]>([]);
   const [total, setTotal] = useState(0);
@@ -1109,7 +1116,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                   style={{
                     height: 26,
                     fontSize: 11.5,
-                    ...(appViewMode === 'admin' ? { backgroundColor: '#1a73e8', color: '#ffffff' } : {}),
+                    ...(appViewMode === 'admin' ? { backgroundColor: 'var(--accent-primary)', color: 'var(--accent-on-primary)' } : {}),
                   }}
                   onClick={() => {
                     setAppViewMode('admin');
@@ -1126,7 +1133,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                   style={{
                     height: 26,
                     fontSize: 11.5,
-                    ...(appViewMode === 'personal' ? { backgroundColor: '#00897b', color: '#ffffff' } : {}),
+                    ...(appViewMode === 'personal' ? { backgroundColor: 'var(--success)', color: '#ffffff' } : {}),
                   }}
                   onClick={() => {
                     setAppViewMode('personal');
@@ -1298,6 +1305,32 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
                 >
                   <TableViewRoundedIcon sx={{ fontSize: 14 }} /> Bảng động
                 </button>
+                <button
+                  type="button"
+                  className={`btn btn-xs ${viewMode === 'split' ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={() => setViewMode('split')}
+                  title="Chế độ Chia đôi: danh sách trái + Hồ sơ 360° phải (dùng phím ↑ / ↓)"
+                >
+                  <VerticalSplitRoundedIcon sx={{ fontSize: 14 }} /> Chia đôi
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-xs ${viewMode === 'gallery' ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={() => setViewMode('gallery')}
+                  title="Hiển thị dạng lưới thẻ Thư viện trực quan"
+                >
+                  <PhotoLibraryRoundedIcon sx={{ fontSize: 14 }} /> Thư viện
+                </button>
+                {calendarColumn && (
+                  <button
+                    type="button"
+                    className={`btn btn-xs ${viewMode === 'timeline' ? 'btn-primary' : 'btn-outline'}`}
+                    onClick={() => setViewMode('timeline')}
+                    title="Biểu đồ thanh tiến độ theo mốc ngày (Timeline / Gantt)"
+                  >
+                    <TimelineRoundedIcon sx={{ fontSize: 14 }} /> Tiến độ
+                  </button>
+                )}
                 {canKanban && (
                   <button
                     type="button"
@@ -1596,7 +1629,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
         </div>
 
         {/* Quick Status Pills */}
-        {activeTable && viewMode === 'table' && (
+        {activeTable && (viewMode === 'table' || viewMode === 'split') && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: -4 }}>
             {[
               { key: 'ALL', label: 'Tất cả', active: statusFilter === 'ALL' && !columnFilters.approvalStatus, color: tree.app.color },
@@ -1651,7 +1684,57 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
 
         {/* Dynamic Views */}
         {activeTable ? (
-          viewMode === 'kanban' && canKanban ? (
+          viewMode === 'split' ? (
+            <RuntimeSplitView
+              records={records}
+              columns={activeColumns}
+              tableDisplayName={activeTable.displayName}
+              appCode={tree.app.code}
+              loading={loadingRecords}
+              canEdit={canEdit}
+              canApprove={(() => {
+                if (!user) return false;
+                if (user.isAdmin) return true;
+                const uRoles = user.roleCodes?.length ? user.roleCodes : [user.roleCode];
+                if (uRoles.some((r) => r.toUpperCase() === 'ADMIN')) return true;
+                const approvers = activeTable.approverRoles || [];
+                if (approvers.length === 0) return canEdit;
+                return uRoles.some((ur) => approvers.some((ar) => ar.toUpperCase() === ur.toUpperCase()));
+              })()}
+              searchValue={search}
+              onSearchChange={(val) => {
+                setSearch(val);
+                setPage(1);
+              }}
+              onChanged={() => {
+                void loadRecords();
+                void refreshApps();
+              }}
+            />
+          ) : viewMode === 'gallery' ? (
+            <GalleryView
+              records={records}
+              columns={activeColumns}
+              accentColor={tree.app.color}
+              canEdit={canEdit}
+              onInspectRelations={(rec) => setDrawerRecord(rec)}
+              onEditRecord={
+                canEdit
+                  ? (rec) => {
+                      setEditingRecord(rec);
+                      setShowRecordModal(true);
+                    }
+                  : undefined
+              }
+            />
+          ) : viewMode === 'timeline' && calendarColumn ? (
+            <TimelineGanttView
+              records={records}
+              columns={activeColumns}
+              accentColor={tree.app.color}
+              onSelectRecord={(rec) => setDrawerRecord(rec)}
+            />
+          ) : viewMode === 'kanban' && canKanban ? (
             <KanbanBoardView
               groupColumn={kanbanColumn}
               groupableColumns={kanbanGroupableColumns}
@@ -2058,6 +2141,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
             tableName={activeTable.displayName}
             columns={activeColumns}
             formRules={activeTable.formRules}
+            formLayout={activeTable.formLayout}
             defaultOverrides={personalFormDefaults.defaults}
             lockedFields={personalFormDefaults.locked}
             saving={saving}
@@ -2585,6 +2669,51 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
             </div>
           </div>
         </div>
+      )}
+      {activeTable && viewMode === 'table' && selectedIds.length > 0 && (
+        <FloatingBulkActionBar
+          tableId={activeTable.id}
+          columns={activeColumns}
+          selectedRecords={records.filter((r) => selectedIds.includes(r.id))}
+          canEdit={canEdit}
+          canDelete={canDelete}
+          approvalEnabled={Boolean(activeTable.approvalEnabled)}
+          canApprove={(() => {
+            if (!user) return false;
+            if (user.isAdmin) return true;
+            const uRoles = user.roleCodes?.length ? user.roleCodes : [user.roleCode];
+            if (uRoles.some((r) => r.toUpperCase() === 'ADMIN')) return true;
+            const approvers = activeTable.approverRoles || [];
+            if (approvers.length === 0) return canEdit;
+            return uRoles.some((ur) => approvers.some((ar) => ar.toUpperCase() === ur.toUpperCase()));
+          })()}
+          onClearSelection={() => setSelectedIds([])}
+          onBatchDelete={(ids) => {
+            setConfirm({
+              open: true,
+              title: `Xóa ${ids.length} bản ghi`,
+              message: `Xác nhận xóa ${ids.length} bản ghi đã chọn?`,
+              onConfirm: async () => {
+                setConfirm((c) => ({ ...c, open: false }));
+                await fetch('/api/records/batch-delete', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ ids }),
+                });
+                setSelectedIds([]);
+                await loadRecords();
+                await refreshApps();
+                toast(`Đã chuyển ${ids.length} bản ghi vào Thùng rác`);
+              },
+            });
+          }}
+          onCompleted={async (summary, severity = 'success') => {
+            setSelectedIds([]);
+            await loadRecords();
+            await refreshApps();
+            toast(summary, severity);
+          }}
+        />
       )}
     </div>
   );

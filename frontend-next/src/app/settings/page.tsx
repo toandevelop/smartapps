@@ -583,7 +583,37 @@ function SettingsPageInner() {
 
                 <div>
                   <div className="form-label">Màu chủ đạo (Accent Color)</div>
-                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => setPrefs((p) => ({ ...p, accentColor: 'brand' }))}
+                      title="Kế thừa màu nhận diện thương hiệu của doanh nghiệp"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 12px 6px 6px',
+                        borderRadius: 999,
+                        backgroundColor: !prefs.accentColor || prefs.accentColor === 'brand' ? 'var(--accent-primary-container)' : 'var(--bg-primary)',
+                        border: `1.5px solid ${!prefs.accentColor || prefs.accentColor === 'brand' ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
+                        cursor: 'pointer',
+                        color: 'var(--text-primary)',
+                        fontSize: 12,
+                        fontWeight: 600,
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: '50%',
+                          backgroundColor: systemSettings.brandColor || '#1a73e8',
+                          display: 'inline-block',
+                          border: '2px solid var(--bg-surface)',
+                        }}
+                      />
+                      Màu thương hiệu công ty
+                    </button>
                     {ACCENT_SWATCHES.map((s) => (
                       <button
                         key={s.hex}
@@ -620,18 +650,45 @@ function SettingsPageInner() {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', borderRadius: 12, backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-light)', gap: 12 }}>
+                  <div style={{ padding: '12px 14px', borderRadius: 12, backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <div>
-                      <div style={{ fontSize: 13.5, fontWeight: 700 }}>Chế độ hiển thị gọn (Compact Density)</div>
-                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Thu gọn khoảng cách bảng dữ liệu &amp; thẻ để xem nhiều thông tin hơn</div>
+                      <div style={{ fontSize: 13.5, fontWeight: 700 }}>Mật độ hiển thị (Display Density)</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Chọn khoảng cách bảng dữ liệu &amp; thẻ phù hợp thói quen tác nghiệp</div>
                     </div>
-                    <BooleanSwitch
-                      checked={prefs.compactMode}
-                      onChange={(v) => setPrefs((p) => ({ ...p, compactMode: v }))}
-                      size="sm"
-                      trueLabel="Bật"
-                      falseLabel="Tắt"
-                    />
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+                      {(
+                        [
+                          { id: 'compact', label: 'Gọn (Compact)', desc: 'Xem nhiều dòng hơn' },
+                          { id: 'comfortable', label: 'Tiêu chuẩn', desc: 'Cân bằng mặc định' },
+                          { id: 'spacious', label: 'Thoải mái (Spacious)', desc: 'Rộng rãi, dễ chạm' },
+                        ] as const
+                      ).map((opt) => {
+                        const currentDensity = prefs.densityMode || (prefs.compactMode ? 'compact' : 'comfortable');
+                        const active = currentDensity === opt.id;
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setPrefs((p) => ({ ...p, densityMode: opt.id, compactMode: opt.id === 'compact' }))}
+                            style={{
+                              padding: '10px 12px',
+                              borderRadius: 10,
+                              border: `1.5px solid ${active ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
+                              backgroundColor: active ? 'var(--accent-primary-container)' : 'var(--bg-surface)',
+                              color: 'var(--text-primary)',
+                              textAlign: 'left',
+                              cursor: 'pointer',
+                              fontFamily: 'inherit',
+                            }}
+                          >
+                            <div style={{ fontSize: 12.5, fontWeight: 700, color: active ? 'var(--accent-primary)' : 'var(--text-primary)' }}>
+                              {opt.label}
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{opt.desc}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', borderRadius: 12, backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-light)', gap: 12 }}>
@@ -994,6 +1051,46 @@ function SettingsPageInner() {
                     value={sysCfg.workspaceTitle}
                     onChange={(e) => setSysCfg((s) => ({ ...s, workspaceTitle: e.target.value }))}
                   />
+                </div>
+
+                <div style={{ padding: '14px 16px', borderRadius: 12, backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 700 }}>Màu Thương hiệu Mặc định (Dynamic White-Label)</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <input
+                      id="sys-brand-color"
+                      type="color"
+                      aria-label="Chọn màu thương hiệu công ty"
+                      value={sysCfg.brandColor || '#1a73e8'}
+                      onChange={(e) => setSysCfg((s) => ({ ...s, brandColor: e.target.value }))}
+                      style={{ width: 42, height: 34, borderRadius: 8, border: '1px solid var(--border-subtle)', padding: 2, cursor: 'pointer', backgroundColor: 'var(--bg-surface)' }}
+                    />
+                    <input
+                      className="form-input"
+                      style={{ width: 120, fontFamily: 'var(--font-mono)', fontSize: 12.5 }}
+                      value={sysCfg.brandColor || '#1a73e8'}
+                      onChange={(e) => setSysCfg((s) => ({ ...s, brandColor: e.target.value }))}
+                      placeholder="#1a73e8"
+                    />
+                    {ACCENT_SWATCHES.map((s) => (
+                      <button
+                        key={s.hex}
+                        type="button"
+                        onClick={() => setSysCfg((cfg) => ({ ...cfg, brandColor: s.hex }))}
+                        title={s.name}
+                        style={{
+                          width: 26,
+                          height: 26,
+                          borderRadius: '50%',
+                          backgroundColor: s.hex,
+                          border: (sysCfg.brandColor || '#1a73e8').toLowerCase() === s.hex.toLowerCase() ? '2.5px solid var(--text-primary)' : '2px solid var(--bg-surface)',
+                          cursor: 'pointer',
+                        }}
+                      />
+                    ))}
+                    <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                      Tự động áp dụng &amp; cân bằng tương phản WCAG cho toàn doanh nghiệp (Light &amp; Dark Mode).
+                    </span>
+                  </div>
                 </div>
 
                 <div style={{ padding: '14px 16px', borderRadius: 12, backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 12 }}>

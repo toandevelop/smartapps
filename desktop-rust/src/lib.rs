@@ -1,9 +1,68 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
+use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+
+pub fn sanitize_app_code(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect()
+}
+
+pub fn sanitize_export_filename(raw: &str) -> String {
+    let safe: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .collect();
+    if safe.is_empty() {
+        "smartapps_export.txt".to_string()
+    } else {
+        safe
+    }
+}
+
+pub fn normalize_server_config(web_url: &str, api_url: &str) -> ServerConfig {
+    let clean_web = web_url.trim().trim_end_matches('/');
+    let clean_api = api_url.trim().trim_end_matches('/');
+    ServerConfig {
+        web_url: if clean_web.is_empty() {
+            "http://localhost:4100".to_string()
+        } else {
+            clean_web.to_string()
+        },
+        api_url: if clean_api.is_empty() {
+            "http://localhost:5200".to_string()
+        } else {
+            clean_api.to_string()
+        },
+    }
+}
+
+pub fn extract_host_port(url: &str) -> Option<(String, u16)> {
+    let trimmed = url.trim();
+    let (scheme, rest) = if let Some(r) = trimmed.strip_prefix("https://") {
+        ("https", r)
+    } else if let Some(r) = trimmed.strip_prefix("http://") {
+        ("http", r)
+    } else {
+        ("http", trimmed)
+    };
+    let authority = rest.split('/').next()?.trim();
+    if authority.is_empty() {
+        return None;
+    }
+    if let Some((host, port_str)) = authority.rsplit_once(':') {
+        if let Ok(port) = port_str.parse::<u16>() {
+            return Some((host.to_string(), port));
+        }
+    }
+    let default_port = if scheme == "https" { 443 } else { 80 };
+    Some((authority.to_string(), default_port))
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,14 +139,26 @@ fn get_server_config(app: AppHandle) -> ServerConfig {
 
 #[tauri::command]
 fn set_server_config(app: AppHandle, web_url: String, api_url: String) -> Result<ServerConfig, String> {
-    let cfg = ServerConfig {
-        web_url: web_url.trim().trim_end_matches('/').to_string(),
-        api_url: api_url.trim().trim_end_matches('/').to_string(),
-    };
+    let cfg = normalize_server_config(&web_url, &api_url);
     let path = data_file(&app, "server_config.json")?;
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     fs::write(path, json).map_err(|e| e.to_string())?;
     Ok(cfg)
+}
+
+#[tauri::command]
+fn check_server_reachable(app: AppHandle, target_url: Option<String>) -> bool {
+    let url = target_url.unwrap_or_else(|| get_server_config(app).api_url);
+    let Some((host, port)) = extract_host_port(&url) else {
+        return false;
+    };
+    let Ok(mut addrs) = (host.as_str(), port).to_socket_addrs() else {
+        return false;
+    };
+    let Some(addr) = addrs.next() else {
+        return false;
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(1500)).is_ok()
 }
 
 #[tauri::command]
@@ -97,10 +168,7 @@ fn open_app_window(
     app_name: String,
     base_url: Option<String>,
 ) -> Result<String, String> {
-    let clean_code: String = app_code
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-        .collect();
+    let clean_code = sanitize_app_code(&app_code);
     let label = format!("app-{}", clean_code.to_lowercase());
 
     if let Some(existing) = app.get_webview_window(&label) {
@@ -201,11 +269,7 @@ fn export_report_file(app: AppHandle, filename: String, content: String) -> Resu
         .or_else(|_| app.path().app_local_data_dir())
         .map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let safe_name: String = filename
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        .collect();
-    let target = dir.join(if safe_name.is_empty() { "smartapps_export.txt".to_string() } else { safe_name });
+    let target = dir.join(sanitize_export_filename(&filename));
     fs::write(&target, content).map_err(|e| e.to_string())?;
     Ok(target.to_string_lossy().to_string())
 }
@@ -257,6 +321,7 @@ pub fn run() {
             get_desktop_info,
             get_server_config,
             set_server_config,
+            check_server_reachable,
             open_app_window,
             save_offline_snapshot,
             load_offline_snapshot,
@@ -268,4 +333,31 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running SmartApps Rust Desktop application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitizes_app_code_and_export_filename() {
+        assert_eq!(sanitize_app_code("DMS_VAN_BAN/../evil"), "DMS_VAN_BANevil");
+        assert_eq!(sanitize_export_filename("../report 2026.xlsx"), "..report2026.xlsx");
+        assert_eq!(sanitize_export_filename("///"), "smartapps_export.txt");
+    }
+
+    #[test]
+    fn normalizes_server_config_and_extracts_host_port() {
+        let cfg = normalize_server_config(" https://erp.corp.vn/ ", "");
+        assert_eq!(cfg.web_url, "https://erp.corp.vn");
+        assert_eq!(cfg.api_url, "http://localhost:5200");
+        assert_eq!(
+            extract_host_port("http://127.0.0.1:5200/api/health"),
+            Some(("127.0.0.1".to_string(), 5200))
+        );
+        assert_eq!(
+            extract_host_port("https://smartapps.corp.vn"),
+            Some(("smartapps.corp.vn".to_string(), 443))
+        );
+    }
 }

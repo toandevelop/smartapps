@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
+import Link from 'next/link';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded';
 import ShieldRoundedIcon from '@mui/icons-material/ShieldRounded';
@@ -130,7 +131,7 @@ export default function StudioPlatformResourcesPanel({
 
   return (
     <div className="card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {/* Standardized Segmented Bar */}
+      {/* Standardized Segmented Bar + Unified Admin Handoff */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div className="segmented-tabs subtle">
           {canStudio && (
@@ -143,7 +144,7 @@ export default function StudioPlatformResourcesPanel({
               Danh mục Dùng chung ({categories.length})
             </button>
           )}
-          {canManageRoles && (
+          {!canStudio && canManageRoles && (
             <button
               type="button"
               className={`segmented-tab ${activeSubTab === 'roles' ? 'active' : ''}`}
@@ -153,7 +154,7 @@ export default function StudioPlatformResourcesPanel({
               Vai trò &amp; Phân quyền ({roles.length})
             </button>
           )}
-          {canManageUsers && (
+          {!canStudio && canManageUsers && (
             <button
               type="button"
               className={`segmented-tab ${activeSubTab === 'users' ? 'active' : ''}`}
@@ -163,7 +164,7 @@ export default function StudioPlatformResourcesPanel({
               Người dùng ({users.length})
             </button>
           )}
-          {canViewAudit && (
+          {!canStudio && canViewAudit && (
             <button
               type="button"
               className={`segmented-tab ${activeSubTab === 'audit' ? 'active' : ''}`}
@@ -174,6 +175,27 @@ export default function StudioPlatformResourcesPanel({
             </button>
           )}
         </div>
+
+        {(canManageUsers || canManageRoles || canViewAudit) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Quản trị tập trung tại Admin:</span>
+            {canManageUsers && (
+              <Link href="/admin?tab=users" className="btn btn-outline btn-xs">
+                <ManageAccountsRoundedIcon sx={{ fontSize: 14 }} /> Người dùng ({users.length})
+              </Link>
+            )}
+            {canManageRoles && (
+              <Link href="/admin?tab=roles" className="btn btn-outline btn-xs">
+                <ShieldRoundedIcon sx={{ fontSize: 14 }} /> Vai trò ({roles.length})
+              </Link>
+            )}
+            {canViewAudit && (
+              <Link href="/admin?tab=audit" className="btn btn-outline btn-xs">
+                <HistoryRoundedIcon sx={{ fontSize: 14 }} /> Nhật ký Kiểm toán
+              </Link>
+            )}
+          </div>
+        )}
 
         {activeSubTab === 'roles' && canManageRoles && (
           <button type="button" className="btn btn-primary btn-sm" onClick={onCreateRole}>

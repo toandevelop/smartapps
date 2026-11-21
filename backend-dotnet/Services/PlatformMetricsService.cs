@@ -37,6 +37,7 @@ public sealed class PlatformMetricsService
         long outboxDeadLetter = 0;
         long aiTokensMonth = 0;
         long totalRecords = 0;
+        long activeClusterNodes = 1;
         double dbLatencyMs = -1;
 
         try
@@ -49,7 +50,8 @@ public sealed class PlatformMetricsService
                     (SELECT COUNT(*) FROM app_outbox_events WHERE status = 'PENDING'),
                     (SELECT COUNT(*) FROM app_outbox_events WHERE status = 'DEAD_LETTER'),
                     (SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) FROM sys_ai_logs WHERE status = 'SUCCESS' AND created_at >= date_trunc('month', CURRENT_TIMESTAMP)),
-                    (SELECT COUNT(*) FROM app_records WHERE deleted_at IS NULL)
+                    (SELECT COUNT(*) FROM app_records WHERE deleted_at IS NULL),
+                    (SELECT COUNT(*) FROM sys_cluster_nodes WHERE last_heartbeat_at >= CURRENT_TIMESTAMP - INTERVAL '90 seconds')
                 """, conn);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             if (await r.ReadAsync(ct))
@@ -58,6 +60,8 @@ public sealed class PlatformMetricsService
                 outboxDeadLetter = r.IsDBNull(1) ? 0 : r.GetInt64(1);
                 aiTokensMonth = r.IsDBNull(2) ? 0 : r.GetInt64(2);
                 totalRecords = r.IsDBNull(3) ? 0 : r.GetInt64(3);
+                var clusterCnt = r.IsDBNull(4) ? 0 : r.GetInt64(4);
+                activeClusterNodes = Math.Max(1, clusterCnt);
             }
             sw.Stop();
             dbLatencyMs = Math.Round(sw.Elapsed.TotalMilliseconds, 2);
@@ -76,6 +80,8 @@ public sealed class PlatformMetricsService
                 ? Math.Round(Interlocked.Read(ref _httpDurationMsTotal) / (double)Math.Max(1, Interlocked.Read(ref _httpRequestsTotal)), 2)
                 : 0,
             ActiveSseSubscribers = _realtime.ActiveSubscriberCount,
+            ActiveClusterNodes = activeClusterNodes,
+            RealtimeListenerConnected = _realtime.IsListenerConnected,
             OutboxPending = outboxPending,
             OutboxDeadLetter = outboxDeadLetter,
             AiTokensUsedMonth = aiTokensMonth,
@@ -105,6 +111,8 @@ public sealed class PlatformMetricsService
         Counter("smartapps_http_errors_5xx_total", "Total 5xx HTTP responses", m.HttpErrors5xx);
         Gauge("smartapps_http_avg_latency_ms", "Average HTTP latency in ms", m.HttpAvgLatencyMs);
         Gauge("smartapps_sse_subscribers_active", "Active real-time SSE subscriber streams", m.ActiveSseSubscribers);
+        Gauge("smartapps_cluster_nodes_active", "Active API instances reporting heartbeats in the HA cluster", m.ActiveClusterNodes);
+        Gauge("smartapps_realtime_listener_connected", "Whether PostgreSQL LISTEN/NOTIFY channel is connected (1/0)", m.RealtimeListenerConnected ? 1 : 0);
         Gauge("smartapps_outbox_pending", "Pending webhook outbox deliveries", m.OutboxPending);
         Gauge("smartapps_outbox_dead_letter", "Dead-letter webhook outbox events", m.OutboxDeadLetter);
         Gauge("smartapps_ai_tokens_month", "AI tokens consumed in the current calendar month", m.AiTokensUsedMonth);
@@ -121,6 +129,8 @@ public sealed class PlatformMetricsSnapshot
     public long HttpErrors5xx { get; set; }
     public double HttpAvgLatencyMs { get; set; }
     public int ActiveSseSubscribers { get; set; }
+    public long ActiveClusterNodes { get; set; } = 1;
+    public bool RealtimeListenerConnected { get; set; }
     public long OutboxPending { get; set; }
     public long OutboxDeadLetter { get; set; }
     public long AiTokensUsedMonth { get; set; }

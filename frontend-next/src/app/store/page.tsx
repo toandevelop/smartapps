@@ -23,7 +23,15 @@ import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import { ClusterIcon, EmptyState, NotificationSnackbar, PageHeader } from '@/app/components/ui';
 import { usePlatform } from '@/lib/app-context';
 import { useAuth } from '@/lib/auth-context';
-import type { StoreAppDetail, StoreAppSummary, StoreInstallHistoryItem, StoreRegistry, SysApp } from '@/lib/types';
+import type {
+  InstallSuiteResult,
+  StoreAppDetail,
+  StoreAppSummary,
+  StoreInstallHistoryItem,
+  StoreRegistry,
+  StoreSolutionSuite,
+  SysApp,
+} from '@/lib/types';
 import { useEscapeKey } from '@/lib/ui-hooks';
 
 type SourceFilter = 'ALL' | 'OFFICIAL' | 'REMOTE' | 'INSTALLED';
@@ -34,6 +42,8 @@ export default function OnlineAppStorePage() {
   const canStudio = hasPermission('studio.manage');
 
   const [storeApps, setStoreApps] = useState<StoreAppSummary[]>([]);
+  const [suites, setSuites] = useState<StoreSolutionSuite[]>([]);
+  const [busySuiteCode, setBusySuiteCode] = useState<string | null>(null);
   const [registries, setRegistries] = useState<StoreRegistry[]>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -80,16 +90,43 @@ export default function OnlineAppStorePage() {
 
   const loadStore = useCallback(async () => {
     try {
-      const [appsRes, regsRes] = await Promise.all([
+      const [appsRes, regsRes, suitesRes] = await Promise.all([
         fetch('/api/store/apps', { credentials: 'include' }).then((r) => r.json()),
         fetch('/api/store/registries', { credentials: 'include' }).then((r) => r.json()),
+        fetch('/api/store/suites', { credentials: 'include' }).then((r) => r.json()).catch(() => ({ success: false })),
       ]);
       if (appsRes.success) setStoreApps(appsRes.data || []);
       if (regsRes.success) setRegistries(regsRes.data || []);
+      if (suitesRes.success) setSuites(suitesRes.data || []);
     } finally {
       setLoaded(true);
     }
   }, []);
+
+  const handleInstallSuite = async (suite: StoreSolutionSuite) => {
+    if (!canStudio) return;
+    setBusySuiteCode(suite.suiteCode);
+    try {
+      const res = await fetch(`/api/store/suites/${encodeURIComponent(suite.suiteCode)}/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ includeSampleData }),
+      }).then((r) => r.json());
+      if (res.success && res.data) {
+        const result = res.data as InstallSuiteResult;
+        await refreshApps();
+        await loadStore();
+        toast(
+          `Đã triển khai "${result.suiteName}": Cài mới ${result.installedCount} ứng dụng, bỏ qua ${result.skippedCount} ứng dụng đã có!`
+        );
+      } else {
+        toast(res.message || 'Không thể cài đặt Bộ giải pháp.', 'error');
+      }
+    } finally {
+      setBusySuiteCode(null);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -440,6 +477,128 @@ export default function OnlineAppStorePage() {
               <Link href={`/studio?appId=${encodeURIComponent(lastInstalledApp.id)}`} className="btn btn-outline btn-xs">
                 Thiết kế trong Studio
               </Link>
+            </div>
+          </div>
+        )}
+
+        {/* Solution Suites 1-Click */}
+        {suites.length > 0 && (
+          <div className="card" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <VerifiedUserRoundedIcon sx={{ fontSize: 19, color: 'var(--accent-primary)' }} />
+                  <strong style={{ fontSize: 15 }}>Bộ Giải pháp Doanh nghiệp 1-Click (Solution Suites)</strong>
+                  <span className="badge badge-info" style={{ fontSize: 11 }}>Triển khai liên ứng dụng</span>
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 2 }}>
+                  Cài đặt trọn bộ các ứng dụng cốt lõi theo từng khối nghiệp vụ chỉ với 1 cú nhấp chuột (tự động bỏ qua các ứng dụng đã cài).
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))',
+                gap: 12,
+              }}
+            >
+              {suites.map((suite) => {
+                const allInstalled = suite.installedCount >= suite.totalCount && suite.totalCount > 0;
+                const isBusy = busySuiteCode === suite.suiteCode;
+                return (
+                  <div
+                    key={suite.suiteCode}
+                    style={{
+                      padding: 14,
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor: 'var(--bg-primary)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span
+                            style={{
+                              width: 36,
+                              height: 36,
+                              borderRadius: 10,
+                              backgroundColor: suite.bgColor,
+                              color: suite.color,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <ClusterIcon icon={suite.icon} fontSize={20} />
+                          </span>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: 13.5, lineHeight: 1.3 }}>{suite.name}</div>
+                            <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2 }}>{suite.targetAudience}</div>
+                          </div>
+                        </div>
+                        <span
+                          className={allInstalled ? 'badge badge-success' : 'badge badge-info'}
+                          style={{ fontSize: 11, flexShrink: 0 }}
+                        >
+                          {suite.installedCount}/{suite.totalCount} đã cài
+                        </span>
+                      </div>
+
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                        {suite.description}
+                      </div>
+
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {suite.apps.map((app) => (
+                          <span
+                            key={app.packageCode}
+                            style={{
+                              fontSize: 11,
+                              padding: '3px 8px',
+                              borderRadius: 6,
+                              backgroundColor: 'var(--bg-surface)',
+                              border: `1px solid ${app.isInstalled ? 'var(--success-text, #10b981)' : 'var(--border-subtle)'}`,
+                              color: 'var(--text-primary)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            {app.isInstalled && <CheckCircleRoundedIcon sx={{ fontSize: 12, color: '#10b981' }} />}
+                            <strong>{app.packageCode}</strong>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 6, borderTop: '1px solid var(--border-subtle)' }}>
+                      {canStudio && (
+                        <button
+                          type="button"
+                          className={allInstalled ? 'btn btn-outline btn-xs' : 'btn btn-primary btn-xs'}
+                          disabled={isBusy || allInstalled}
+                          onClick={() => void handleInstallSuite(suite)}
+                        >
+                          <CloudDownloadRoundedIcon sx={{ fontSize: 15 }} />
+                          {isBusy
+                            ? 'Đang triển khai trọn bộ...'
+                            : allInstalled
+                            ? 'Đã cài đủ trọn bộ'
+                            : `Cài trọn bộ (${suite.totalCount - suite.installedCount} App mới)`}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

@@ -1,0 +1,88 @@
+# ==============================================================================
+# SmartApps Platform 3.0 — On-Premise High Availability (Multi-Instance) Stack
+# 2x .NET 9 Core API (PostgreSQL LISTEN/NOTIFY + Advisory Locks + SKIP LOCKED)
+# + PostgreSQL 16 + MinIO (S3-compatible shared attachments/backups) + Next.js 16
+# ==============================================================================
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-smartapps}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeMeStrongPgPassword!}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-smartapps}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-smartapps_minio}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-ChangeMeMinioSecret!}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  api-1:
+    build:
+      context: ../backend-dotnet
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB:-smartapps};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-ChangeMeStrongPgPassword!}
+      Auth__JwtSecret: ${JWT_SECRET:-ReplaceWith64CharRandomEnterpriseSecretKeyForProductionHA!}
+      Storage__Provider: S3
+      Storage__S3__Endpoint: http://minio:9000
+      Storage__S3__Bucket: ${S3_BUCKET:-smartapps-files}
+      Storage__S3__AccessKey: ${S3_ACCESS_KEY:-smartapps_minio}
+      Storage__S3__SecretKey: ${S3_SECRET_KEY:-ChangeMeMinioSecret!}
+    ports:
+      - "5200:5200"
+
+  api-2:
+    build:
+      context: ../backend-dotnet
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB:-smartapps};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-ChangeMeStrongPgPassword!}
+      Auth__JwtSecret: ${JWT_SECRET:-ReplaceWith64CharRandomEnterpriseSecretKeyForProductionHA!}
+      Storage__Provider: S3
+      Storage__S3__Endpoint: http://minio:9000
+      Storage__S3__Bucket: ${S3_BUCKET:-smartapps-files}
+      Storage__S3__AccessKey: ${S3_ACCESS_KEY:-smartapps_minio}
+      Storage__S3__SecretKey: ${S3_SECRET_KEY:-ChangeMeMinioSecret!}
+    ports:
+      - "5201:5200"
+
+  web:
+    build:
+      context: ../frontend-next
+    restart: unless-stopped
+    depends_on:
+      - api-1
+      - api-2
+    environment:
+      NODE_ENV: production
+      API_URL: http://api-1:5200
+    ports:
+      - "4100:4100"
+
+volumes:
+  pg_data:
+  minio_data:

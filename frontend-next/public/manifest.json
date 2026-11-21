@@ -6,5 +6,11 @@
   "display": "standalone",
   "background_color": "#f8fafc",
   "theme_color": "#1a73e8",
-  "orientation": "any"
+  "orientation": "any",
+  "shortcuts": [
+    { "name": "Cổng Ứng dụng", "short_name": "Portal", "url": "/" },
+    { "name": "Kho Apps Online", "short_name": "Store", "url": "/store" },
+    { "name": "Trò chuyện nội bộ", "short_name": "Chat", "url": "/chat" },
+    { "name": "Thông báo", "short_name": "Alerts", "url": "/notifications" }
+  ]
 }

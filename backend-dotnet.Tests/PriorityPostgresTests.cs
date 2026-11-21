@@ -94,8 +94,17 @@ public sealed class PriorityPostgresFixture : IAsyncLifetime
         builder.Services.AddSingleton<IFileStorageAdapter, LocalFileStorageAdapter>();
         builder.Services.AddSingleton<OrgUnitService>();
         builder.Services.AddSingleton<BackupService>();
+        builder.Services.AddSingleton<AiCopilotService>();
         _app = builder.Build();
         _app.MapControllers();
+        _app.MapGet("/metrics", async (Microsoft.AspNetCore.Http.HttpRequest req, PlatformMetricsService metrics, CancellationToken ct) =>
+        {
+            var snap = await metrics.GetSnapshotAsync(ct);
+            var wantProm = string.Equals(req.Query["format"], "prometheus", StringComparison.OrdinalIgnoreCase);
+            return wantProm
+                ? Microsoft.AspNetCore.Http.Results.Text(PlatformMetricsService.ToPrometheusText(snap), "text/plain; version=0.0.4; charset=utf-8")
+                : Microsoft.AspNetCore.Http.Results.Json(snap);
+        });
         await _app.StartAsync();
         Client = new HttpClient(new HttpClientHandler { UseCookies = false }) { BaseAddress = new Uri(_app.Urls.Single()) };
 

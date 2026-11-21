@@ -42,6 +42,207 @@ public class AppStoreService(
     public IReadOnlyList<StoreAppPackageDto> GetBuiltInPackages() =>
         BuiltInStore.Value.Select(e => e.Package).ToList();
 
+    private sealed record SuiteDefinition(
+        string SuiteCode,
+        string Name,
+        string Tagline,
+        string Description,
+        string TargetAudience,
+        string Icon,
+        string Color,
+        string BgColor,
+        List<string> Highlights,
+        List<string> PackageCodes);
+
+    private static readonly IReadOnlyList<SuiteDefinition> BuiltInSuites =
+    [
+        new(
+            SuiteCode: "SUITE_SME_OPS",
+            Name: "Bộ Giải pháp Vận hành & Hành chính Số (SME Core)",
+            Tagline: "Chuẩn hóa Công văn NĐ30, Hợp đồng, Tạm ứng & Lịch họp",
+            Description: "Triển khai tức thì trục hành chính - văn phòng không giấy tờ: Quản lý công văn đi/đến & ký số nội bộ, kiểm soát hợp đồng, đề nghị thanh toán và điều phối phòng họp.",
+            TargetAudience: "Ban Giám đốc, Văn thư Hành chính, Kế toán Nội bộ",
+            Icon: "VerifiedUser",
+            Color: "#1d4ed8",
+            BgColor: "#dbeafe",
+            Highlights:
+            [
+                "Quản lý Văn bản Đi/Đến & Trình ký số chuẩn Nghị định 30/2020/NĐ-CP",
+                "Liên thông Hợp đồng - Đề nghị thanh toán - Phê duyệt đa cấp theo sơ đồ tổ chức",
+                "Sẵn sàng dữ liệu mẫu và biểu mẫu in A4 doanh nghiệp Việt Nam"
+            ],
+            PackageCodes: ["DMS_VAN_BAN", "FINANCE", "CONTRACT", "MEETING"]),
+        new(
+            SuiteCode: "SUITE_COMMERCE_360",
+            Name: "Bộ Giải pháp Kinh doanh – Mua sắm – Kho vận (O2O ERP)",
+            Tagline: "Khép kín chuỗi Cung ứng từ Cơ hội Bán hàng tới Tồn kho WMS",
+            Description: "Kết nối xuyên suốt đội ngũ Kinh doanh B2B/O2O, Đặt hàng Nhà cung cấp và Quản lý Xuất Nhập Tồn kho đa điểm theo thời gian thực.",
+            TargetAudience: "Khối Kinh doanh, Phòng Mua hàng, Quản lý Kho vận",
+            Icon: "Storefront",
+            Color: "#ea580c",
+            BgColor: "#ffedd5",
+            Highlights:
+            [
+                "Quản lý phễu CRM, Báo giá & Đơn bán hàng tích hợp VietQR",
+                "Đề nghị mua sắm, so sánh báo giá NCC và đối soát công nợ",
+                "Kiểm soát phiếu nhập/xuất kho, cảnh báo tồn tối thiểu & quét QR"
+            ],
+            PackageCodes: ["CRM", "SALES_VN", "PROCURE_VN", "WMS"]),
+        new(
+            SuiteCode: "SUITE_HR_TALENT",
+            Name: "Bộ Giải pháp Quản trị Nhân tài & Hiệu suất (HRM & OKR)",
+            Tagline: "Tuyển dụng, Đào tạo, Đánh giá KPI/OKR và Bàn giao Nhân sự",
+            Description: "Số hóa trọn vòng đời phát triển nhân sự: từ thu thập hồ sơ ứng viên, lộ trình onboarding/đào tạo, chấm điểm KPI/OKR định kỳ đến bàn giao tài sản.",
+            TargetAudience: "Phòng Nhân sự (HR), Trưởng bộ phận, Ban Giám đốc",
+            Icon: "Groups",
+            Color: "#7c3aed",
+            BgColor: "#ede9fe",
+            Highlights:
+            [
+                "Public Form tiếp nhận CV ứng viên & quy trình phỏng vấn nhiều vòng",
+                "Theo dõi kế hoạch đào tạo nội bộ, ngân sách và chứng chỉ sau khóa học",
+                "Đánh giá KPI/OKR theo quý kèm checklist bàn giao công việc & tài sản"
+            ],
+            PackageCodes: ["RECRUIT", "TRAINING", "KPI_OKR", "HANDOVER_VN"]),
+        new(
+            SuiteCode: "SUITE_TECH_SERVICES",
+            Name: "Bộ Giải pháp Dự án, CNTT & Tài sản Vận hành",
+            Tagline: "Quản trị Dự án, IT Helpdesk SLA, Mua sắm & Đội xe Công vụ",
+            Description: "Tối ưu nguồn lực kỹ thuật và tài sản doanh nghiệp: theo dõi tiến độ dự án, xử lý sự cố IT theo SLA, điều phối xe công vụ và mua sắm thiết bị.",
+            TargetAudience: "PMO, Phòng CNTT, Hành chính Thiết bị & Đội xe",
+            Icon: "Engineering",
+            Color: "#0f766e",
+            BgColor: "#ccfbf1",
+            Highlights:
+            [
+                "Quản lý tiến độ dự án, phân bổ nguồn lực và cảnh báo trễ hạn",
+                "IT Helpdesk tự động phân loại sự cố và theo dõi cam kết SLA",
+                "Điều lệnh xe công vụ, định mức nhiên liệu & mua sắm trang thiết bị"
+            ],
+            PackageCodes: ["PROJECT", "HELPDESK", "FLEET", "PURCHASE"])
+    ];
+
+    public async Task<List<StoreSolutionSuiteDto>> ListSolutionSuitesAsync()
+    {
+        var installedApps = await metadata.GetAppsAsync();
+        var installedByCode = installedApps
+            .GroupBy(a => a.Code.ToUpperInvariant())
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var builtInByCode = BuiltInStore.Value
+            .ToDictionary(e => e.Package.PackageCode, e => e.Summary, StringComparer.OrdinalIgnoreCase);
+
+        var result = new List<StoreSolutionSuiteDto>();
+        foreach (var def in BuiltInSuites)
+        {
+            var appItems = new List<StoreSolutionSuiteAppItemDto>();
+            foreach (var code in def.PackageCodes)
+            {
+                builtInByCode.TryGetValue(code, out var sum);
+                installedByCode.TryGetValue(code, out var inst);
+                appItems.Add(new StoreSolutionSuiteAppItemDto
+                {
+                    PackageCode = code,
+                    Name = sum?.Name ?? code,
+                    Icon = sum?.Icon ?? "Apps",
+                    Color = sum?.Color ?? def.Color,
+                    IsInstalled = inst != null,
+                    InstalledAppCode = inst?.Code
+                });
+            }
+
+            result.Add(new StoreSolutionSuiteDto
+            {
+                SuiteCode = def.SuiteCode,
+                Name = def.Name,
+                Tagline = def.Tagline,
+                Description = def.Description,
+                TargetAudience = def.TargetAudience,
+                Icon = def.Icon,
+                Color = def.Color,
+                BgColor = def.BgColor,
+                Highlights = def.Highlights,
+                Apps = appItems,
+                InstalledCount = appItems.Count(a => a.IsInstalled),
+                TotalCount = appItems.Count
+            });
+        }
+        return result;
+    }
+
+    public async Task<InstallSuiteResultDto> InstallSolutionSuiteAsync(
+        string suiteCode,
+        bool includeSampleData,
+        string actor)
+    {
+        var def = BuiltInSuites.FirstOrDefault(s => s.SuiteCode.Equals(suiteCode?.Trim(), StringComparison.OrdinalIgnoreCase))
+            ?? throw new KeyNotFoundException($"Không tìm thấy Bộ giải pháp '{suiteCode}'.");
+
+        var installedApps = await metadata.GetAppsAsync();
+        var installedByCode = installedApps
+            .GroupBy(a => a.Code.ToUpperInvariant())
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var builtInByCode = BuiltInStore.Value
+            .ToDictionary(e => e.Package.PackageCode, e => e.Summary, StringComparer.OrdinalIgnoreCase);
+
+        var res = new InstallSuiteResultDto
+        {
+            SuiteCode = def.SuiteCode,
+            SuiteName = def.Name
+        };
+
+        foreach (var pkgCode in def.PackageCodes)
+        {
+            var pkgName = builtInByCode.TryGetValue(pkgCode, out var s) ? s.Name : pkgCode;
+            if (installedByCode.TryGetValue(pkgCode, out var existing))
+            {
+                res.SkippedCount++;
+                res.Outcomes.Add(new InstallSuiteAppOutcomeDto
+                {
+                    PackageCode = pkgCode,
+                    Name = pkgName,
+                    Status = "ALREADY_INSTALLED",
+                    AppId = existing.Id,
+                    AppCode = existing.Code,
+                    Message = "Ứng dụng đã có sẵn trong không gian làm việc."
+                });
+                continue;
+            }
+
+            try
+            {
+                var app = await InstallStoreAppAsync(pkgCode, new InstallStoreAppRequest
+                {
+                    IncludeSampleData = includeSampleData
+                }, actor);
+                res.InstalledCount++;
+                res.Outcomes.Add(new InstallSuiteAppOutcomeDto
+                {
+                    PackageCode = pkgCode,
+                    Name = app.Name,
+                    Status = "INSTALLED",
+                    AppId = app.Id,
+                    AppCode = app.Code,
+                    Message = "Cài đặt thành công."
+                });
+            }
+            catch (Exception ex)
+            {
+                res.FailedCount++;
+                res.Outcomes.Add(new InstallSuiteAppOutcomeDto
+                {
+                    PackageCode = pkgCode,
+                    Name = pkgName,
+                    Status = "FAILED",
+                    Message = ex.Message
+                });
+            }
+        }
+
+        return res;
+    }
+
     public static string ComputeCanonicalChecksum(StoreAppPackageDto pkg)
     {
         var copy = new StoreAppPackageDto
@@ -1827,6 +2028,134 @@ public class AppStoreService(
             [
                 new("mes_lenh_san_xuat", "Lệnh Đang sản xuất", false, true, AppTemplateCatalog.SavedViewAnd("trang_thai_sx", "eq", "DANG_SX")),
                 AppTemplateCatalog.ApprovalViewPending("mes_lenh_san_xuat", "Lệnh SX Chờ duyệt")
+            ]
+        },
+        new(
+            TemplateKey: "DMS_VAN_BAN",
+            Code: "DMS_VAN_BAN",
+            Name: "Quản lý Văn bản Đi/Đến & Trình Ký số (NĐ30)",
+            Description: "Số hóa Văn thư Lưu trữ chuẩn Nghị định 30/2020/NĐ-CP: Sổ công văn đến, dự thảo tờ trình/công văn đi, phê duyệt ký số nội bộ và mẫu in thể thức hành chính A4.",
+            Department: "Văn phòng & Hành chính",
+            Category: "Kho Apps Online Đặc thù",
+            Icon: "Description",
+            Color: "#1d4ed8",
+            BgColor: "#dbeafe",
+            OrderIndex: 206,
+            Highlights:
+            [
+                "Sổ đăng ký Văn bản Đến & Văn bản Đi chuẩn thể thức Nghị định 30/2020/NĐ-CP",
+                "Luồng trình ký 2 cấp (Trưởng đơn vị -> Ban Giám đốc) tích hợp ký số nội bộ",
+                "Tự động cảnh báo công văn Hỏa tốc/Khẩn và in phôi Công văn hành chính A4"
+            ],
+            Features: ["Kho Online", "Nghị định 30", "Ký số Nội bộ", "In Công văn A4"],
+            Categories:
+            [
+                new("DM_LOAI_VB", "Loại Văn bản Hành chính", "Phân loại văn bản theo NĐ 30/2020/NĐ-CP",
+                [
+                    new("CONG_VAN", "Công văn", "#1d4ed8", 1),
+                    new("TO_TRINH", "Tờ trình", "#7c3aed", 2),
+                    new("QUYET_DINH", "Quyết định", "#dc2626", 3),
+                    new("THONG_BAO", "Thông báo", "#0284c7", 4),
+                    new("BIEN_BAN", "Biên bản", "#0f766e", 5)
+                ]),
+                new("DM_DO_KHAN", "Độ khẩn Văn bản", "Mức độ khẩn cấp xử lý công văn",
+                [
+                    new("THUONG", "Thường", "#64748b", 1),
+                    new("KHAN", "Khẩn", "#f59e0b", 2),
+                    new("HOA_TOC", "Hỏa tốc", "#dc2626", 3)
+                ]),
+                new("DM_TT_VB", "Trạng thái Xử lý Văn bản", "Tiến độ xử lý và phát hành văn bản",
+                [
+                    new("DU_THAO", "Dự thảo", "#64748b", 1),
+                    new("CHO_KY", "Chờ duyệt & Ký số", "#f59e0b", 2),
+                    new("DA_KY_SO", "Đã ký số & Ban hành", "#10b981", 3),
+                    new("THU_HOI", "Thu hồi / Hủy", "#ef4444", 4)
+                ])
+            ],
+            Modules:
+            [
+                new("VAN_THU_SO", "Sổ Văn bản Đi/Đến & Trình ký", "Description", "Tiếp nhận công văn đến, trình ký số và phát hành văn bản đi",
+                [
+                    new("dms_van_ban_di", "Văn bản Đi & Hồ sơ Trình ký số", "Quản lý dự thảo, trình duyệt, ký số và phát hành văn bản đi", "table", true, "trang_thai_duyet", false,
+                    [
+                        new() { ColumnCode = "so_ky_hieu", ColumnName = "Số & Ký hiệu", DataType = "AUTO_NUMBER", DefaultValue = "CV-{YYYY}-", IsRequired = true, IsIdentityKey = true, Width = 145, OrderIndex = 1 },
+                        new() { ColumnCode = "loai_vb", ColumnName = "Loại văn bản", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_LOAI_VB", DefaultValue = "CONG_VAN", Width = 150, OrderIndex = 2 },
+                        new() { ColumnCode = "trich_yeu", ColumnName = "Trích yếu nội dung", DataType = "STRING", IsRequired = true, Width = 260, OrderIndex = 3 },
+                        new() { ColumnCode = "do_khan", ColumnName = "Độ khẩn", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_DO_KHAN", DefaultValue = "THUONG", Width = 130, OrderIndex = 4 },
+                        new() { ColumnCode = "noi_nhan", ColumnName = "Nơi nhận / Cơ quan đích", DataType = "STRING", IsRequired = true, Width = 210, OrderIndex = 5 },
+                        new() { ColumnCode = "ngay_ban_hanh", ColumnName = "Ngày ban hành", DataType = "DATE", IsRequired = true, Width = 135, OrderIndex = 6 },
+                        new() { ColumnCode = "nguoi_ky", ColumnName = "Người thẩm quyền ký", DataType = "STRING", DefaultValue = "Tổng Giám đốc", Width = 175, OrderIndex = 7 },
+                        new() { ColumnCode = "noi_dung_chinh", ColumnName = "Nội dung chi tiết / Căn cứ", DataType = "TEXTAREA", ShowInTable = false, Width = 260, OrderIndex = 8 },
+                        new() { ColumnCode = "ly_do_hoa_toc", ColumnName = "Lý do trình Hỏa tốc", DataType = "TEXTAREA", ShowInTable = false, Width = 220, OrderIndex = 9 },
+                        new() { ColumnCode = "ma_chung_thu_so", ColumnName = "Mã Chứng thư Ký số (SHA-256)", DataType = "STRING", DefaultValue = "VNPT-CA-VERIFIED-2026", Width = 200, OrderIndex = 10 },
+                        new() { ColumnCode = "trang_thai_vb", ColumnName = "Trạng thái phát hành", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_TT_VB", DefaultValue = "CHO_KY", Width = 175, OrderIndex = 11 },
+                        new() { ColumnCode = "trang_thai_duyet", ColumnName = "Trạng thái duyệt", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_TRANG_THAI_DUYET", DefaultValue = "CHO_DUYET", Width = 155, OrderIndex = 12 }
+                    ])
+                    {
+                        FormRules =
+                        [
+                            AppTemplateCatalog.Rule("fr_dms_urgent_reason", "ly_do_hoa_toc", "visible", "do_khan", "EQUALS", "HOA_TOC", true, false),
+                            AppTemplateCatalog.Rule("fr_dms_cert_ro", "ma_chung_thu_so", "readOnly", "trang_thai_vb", "EQUALS", "DA_KY_SO", false, true)
+                        ]
+                    },
+                    new("dms_van_ban_den", "Sổ Đăng ký Văn bản Đến", "Tiếp nhận, phân luồng và theo dõi hạn xử lý công văn đến", "table", false, "trang_thai_duyet", false,
+                    [
+                        new() { ColumnCode = "so_den", ColumnName = "Số đến", DataType = "AUTO_NUMBER", DefaultValue = "VBD-{YYYY}-", IsRequired = true, IsIdentityKey = true, Width = 140, OrderIndex = 1 },
+                        new() { ColumnCode = "so_hieu_goc", ColumnName = "Số ký hiệu gốc", DataType = "STRING", IsRequired = true, Width = 155, OrderIndex = 2 },
+                        new() { ColumnCode = "co_quan_ban_hanh", ColumnName = "Cơ quan ban hành", DataType = "STRING", IsRequired = true, Width = 210, OrderIndex = 3 },
+                        new() { ColumnCode = "trich_yeu_den", ColumnName = "Trích yếu văn bản đến", DataType = "STRING", IsRequired = true, Width = 260, OrderIndex = 4 },
+                        new() { ColumnCode = "do_khan", ColumnName = "Độ khẩn", DataType = "SELECT", IsRequired = true, RefCategoryCode = "DM_DO_KHAN", DefaultValue = "THUONG", Width = 130, OrderIndex = 5 },
+                        new() { ColumnCode = "han_xu_ly", ColumnName = "Hạn xử lý", DataType = "DATE", Width = 135, OrderIndex = 6 },
+                        new() { ColumnCode = "lanh_dao_but_phe", ColumnName = "Ý kiến Bút phê Lãnh đạo", DataType = "TEXTAREA", ShowInTable = false, Width = 240, OrderIndex = 7 }
+                    ])
+                ])
+            ],
+            SampleRecords:
+            [
+                new("dms_van_ban_di", new()
+                {
+                    ["so_ky_hieu"] = "CV-2026-0001",
+                    ["loai_vb"] = "QUYET_DINH",
+                    ["trich_yeu"] = "Quyết định ban hành Quy chế Chuyển đổi số & Văn phòng Không giấy tờ 2026",
+                    ["do_khan"] = "KHAN",
+                    ["noi_nhan"] = "Toàn thể Các Khối / Phòng ban trực thuộc",
+                    ["ngay_ban_hanh"] = "2026-03-01",
+                    ["nguoi_ky"] = "Tổng Giám đốc Nguyễn Minh Quân",
+                    ["noi_dung_chinh"] = "Áp dụng chữ ký số nội bộ và phê duyệt điện tử trên toàn hệ thống SmartApps 3.0.",
+                    ["ma_chung_thu_so"] = "VNPT-CA-SHA256-9F8A21C0",
+                    ["trang_thai_vb"] = "DA_KY_SO",
+                    ["trang_thai_duyet"] = "DA_DUYET"
+                }),
+                new("dms_van_ban_den", new()
+                {
+                    ["so_den"] = "VBD-2026-0001",
+                    ["so_hieu_goc"] = "142/BTTTT-CĐSQG",
+                    ["co_quan_ban_hanh"] = "Cục Chuyển đổi số Quốc gia",
+                    ["trich_yeu_den"] = "Hướng dẫn kết nối trục liên thông văn bản và lưu trữ hồ sơ điện tử",
+                    ["do_khan"] = "KHAN",
+                    ["han_xu_ly"] = "2026-03-15",
+                    ["lanh_dao_but_phe"] = "Giao Phòng Hành chính & CNTT phối hợp triển khai trước hạn."
+                })
+            ],
+            Widgets:
+            [
+                new("dms_van_ban_di", "Tổng Văn bản Đi & Trình ký", "KPI_COUNT", null, null, null, null, 1, "#1d4ed8", 1),
+                new("dms_van_ban_di", "Phân bố Theo Loại Văn bản", "DONUT_CHART", null, "loai_vb", null, null, 2, "#7c3aed", 2)
+            ])
+        {
+            Workflows = [AppTemplateCatalog.Wf2Step("dms_van_ban_di", "Trình duyệt & Ký số Phát hành Văn bản (NĐ30)", "Chánh Văn phòng kiểm tra thể thức -> Ban Giám đốc ký số ban hành")],
+            Automations = [new("Cảnh báo Văn bản Hỏa tốc trình ký", "Thông báo khẩn toàn hệ thống khi có văn bản Hỏa tốc mới", "dms_van_ban_di", "RECORD_CREATED", "do_khan", "EQUALS", "HOA_TOC", null, null, null, "SEND_NOTIFICATION", null, null, new(), "*", "HỎA TỐC: Văn bản {{so_ky_hieu}} ({{trich_yeu}}) vừa trình ký khẩn tới {{noi_nhan}}.")],
+            PrintTemplates =
+            [
+                new("dms_van_ban_di", "Mẫu Công văn Hành chính Chuẩn Nghị định 30 (A4)", "A4", "portrait", true, true, false,
+                    AppTemplateCatalog.PrintA4("VĂN BẢN HÀNH CHÍNH & XÁC THỰC KÝ SỐ (NĐ 30/2020/NĐ-CP)", "SmartApps e-Document & Digital Signature 3.0", "so_ky_hieu",
+                    [("Loại văn bản", "loai_vb"), ("Trích yếu", "trich_yeu"), ("Độ khẩn", "do_khan"), ("Nơi nhận", "noi_nhan"), ("Ngày ban hành", "ngay_ban_hanh"), ("Người ký", "nguoi_ky"), ("Chứng thư số", "ma_chung_thu_so"), ("Trạng thái", "trang_thai_vb")],
+                    null, [], null, null, ("Người soạn thảo", "Chánh Văn phòng / Kiểm soát thể thức", "Thủ trưởng Cơ quan (Ký số & Đóng dấu)")), AppTemplateCatalog.DefaultA4Css)
+            ],
+            SavedViews =
+            [
+                new("dms_van_ban_di", "Văn bản Đã ký số Ban hành", false, true, AppTemplateCatalog.SavedViewAnd("trang_thai_vb", "eq", "DA_KY_SO")),
+                AppTemplateCatalog.ApprovalViewPending("dms_van_ban_di", "Văn bản Chờ Ký duyệt")
             ]
         }
     ];

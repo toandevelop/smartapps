@@ -313,6 +313,7 @@ public class MetadataService
         await using var r = await cmd.ExecuteReaderAsync();
         while (await r.ReadAsync())
         {
+            var uiRoot = JsonDocument.Parse(r.GetString(10)).RootElement;
             list.Add(new SysTableDto
             {
                 Id = r.GetString(0),
@@ -325,8 +326,9 @@ public class MetadataService
                 RowScope = r.IsDBNull(7) ? "ALL" : r.GetString(7),
                 OrderIndex = r.GetInt32(8),
                 IsActive = r.GetBoolean(9),
-                UiConfig = JsonDocument.Parse(r.GetString(10)).RootElement,
-                FormRules = FormRuleService.ReadRules(JsonDocument.Parse(r.GetString(10)).RootElement),
+                UiConfig = uiRoot,
+                FormRules = FormRuleService.ReadRules(uiRoot),
+                FormLayout = ReadFormLayout(uiRoot),
                 ColumnCount = Convert.ToInt32(r.GetInt64(11)),
                 RecordCount = Convert.ToInt32(r.GetInt64(12)),
                 ApprovalEnabled = r.GetBoolean(13),
@@ -392,11 +394,63 @@ public class MetadataService
         cmd.Parameters.AddWithValue("pfms", req.PublicFormMaxSubmissions.HasValue ? req.PublicFormMaxSubmissions.Value : DBNull.Value);
         cmd.Parameters.AddWithValue("ord", req.OrderIndex);
         cmd.Parameters.AddWithValue("act", req.IsActive);
-        cmd.Parameters.Add(new NpgsqlParameter("ui", NpgsqlDbType.Jsonb) { Value = req.FormRules == null ? DBNull.Value : JsonSerializer.Serialize(new { formRules = req.FormRules }) });
+        var uiPatch = new Dictionary<string, object?>();
+        if (req.FormRules != null) uiPatch["formRules"] = req.FormRules;
+        if (req.FormLayout != null) uiPatch["formLayout"] = NormalizeFormLayout(req.FormLayout);
+        cmd.Parameters.Add(new NpgsqlParameter("ui", NpgsqlDbType.Jsonb)
+        {
+            Value = uiPatch.Count == 0
+                ? DBNull.Value
+                : JsonSerializer.Serialize(uiPatch, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
+        });
         await cmd.ExecuteNonQueryAsync();
         await MarkAppDraftAsync(conn, req.AppId);
 
         return (await GetTablesAsync(req.AppId, req.ModuleId)).First(t => t.Id == id);
+    }
+
+    private static FormLayoutConfigDto? ReadFormLayout(JsonElement uiRoot)
+    {
+        if (uiRoot.ValueKind != JsonValueKind.Object) return null;
+        if (!uiRoot.TryGetProperty("formLayout", out var el) || el.ValueKind != JsonValueKind.Object) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<FormLayoutConfigDto>(el.GetRawText(), new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static FormLayoutConfigDto NormalizeFormLayout(FormLayoutConfigDto raw)
+    {
+        var mode = (raw.Mode ?? "sections").Trim().ToLowerInvariant();
+        if (mode is not ("sections" or "tabs" or "wizard")) mode = "sections";
+        var sections = (raw.Sections ?? new())
+            .Select((s, idx) => new FormLayoutSectionDto
+            {
+                Id = string.IsNullOrWhiteSpace(s.Id) ? $"sec_{idx + 1}" : s.Id.Trim(),
+                Title = string.IsNullOrWhiteSpace(s.Title) ? $"Phần {idx + 1}" : s.Title.Trim(),
+                Description = string.IsNullOrWhiteSpace(s.Description) ? null : s.Description.Trim(),
+                Columns = Math.Clamp(s.Columns <= 0 ? 2 : s.Columns, 1, 3),
+                Collapsible = s.Collapsible,
+                CalloutText = string.IsNullOrWhiteSpace(s.CalloutText) ? null : s.CalloutText.Trim(),
+                CalloutTone = s.CalloutTone is "warning" or "success" ? s.CalloutTone : "info",
+                Fields = (s.Fields ?? new())
+                    .Where(f => !string.IsNullOrWhiteSpace(f.ColumnCode))
+                    .Select(f => new FormLayoutFieldItemDto
+                    {
+                        ColumnCode = f.ColumnCode.Trim(),
+                        ColSpan = Math.Clamp(f.ColSpan <= 0 ? 1 : f.ColSpan, 1, 3)
+                    })
+                    .ToList()
+            })
+            .ToList();
+        return new FormLayoutConfigDto { Mode = mode, Sections = sections };
     }
 
     public async Task<bool> DeleteTableAsync(string id)
@@ -431,7 +485,7 @@ public class MetadataService
                    formula, default_value, COALESCE(hidden_for_roles, '[]'::jsonb)::text,
                    order_index, is_active, COALESCE(read_only_for_roles, '[]'::jsonb)::text,
                    lookup_filter_field, lookup_source_field, COALESCE(show_in_parent_form, FALSE),
-                   COALESCE(allow_quick_create, FALSE)
+                   COALESCE(allow_quick_create, FALSE), COALESCE(is_indexed, FALSE)
             FROM sys_columns
             WHERE table_id = @tableId AND is_active = TRUE
             ORDER BY order_index ASC, created_at ASC
@@ -471,7 +525,8 @@ public class MetadataService
                 LookupFilterField = r.FieldCount > 23 && !r.IsDBNull(23) ? r.GetString(23) : null,
                 LookupSourceField = r.FieldCount > 24 && !r.IsDBNull(24) ? r.GetString(24) : null,
                 ShowInParentForm = r.FieldCount > 25 && !r.IsDBNull(25) && r.GetBoolean(25),
-                AllowQuickCreate = r.FieldCount > 26 && !r.IsDBNull(26) && r.GetBoolean(26)
+                AllowQuickCreate = r.FieldCount > 26 && !r.IsDBNull(26) && r.GetBoolean(26),
+                IsIndexed = r.FieldCount > 27 && !r.IsDBNull(27) && r.GetBoolean(27)
             });
         }
         return list;
@@ -515,9 +570,9 @@ public class MetadataService
             INSERT INTO sys_columns (id, table_id, column_code, column_name, excel_header, data_type,
                 is_required, is_identity_key, show_in_table, show_in_form, width,
                 validation_regex, ref_category_code, ref_app_id, ref_table_id, ref_value_field, ref_display_field,
-                lookup_filter_field, lookup_source_field, show_in_parent_form, allow_quick_create,
+                lookup_filter_field, lookup_source_field, show_in_parent_form, allow_quick_create, is_indexed,
                 formula, default_value, hidden_for_roles, read_only_for_roles, order_index, updated_at)
-            VALUES (@id, @tbl, @code, @name, @excel, @dt, @req, @key, @sit, @sif, @w, @rx, @ref, @ra, @rt, @rv, @rd, @lff, @lsf, @sipf, @aqc, @fm, @def, @hfr::jsonb, @ror::jsonb, @ord, CURRENT_TIMESTAMP)
+            VALUES (@id, @tbl, @code, @name, @excel, @dt, @req, @key, @sit, @sif, @w, @rx, @ref, @ra, @rt, @rv, @rd, @lff, @lsf, @sipf, @aqc, @idx, @fm, @def, @hfr::jsonb, @ror::jsonb, @ord, CURRENT_TIMESTAMP)
             ON CONFLICT (id) DO UPDATE SET
                 column_code = EXCLUDED.column_code,
                 column_name = EXCLUDED.column_name,
@@ -538,6 +593,7 @@ public class MetadataService
                 lookup_source_field = EXCLUDED.lookup_source_field,
                 show_in_parent_form = EXCLUDED.show_in_parent_form,
                 allow_quick_create = EXCLUDED.allow_quick_create,
+                is_indexed = EXCLUDED.is_indexed,
                 formula = EXCLUDED.formula,
                 default_value = EXCLUDED.default_value,
                 hidden_for_roles = EXCLUDED.hidden_for_roles,
@@ -569,15 +625,59 @@ public class MetadataService
         cmd.Parameters.AddWithValue("lsf", string.IsNullOrWhiteSpace(req.LookupSourceField) ? DBNull.Value : req.LookupSourceField.Trim());
         cmd.Parameters.AddWithValue("sipf", req.ShowInParentForm);
         cmd.Parameters.AddWithValue("aqc", req.AllowQuickCreate);
+        cmd.Parameters.AddWithValue("idx", req.IsIndexed);
         cmd.Parameters.AddWithValue("fm", string.IsNullOrWhiteSpace(req.Formula) ? DBNull.Value : req.Formula.Trim());
         cmd.Parameters.AddWithValue("def", string.IsNullOrWhiteSpace(req.DefaultValue) ? DBNull.Value : req.DefaultValue.Trim());
         cmd.Parameters.AddWithValue("hfr", JsonSerializer.Serialize(req.HiddenForRoles ?? new List<string>()));
         cmd.Parameters.AddWithValue("ror", JsonSerializer.Serialize(req.ReadOnlyForRoles ?? new List<string>()));
         cmd.Parameters.AddWithValue("ord", req.OrderIndex);
         await cmd.ExecuteNonQueryAsync();
+        await EnsureColumnExpressionIndexAsync(conn, req.TableId, colCode, dtNorm, req.IsIndexed);
         await MarkAppDraftByTableAsync(conn, req.TableId);
 
         return (await GetColumnsAsync(req.TableId)).First(c => c.Id == id);
+    }
+
+    public static string BuildColumnExpressionIndexName(string tableId, string columnCode)
+    {
+        var hashBytes = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes($"{tableId.ToLowerInvariant()}:{columnCode.ToLowerInvariant()}"));
+        var hash = Convert.ToHexString(hashBytes)[..12].ToLowerInvariant();
+        var cleanCol = System.Text.RegularExpressions.Regex.Replace(columnCode.ToLowerInvariant(), @"[^a-z0-9_]", "");
+        if (cleanCol.Length > 24) cleanCol = cleanCol[..24];
+        return $"idx_dyn_{cleanCol}_{hash}";
+    }
+
+    private static async Task EnsureColumnExpressionIndexAsync(
+        NpgsqlConnection conn, string tableId, string columnCode, string dataType, bool isIndexed)
+    {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(columnCode, @"^[a-zA-Z0-9_]{1,128}$")) return;
+        if (!System.Text.RegularExpressions.Regex.IsMatch(tableId, @"^[a-zA-Z0-9_\-]{1,64}$")) return;
+        var indexName = BuildColumnExpressionIndexName(tableId, columnCode);
+
+        await using var checkCmd = new NpgsqlCommand(
+            "SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = @idx LIMIT 1", conn);
+        checkCmd.Parameters.AddWithValue("idx", indexName);
+        var exists = await checkCmd.ExecuteScalarAsync() != null;
+
+        if (!isIndexed || dataType is "SUB_TABLE" or "FILE" or "IMAGE")
+        {
+            if (!exists) return;
+            await using var drop = new NpgsqlCommand($"DROP INDEX CONCURRENTLY IF EXISTS \"{indexName}\"", conn);
+            await drop.ExecuteNonQueryAsync();
+            return;
+        }
+
+        if (exists) return;
+
+        var safeTableLiteral = tableId.Replace("'", "''");
+        var exprSql = dataType is "NUMBER" or "CURRENCY"
+            ? $"((CASE WHEN (data ->> '{columnCode}') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (data ->> '{columnCode}')::numeric END))"
+            : $"(smartapps_vn_norm(data ->> '{columnCode}'))";
+
+        var createSql = $"CREATE INDEX CONCURRENTLY IF NOT EXISTS \"{indexName}\" ON app_records {exprSql} WHERE table_id = '{safeTableLiteral}' AND deleted_at IS NULL";
+        await using var createCmd = new NpgsqlCommand(createSql, conn);
+        await createCmd.ExecuteNonQueryAsync();
     }
 
     public async Task<bool> DeleteColumnAsync(string id)

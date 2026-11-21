@@ -8,8 +8,10 @@ import SaveRoundedIcon from '@mui/icons-material/SaveRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded';
 import ShareRoundedIcon from '@mui/icons-material/ShareRounded';
+import DnsRoundedIcon from '@mui/icons-material/DnsRounded';
+import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import { ConfirmDialog } from '@/app/components/ui';
-import { AttachmentInfo, StorageStats, SysApp } from '@/lib/types';
+import { AttachmentInfo, ClusterStatusResponse, StorageStats, SysApp } from '@/lib/types';
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B';
@@ -27,6 +29,7 @@ export default function StorageGovernancePanel({
   toast: (message: string, severity?: 'success' | 'error' | 'info') => void;
 }) {
   const [stats, setStats] = useState<StorageStats | null>(null);
+  const [clusterStatus, setClusterStatus] = useState<ClusterStatusResponse | null>(null);
   const [files, setFiles] = useState<AttachmentInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterAppId, setFilterAppId] = useState('');
@@ -48,12 +51,14 @@ export default function StorageGovernancePanel({
     if (searchQ.trim()) qs.set('q', searchQ.trim());
     qs.set('limit', '100');
     try {
-      const [stRes, listRes] = await Promise.all([
+      const [stRes, listRes, clRes] = await Promise.all([
         fetch('/api/attachments/stats', { credentials: 'include' }).then((r) => r.json()),
         fetch(`/api/attachments/list?${qs.toString()}`, { credentials: 'include' }).then((r) => r.json()),
+        fetch('/api/settings/cluster-status', { credentials: 'include' }).then((r) => r.json()).catch(() => ({ success: false })),
       ]);
       if (stRes.success && stRes.data) setStats(stRes.data);
       if (listRes.success && Array.isArray(listRes.data)) setFiles(listRes.data);
+      if (clRes.success && clRes.data) setClusterStatus(clRes.data);
     } finally {
       setLoading(false);
     }
@@ -68,11 +73,13 @@ export default function StorageGovernancePanel({
     Promise.all([
       fetch('/api/attachments/stats', { credentials: 'include' }).then((r) => r.json()),
       fetch(`/api/attachments/list?${qs.toString()}`, { credentials: 'include' }).then((r) => r.json()),
+      fetch('/api/settings/cluster-status', { credentials: 'include' }).then((r) => r.json()).catch(() => ({ success: false })),
     ])
-      .then(([stRes, listRes]) => {
+      .then(([stRes, listRes, clRes]) => {
         if (!active) return;
         if (stRes.success && stRes.data) setStats(stRes.data);
         if (listRes.success && Array.isArray(listRes.data)) setFiles(listRes.data);
+        if (clRes.success && clRes.data) setClusterStatus(clRes.data);
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -165,6 +172,81 @@ export default function StorageGovernancePanel({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Multi-Instance HA Cluster Health */}
+      {clusterStatus && (
+        <div className="card" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <DnsRoundedIcon sx={{ fontSize: 20, color: 'var(--accent-primary)' }} />
+                <strong style={{ fontSize: 15 }}>Trạng thái Cụm HA (Multi-Instance Cluster Health)</strong>
+                <span className="badge badge-success" style={{ fontSize: 11 }}>
+                  {clusterStatus.nodes.length} API Node hoạt động
+                </span>
+              </div>
+              <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 2 }}>
+                Đồng bộ thời gian thực qua PostgreSQL LISTEN/NOTIFY, Advisory Locks cho Scheduled Jobs và SKIP LOCKED cho Outbox.
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 12 }}>
+              <span>
+                Độ trễ DB: <strong>{clusterStatus.metrics.dbProbeLatencyMs} ms</strong>
+              </span>
+              <span>
+                SSE Streams: <strong>{clusterStatus.metrics.activeSseSubscribers}</strong>
+              </span>
+              <span>
+                Outbox Pending: <strong>{clusterStatus.metrics.outboxPending}</strong>
+              </span>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+              gap: 10,
+            }}
+          >
+            {clusterStatus.nodes.map((node) => (
+              <div
+                key={node.instanceId}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  border: `1px solid ${node.isCurrent ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
+                  backgroundColor: 'var(--bg-primary)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                  fontSize: 12,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <strong>
+                    Node #{node.instanceId} {node.isCurrent ? '(Hiện tại)' : ''}
+                  </strong>
+                  <span className="badge badge-info" style={{ fontSize: 10.5 }}>
+                    v{node.appVersion}
+                  </span>
+                </div>
+                <div style={{ color: 'var(--text-muted)' }}>
+                  Host: {node.hostName} • PID {node.processId}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#10b981', fontWeight: 600 }}>
+                    <CheckCircleRoundedIcon sx={{ fontSize: 13 }} />
+                    {node.listenerConnected ? 'LISTEN/NOTIFY Online' : 'Poller Active'}
+                  </span>
+                  <span>• SSE: {node.activeSse}</span>
+                  <span>• Users: {node.onlineUsers.length}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Overview + Orphan Cleanup */}
       <div className="card" style={{ padding: 18, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>

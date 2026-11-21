@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS sys_columns (
     ref_display_field VARCHAR(128),
     lookup_filter_field VARCHAR(128),
     lookup_source_field VARCHAR(128),
+    is_indexed BOOLEAN NOT NULL DEFAULT FALSE,
     formula VARCHAR(512),
     default_value TEXT,
     hidden_for_roles JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -258,6 +259,7 @@ CREATE TABLE IF NOT EXISTS app_automations (
     notify_recipient VARCHAR(128),
     notify_template TEXT,
     field_mappings JSONB NOT NULL DEFAULT '{}'::jsonb,
+    chain_steps JSONB NOT NULL DEFAULT '[]'::jsonb,
     is_active BOOLEAN DEFAULT TRUE,
     run_count INT DEFAULT 0,
     last_run_at TIMESTAMPTZ,
@@ -312,6 +314,8 @@ CREATE TABLE IF NOT EXISTS sys_user_settings (
     theme_mode VARCHAR(16) DEFAULT 'light',
     accent_color VARCHAR(32) DEFAULT '#1a73e8',
     compact_mode BOOLEAN DEFAULT FALSE,
+    density_mode VARCHAR(20) NOT NULL DEFAULT 'comfortable',
+    pinned_apps JSONB NOT NULL DEFAULT '[]'::jsonb,
     language VARCHAR(16) DEFAULT 'vi',
     notify_in_app BOOLEAN DEFAULT TRUE,
     notify_sound BOOLEAN DEFAULT TRUE,
@@ -797,3 +801,31 @@ CREATE TABLE IF NOT EXISTS sys_store_installs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_store_installs_pkg ON sys_store_installs(package_code, created_at DESC);
+
+CREATE OR REPLACE FUNCTION smartapps_vn_norm(input_text TEXT)
+RETURNS TEXT
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT LOWER(
+        TRANSLATE(
+            COALESCE(input_text, ''),
+            'áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ',
+            'aaaaaaaaaaaaaaaaadeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyAAAAAAAAAAAAAAAAADEEEEEEEEEEEIIIIIOOOOOOOOOOOOOOOOOUUUUUUUUUUUYYYYY'
+        )
+    );
+$$;
+
+CREATE TABLE IF NOT EXISTS sys_cluster_nodes (
+    instance_id VARCHAR(64) PRIMARY KEY,
+    host_name VARCHAR(255) NOT NULL DEFAULT '',
+    process_id INT NOT NULL DEFAULT 0,
+    app_version VARCHAR(32) NOT NULL DEFAULT '3.0.0',
+    active_sse INT NOT NULL DEFAULT 0,
+    listener_connected BOOLEAN NOT NULL DEFAULT FALSE,
+    online_users JSONB NOT NULL DEFAULT '[]'::jsonb,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_cluster_nodes_hb ON sys_cluster_nodes(last_heartbeat_at DESC);

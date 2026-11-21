@@ -1,9 +1,10 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Roboto, Plus_Jakarta_Sans, Inter, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 import ThemeRegistry from './components/ThemeRegistry';
 import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
+import MobileBottomNav from './components/MobileBottomNav';
 
 const roboto = Roboto({
   subsets: ['latin', 'vietnamese'],
@@ -33,6 +34,10 @@ const jetbrainsMono = JetBrains_Mono({
   display: 'swap',
 });
 
+export const viewport: Viewport = {
+  colorScheme: 'light dark',
+};
+
 export const metadata: Metadata = {
   title: 'SmartApps Platform - Hệ thống Đa ứng dụng Dữ liệu Động Doanh nghiệp',
   description: 'Xây dựng và vận hành nhiều ứng dụng doanh nghiệp trên cùng 1 hệ thống với giao diện & bảng động (Next.js + C# .NET 9 + Rust + PostgreSQL JSONB)',
@@ -59,6 +64,7 @@ export default function RootLayout({
               <Navbar />
               {children}
             </main>
+            <MobileBottomNav />
           </div>
         </ThemeRegistry>
       </body>

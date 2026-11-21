@@ -12,17 +12,23 @@ public class SettingsController : ControllerBase
     private readonly AuthService _auth;
     private readonly ExternalNotificationService _external;
     private readonly AiService _ai;
+    private readonly RealtimeEventService _realtime;
+    private readonly PlatformMetricsService _metrics;
 
     public SettingsController(
         SettingsService settings,
         AuthService auth,
         ExternalNotificationService external,
-        AiService ai)
+        AiService ai,
+        RealtimeEventService realtime,
+        PlatformMetricsService metrics)
     {
         _settings = settings;
         _auth = auth;
         _external = external;
         _ai = ai;
+        _realtime = realtime;
+        _metrics = metrics;
     }
 
     [HttpGet("me")]
@@ -235,5 +241,30 @@ public class SettingsController : ControllerBase
 
         var logs = await _ai.ListLogsAsync(limit);
         return Ok(new { success = true, data = logs });
+    }
+
+    [HttpGet("cluster-status")]
+    public async Task<IActionResult> GetClusterStatus(CancellationToken ct)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false, message = "Chưa đăng nhập." });
+        if (!AuthService.HasPermission(user, "studio.manage") && !AuthService.IsAdminUser(user))
+            return StatusCode(403, new { success = false, message = "Chỉ Quản trị viên mới được xem trạng thái cụm HA." });
+
+        await _realtime.UpsertClusterHeartbeatAsync(ct);
+        var nodes = await _realtime.GetClusterNodesAsync(ct);
+        var metrics = await _metrics.GetSnapshotAsync(ct);
+        return Ok(new
+        {
+            success = true,
+            data = new
+            {
+                currentInstanceId = _realtime.InstanceId,
+                listenerConnected = _realtime.IsListenerConnected,
+                lastListenerConnectedAt = _realtime.LastListenerConnectedAt,
+                nodes,
+                metrics
+            }
+        });
     }
 }

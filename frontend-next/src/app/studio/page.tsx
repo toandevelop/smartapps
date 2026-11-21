@@ -114,7 +114,7 @@ function AppBuilderStudioContent() {
         : 'columns'
       : 'columns';
   const defaultPlatformTab: PlatformSubTab =
-    canManageRoles ? 'roles' : canManageUsers ? 'users' : canViewAudit ? 'audit' : 'roles';
+    canStudio ? 'categories' : canManageRoles ? 'roles' : canManageUsers ? 'users' : canViewAudit ? 'audit' : 'categories';
 
   const [workspaceOverride, setWorkspaceOverride] = useState<StudioWorkspace | null>(null);
   const [builderTabOverride, setBuilderTabOverride] = useState<BuilderSubTab | null>(null);
@@ -634,6 +634,7 @@ function AppBuilderStudioContent() {
           publicFormExpiresAt: editingTable.publicFormExpiresAt || '',
           publicFormMaxSubmissions: editingTable.publicFormMaxSubmissions ?? '',
           formRules: editingTable.formRules || [],
+          formLayout: editingTable.formLayout ?? null,
           orderIndex: editingTable.orderIndex,
         }
       : {
@@ -677,6 +678,9 @@ function AppBuilderStudioContent() {
           refTableId: editingColumn.refTableId || '',
           refValueField: editingColumn.refValueField || '',
           refDisplayField: editingColumn.refDisplayField || '',
+          lookupFilterField: editingColumn.lookupFilterField || '',
+          lookupSourceField: editingColumn.lookupSourceField || '',
+          isIndexed: Boolean(editingColumn.isIndexed),
           formula: editingColumn.formula || '',
           defaultValue: editingColumn.defaultValue || '',
           hiddenForRoles: editingColumn.hiddenForRoles || [],
@@ -936,7 +940,7 @@ function AppBuilderStudioContent() {
                 onClick={() => setWorkspace('platform')}
               >
                 <ShieldRoundedIcon sx={{ fontSize: 16 }} />
-                Tài nguyên Dùng chung &amp; Phân quyền
+                Danh mục Dùng chung ({categories.length})
               </button>
             )}
           </div>
@@ -946,9 +950,11 @@ function AppBuilderStudioContent() {
             <span className="badge" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
               {allTables.length} Bảng động
             </span>
-            <span className="badge" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
-              {roles.length} Vai trò • {users.length} Users
-            </span>
+            {(canManageUsers || canManageRoles || canViewAudit) && (
+              <Link href="/admin" className="btn btn-outline btn-xs" title="Mở Trung tâm Quản trị Người dùng, Vai trò, Quy trình & Kiểm toán">
+                Quản trị &amp; Phân quyền ({users.length} Users • {roles.length} Roles) ↗
+              </Link>
+            )}
           </div>
         </div>
 
@@ -2100,6 +2106,7 @@ function AppBuilderStudioContent() {
           tableName={selectedTable.displayName}
           columns={columns}
           formRules={selectedTable.formRules}
+          formLayout={selectedTable.formLayout}
           saving={saving}
           onClose={() => setShowRecordModal(false)}
           onSave={saveRecord}

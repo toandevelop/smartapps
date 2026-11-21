@@ -39,7 +39,7 @@ public class DynamicComputeService
 {
     private static readonly HashSet<string> FormulaKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "IF", "ROUND", "DATEDIF", "SUM", "COUNT", "TODAY", "TRUE", "FALSE", "AND", "OR", "NOT"
+        "IF", "ROUND", "DATEDIF", "WORKDAYS", "READ_MONEY_VN", "SUM", "COUNT", "TODAY", "TRUE", "FALSE", "AND", "OR", "NOT"
     };
 
     /// <summary>Extracts column identifiers referenced by a formula expression (excluding string literals and function names).</summary>
@@ -459,7 +459,109 @@ public class DynamicComputeService
                     return (int)Math.Round((d2.Value - d1.Value).TotalDays);
             }
         }
+        if (trimmed.StartsWith("WORKDAYS(", StringComparison.OrdinalIgnoreCase) && trimmed.EndsWith(")"))
+        {
+            var args = SplitTopLevelArgs(trimmed[9..^1]);
+            if (args.Count == 2)
+            {
+                var d1 = ResolveDate(args[0].Trim(), data);
+                var d2 = ResolveDate(args[1].Trim(), data);
+                if (d1.HasValue && d2.HasValue)
+                    return CountBusinessDays(d1.Value.Date, d2.Value.Date);
+            }
+        }
+        if (trimmed.StartsWith("READ_MONEY_VN(", StringComparison.OrdinalIgnoreCase) && trimmed.EndsWith(")"))
+        {
+            var inner = trimmed[14..^1];
+            var num = EvaluateExpression(inner, data);
+            if (num.HasValue)
+                return NumberToVietnameseCurrencyWords(num.Value);
+        }
         return EvaluateExpression(trimmed, data);
+    }
+
+    public static int CountBusinessDays(DateTime startDate, DateTime endDate, IReadOnlySet<DateOnly>? holidays = null)
+    {
+        var sign = 1;
+        var a = startDate.Date;
+        var b = endDate.Date;
+        if (b < a)
+        {
+            sign = -1;
+            (a, b) = (b, a);
+        }
+        var count = 0;
+        for (var cur = a; cur <= b; cur = cur.AddDays(1))
+        {
+            if (cur.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) continue;
+            if (holidays != null && holidays.Contains(DateOnly.FromDateTime(cur))) continue;
+            count++;
+        }
+        return count * sign;
+    }
+
+    public static string NumberToVietnameseCurrencyWords(decimal rawAmount)
+    {
+        var amount = (long)Math.Round(rawAmount, MidpointRounding.AwayFromZero);
+        if (amount == 0) return "Không đồng";
+        var negative = amount < 0;
+        var n = Math.Abs(amount);
+
+        string[] digits = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"];
+        string[] units = ["", " nghìn", " triệu", " tỷ", " nghìn tỷ", " triệu tỷ"];
+
+        string ReadTriple(int triple, bool fullPrefix)
+        {
+            var h = triple / 100;
+            var t = (triple % 100) / 10;
+            var u = triple % 10;
+            var parts = new List<string>();
+            if (h > 0 || fullPrefix)
+            {
+                parts.Add($"{digits[h]} trăm");
+                if (t == 0 && u > 0) parts.Add("lẻ");
+            }
+            if (t > 1)
+            {
+                parts.Add($"{digits[t]} mươi");
+                if (u == 1) parts.Add("mốt");
+                else if (u == 5) parts.Add("lăm");
+                else if (u > 0) parts.Add(digits[u]);
+            }
+            else if (t == 1)
+            {
+                parts.Add("mười");
+                if (u == 5) parts.Add("lăm");
+                else if (u > 0) parts.Add(digits[u]);
+            }
+            else if (u > 0)
+            {
+                parts.Add(digits[u]);
+            }
+            return string.Join(" ", parts);
+        }
+
+        var groups = new List<int>();
+        while (n > 0)
+        {
+            groups.Add((int)(n % 1000));
+            n /= 1000;
+        }
+
+        var words = new List<string>();
+        for (var i = groups.Count - 1; i >= 0; i--)
+        {
+            var g = groups[i];
+            if (g == 0) continue;
+            var chunk = ReadTriple(g, fullPrefix: i < groups.Count - 1);
+            var suffix = i < units.Length ? units[i] : "";
+            words.Add($"{chunk}{suffix}");
+        }
+
+        var sentence = string.Join(" ", words).Trim();
+        if (string.IsNullOrEmpty(sentence)) return "Không đồng";
+        sentence = char.ToUpper(sentence[0]) + sentence[1..];
+        return negative ? $"Âm {char.ToLower(sentence[0])}{sentence[1..]} đồng" : $"{sentence} đồng chẵn";
     }
 
     private static string ResolveSubTableAggregates(string expr, Dictionary<string, object?> data)

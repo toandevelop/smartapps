@@ -1137,6 +1137,162 @@ public class RecordsController : ControllerBase
         }
     }
 
+    [HttpPost("batch-patch")]
+    public async Task<IActionResult> BatchPatch([FromBody] BatchPatchRecordsRequest req)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+
+        if (string.IsNullOrWhiteSpace(req.TableId) || string.IsNullOrWhiteSpace(req.ColumnCode))
+            return BadRequest(new { success = false, message = "TableId và ColumnCode là bắt buộc." });
+
+        var ids = (req.RecordIds ?? new List<string>())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (ids.Count == 0)
+            return BadRequest(new { success = false, message = "Vui lòng chọn ít nhất một bản ghi." });
+        if (ids.Count > 100)
+            return BadRequest(new { success = false, message = "Chỉ hỗ trợ sửa hàng loạt tối đa 100 bản ghi mỗi lượt." });
+
+        var tables = await _metadata.GetTablesAsync(null, null);
+        var tbl = tables.FirstOrDefault(t => t.Id == req.TableId);
+        if (tbl == null)
+            return NotFound(new { success = false, message = "Không tìm thấy bảng dữ liệu." });
+
+        var appCode = await ResolveAppCodeAsync(tbl.AppId, tbl.Id);
+        if (!AuthService.CanAccessTable(user, appCode, tbl.Id, "edit"))
+            return StatusCode(403, new { success = false, message = "Bạn không có quyền chỉnh sửa dữ liệu trên bảng này." });
+
+        var cols = await _metadata.GetColumnsAsync(tbl.Id);
+        var targetCol = cols.FirstOrDefault(c => c.ColumnCode.Equals(req.ColumnCode.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (targetCol == null)
+            return BadRequest(new { success = false, message = $"Không tìm thấy cột '{req.ColumnCode}'." });
+
+        var dataType = (targetCol.DataType ?? "STRING").ToUpperInvariant();
+        if (!string.IsNullOrWhiteSpace(targetCol.Formula) || dataType is "AUTO_NUMBER" or "SUB_TABLE" or "FILE" or "IMAGE")
+            return BadRequest(new { success = false, message = $"Không thể sửa hàng loạt cho cột tự tính hoặc cột đặc biệt '{targetCol.ColumnName}'." });
+
+        var isAdmin = AuthService.IsAdminUser(user);
+        if (!isAdmin)
+        {
+            var userRoles = user.RoleCodes.Count > 0 ? user.RoleCodes : new List<string> { user.RoleCode };
+            if (targetCol.ReadOnlyForRoles.Any(rr => userRoles.Contains(rr, StringComparer.OrdinalIgnoreCase))
+                || targetCol.HiddenForRoles.Any(hr => userRoles.Contains(hr, StringComparer.OrdinalIgnoreCase)))
+            {
+                return StatusCode(403, new { success = false, message = $"Bạn không có quyền chỉnh sửa trường '{targetCol.ColumnName}'." });
+            }
+        }
+
+        var rowScope = AuthService.ResolveRowScope(user, appCode, tbl.Id, tbl.RowScope, false);
+        var result = new BatchOperationResultDto { Requested = ids.Count };
+
+        foreach (var id in ids)
+        {
+            var loc = await _records.GetRecordLocationAsync(id);
+            if (loc == null || !string.Equals(loc.Value.TableId, tbl.Id, StringComparison.Ordinal))
+            {
+                result.Errors.Add(new BatchOperationItemError { RecordId = id, Message = "Không tìm thấy bản ghi thuộc bảng này." });
+                continue;
+            }
+            if (rowScope != "ALL" && !await _records.IsRecordOwnedByUserAsync(id, user, rowScope))
+            {
+                result.Errors.Add(new BatchOperationItemError
+                {
+                    RecordId = id,
+                    Message = rowScope == "DEPARTMENT"
+                        ? "Bản ghi nằm ngoài phạm vi phòng ban của bạn."
+                        : "Bạn chỉ được chỉnh sửa bản ghi của chính mình."
+                });
+                continue;
+            }
+
+            try
+            {
+                var (updated, _) = await _records.PatchCellAsync(
+                    id,
+                    new PatchCellRequest { Field = targetCol.ColumnCode, Value = req.Value },
+                    user.Username,
+                    isAdmin);
+                if (updated == null)
+                {
+                    result.Errors.Add(new BatchOperationItemError { RecordId = id, Message = "Không tìm thấy bản ghi." });
+                }
+                else
+                {
+                    result.SucceededIds.Add(id);
+                }
+            }
+            catch (FormRuleValidationException ex)
+            {
+                result.Errors.Add(new BatchOperationItemError { RecordId = id, Message = ex.Message });
+            }
+            catch (DuplicateIdentityKeyException ex)
+            {
+                result.Errors.Add(new BatchOperationItemError { RecordId = id, Message = ex.Message });
+            }
+            catch (RecordConflictException ex)
+            {
+                result.Errors.Add(new BatchOperationItemError { RecordId = id, Message = ex.Message });
+            }
+            catch (RecordLockedException ex)
+            {
+                result.Errors.Add(new BatchOperationItemError { RecordId = id, Message = ex.Message });
+            }
+        }
+
+        result.Succeeded = result.SucceededIds.Count;
+        result.Failed = result.Errors.Count;
+        return Ok(new { success = result.Succeeded > 0 || result.Failed == 0, data = result });
+    }
+
+    [HttpPost("batch-approve")]
+    public async Task<IActionResult> BatchApprove([FromBody] BatchApproveRecordsRequest req)
+    {
+        var user = await _auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false });
+
+        var ids = (req.RecordIds ?? new List<string>())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (ids.Count == 0)
+            return BadRequest(new { success = false, message = "Vui lòng chọn ít nhất một hồ sơ." });
+        if (ids.Count > 50)
+            return BadRequest(new { success = false, message = "Chỉ hỗ trợ phê duyệt hàng loạt tối đa 50 hồ sơ mỗi lượt." });
+
+        var result = new BatchOperationResultDto { Requested = ids.Count };
+        foreach (var id in ids)
+        {
+            try
+            {
+                var (updated, err) = await _records.ProcessApprovalAsync(id, user, req.Approve, req.Reason, null, null, null);
+                if (err != null || updated == null)
+                {
+                    result.Errors.Add(new BatchOperationItemError
+                    {
+                        RecordId = id,
+                        Message = err ?? "Không tìm thấy hồ sơ hoặc không thể xử lý phê duyệt."
+                    });
+                }
+                else
+                {
+                    result.SucceededIds.Add(id);
+                }
+            }
+            catch (RecordConflictException ex)
+            {
+                result.Errors.Add(new BatchOperationItemError { RecordId = id, Message = ex.Message });
+            }
+        }
+
+        result.Succeeded = result.SucceededIds.Count;
+        result.Failed = result.Errors.Count;
+        return Ok(new { success = result.Succeeded > 0 || result.Failed == 0, data = result });
+    }
+
     [HttpPost("batch-delete")]
     public async Task<IActionResult> BatchDelete([FromBody] BatchDeleteRequest req)
     {

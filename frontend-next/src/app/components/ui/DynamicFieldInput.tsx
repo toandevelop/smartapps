@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import QrCodeScannerRoundedIcon from '@mui/icons-material/QrCodeScannerRounded';
 import SearchableSelect, { SearchableSelectOption } from './SearchableSelect';
+import QrScannerModal from './QrScannerModal';
 import BooleanSwitch, { normalizeBoolVal, resolveDefaultBoolVal } from './BooleanSwitch';
 import { createCategoryItemQuick, fetchCategoryItems } from '@/lib/category-service';
 import { fetchLookupOptions, searchLookupOptions } from '@/lib/lookup-service';
@@ -49,6 +51,7 @@ export default function DynamicFieldInput({
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [localImagePreview, setLocalImagePreview] = useState<string>('');
+  const [qrOpen, setQrOpen] = useState(false);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const lookupFilterVal =
@@ -797,17 +800,41 @@ export default function DynamicFieldInput({
   }
 
   const inputType = dt === 'EMAIL' ? 'email' : dt === 'TEL' ? 'tel' : 'text';
+  const showQrBtn = !disabled && inputType === 'text' && !column.formula;
   return (
-    <input
-      id={inputId}
-      type={inputType}
-      className="form-input"
-      value={value !== null && value !== undefined ? String(value) : ''}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder || `Nhập ${cleanName.toLowerCase()}...`}
-      disabled={disabled}
-      required={required}
-    />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+      <input
+        id={inputId}
+        type={inputType}
+        className="form-input"
+        style={{ flex: 1, minWidth: 0 }}
+        value={value !== null && value !== undefined ? String(value) : ''}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder || `Nhập ${cleanName.toLowerCase()}...`}
+        disabled={disabled}
+        required={required}
+      />
+      {showQrBtn && (
+        <>
+          <button
+            type="button"
+            className="btn btn-outline btn-xs"
+            style={{ height: size === 'sm' ? 30 : 36, padding: '0 8px', flexShrink: 0 }}
+            onClick={() => setQrOpen(true)}
+            title={`Quét mã QR/Barcode vào trường ${cleanName}`}
+            aria-label={`Quét mã QR vào ${cleanName}`}
+          >
+            <QrCodeScannerRoundedIcon sx={{ fontSize: 16 }} />
+          </button>
+          <QrScannerModal
+            open={qrOpen}
+            title={`Quét mã vào: ${cleanName}`}
+            onClose={() => setQrOpen(false)}
+            onDetected={(raw) => onChange(raw)}
+          />
+        </>
+      )}
+    </div>
   );
 }
 

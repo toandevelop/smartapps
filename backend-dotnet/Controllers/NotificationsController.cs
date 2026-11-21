@@ -164,7 +164,7 @@ public class NotificationsController : ControllerBase
         if (user == null) return Unauthorized(new { success = false });
 
         _realtime.TouchPresence(user.Username);
-        var onlineSet = _realtime.GetOnlineUsernames();
+        var onlineSet = await _realtime.GetClusterOnlineUsernamesAsync();
         var allUsers = await _auth.ListUsersAsync();
         var items = allUsers
             .Where(u => onlineSet.Contains(u.Username))

@@ -295,6 +295,60 @@ public static class DatabaseMigrationRunner
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_store_installs_pkg ON sys_store_installs(package_code, created_at DESC);
+            """),
+        new(
+            "0015",
+            "0015_ui_ux_v3_preferences",
+            """
+            ALTER TABLE sys_user_settings
+                ADD COLUMN IF NOT EXISTS density_mode VARCHAR(20) NOT NULL DEFAULT 'comfortable';
+            ALTER TABLE sys_user_settings
+                ADD COLUMN IF NOT EXISTS pinned_apps JSONB NOT NULL DEFAULT '[]'::jsonb;
+            UPDATE sys_user_settings
+                SET density_mode = 'compact'
+                WHERE compact_mode = TRUE AND density_mode = 'comfortable';
+            """),
+        new(
+            "0016",
+            "0016_engine_v3_search_and_indexes",
+            """
+            CREATE OR REPLACE FUNCTION smartapps_vn_norm(input_text TEXT)
+            RETURNS TEXT
+            LANGUAGE SQL
+            IMMUTABLE
+            PARALLEL SAFE
+            AS $$
+                SELECT LOWER(
+                    TRANSLATE(
+                        COALESCE(input_text, ''),
+                        'áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ',
+                        'aaaaaaaaaaaaaaaaadeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyAAAAAAAAAAAAAAAAADEEEEEEEEEEEIIIIIOOOOOOOOOOOOOOOOOUUUUUUUUUUUYYYYY'
+                    )
+                );
+            $$;
+
+            ALTER TABLE sys_columns
+                ADD COLUMN IF NOT EXISTS is_indexed BOOLEAN NOT NULL DEFAULT FALSE;
+
+            ALTER TABLE app_automations
+                ADD COLUMN IF NOT EXISTS chain_steps JSONB NOT NULL DEFAULT '[]'::jsonb;
+            """),
+        new(
+            "0017",
+            "0017_ha_cluster_nodes",
+            """
+            CREATE TABLE IF NOT EXISTS sys_cluster_nodes (
+                instance_id VARCHAR(64) PRIMARY KEY,
+                host_name VARCHAR(255) NOT NULL DEFAULT '',
+                process_id INT NOT NULL DEFAULT 0,
+                app_version VARCHAR(32) NOT NULL DEFAULT '3.0.0',
+                active_sse INT NOT NULL DEFAULT 0,
+                listener_connected BOOLEAN NOT NULL DEFAULT FALSE,
+                online_users JSONB NOT NULL DEFAULT '[]'::jsonb,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_cluster_nodes_hb ON sys_cluster_nodes(last_heartbeat_at DESC);
             """)
     ];
 

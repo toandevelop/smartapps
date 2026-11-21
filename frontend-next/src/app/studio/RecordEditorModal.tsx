@@ -3,12 +3,12 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded';
-import { DynamicFieldInput } from '@/app/components/ui';
+import { DynamicFieldInput, FormLayoutRenderer } from '@/app/components/ui';
 import AiOcrButton from '@/app/components/ui/AiOcrButton';
 import RelatedChildTabPanel, { ChildDraftRow } from '@/app/components/ui/RelatedChildTabPanel';
 import { useAuth } from '@/lib/auth-context';
 import { batchFetchLookups } from '@/lib/lookup-service';
-import type { AppRecord, ChildRelationMutation, FormRule, RelatedTableGroup, SysColumn } from '@/lib/types';
+import type { AppRecord, ChildRelationMutation, FormLayoutConfig, FormRule, RelatedTableGroup, SysColumn } from '@/lib/types';
 import {
   evaluateFormRules,
   prepareFormSubmission,
@@ -29,6 +29,7 @@ export function RecordEditorModal(props: {
   tableName: string;
   columns: SysColumn[];
   formRules?: FormRule[];
+  formLayout?: FormLayoutConfig | null;
   defaultOverrides?: Record<string, unknown>;
   lockedFields?: string[];
   saving: boolean;
@@ -45,6 +46,7 @@ export function RecordEditorModal(props: {
       tableName={props.tableName}
       columns={props.columns}
       formRules={props.formRules}
+      formLayout={props.formLayout}
       defaultOverrides={props.defaultOverrides}
       lockedFields={props.lockedFields}
       saving={props.saving}
@@ -62,6 +64,7 @@ function RecordEditorModalBody({
   columns,
   defaultOverrides = EMPTY_FORM_DEFAULTS,
   formRules = EMPTY_FORM_RULES,
+  formLayout,
   lockedFields = [],
   saving,
   onClose,
@@ -73,6 +76,7 @@ function RecordEditorModalBody({
   tableName: string;
   columns: SysColumn[];
   formRules?: FormRule[];
+  formLayout?: FormLayoutConfig | null;
   defaultOverrides?: Record<string, unknown>;
   lockedFields?: string[];
   saving: boolean;
@@ -388,7 +392,18 @@ function RecordEditorModalBody({
                     value={formData[col.columnCode]}
                     formData={formData}
                     disabled={isDisabled}
-                    onChange={(val) => updateFormData((prev) => ({ ...prev, [col.columnCode]: val }))}
+                    onChange={(val) =>
+                      updateFormData((prev) => {
+                        const next = { ...prev, [col.columnCode]: val };
+                        // Auto-clear dependent child lookup fields when parent source field changes
+                        for (const dep of columns) {
+                          if (dep.lookupSourceField === col.columnCode && dep.columnCode !== col.columnCode) {
+                            next[dep.columnCode] = '';
+                          }
+                        }
+                        return next;
+                      })
+                    }
                     onSelectDetail={(opt) => {
                       if (!opt.data) return;
                       updateFormData((prev) => {
@@ -412,6 +427,27 @@ function RecordEditorModalBody({
                 </div>
               );
             };
+
+            if (formLayout && formLayout.sections && formLayout.sections.length > 0) {
+              const visibleSet = new Set(visibleCols.map((c) => c.columnCode));
+              return (
+                <FormLayoutRenderer
+                  layout={formLayout}
+                  columns={columns}
+                  isColumnVisible={(c) => visibleSet.has(c.columnCode)}
+                  renderField={(c) => renderField(c)}
+                  onValidateStep={(stepCols) => {
+                    const stepErrs = requiredFormErrors(stepCols, formRules, formData, oldStates);
+                    if (stepErrs.length > 0) {
+                      setFieldErrors(stepErrs);
+                      return false;
+                    }
+                    setFieldErrors([]);
+                    return true;
+                  }}
+                />
+              );
+            }
 
             if (!useSections) {
               return (

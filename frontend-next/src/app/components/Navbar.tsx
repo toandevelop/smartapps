@@ -23,9 +23,11 @@ import LightModeRoundedIcon from '@mui/icons-material/LightModeRounded';
 import ViewCompactRoundedIcon from '@mui/icons-material/ViewCompactRounded';
 import TableRowsRoundedIcon from '@mui/icons-material/TableRowsRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
+import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import AppSwitcherMenu from './AppSwitcherMenu';
 import NotificationSnackbar from './ui/NotificationSnackbar';
 import CommandPaletteModal from './CommandPaletteModal';
+import GlobalAiCopilotDrawer from './GlobalAiCopilotDrawer';
 import { useAuth } from '@/lib/auth-context';
 import { useSettings } from '@/lib/settings-context';
 import { useEscapeKey, useIsTauriDesktop, useSidebarCollapsed } from '@/lib/ui-hooks';
@@ -83,6 +85,7 @@ export default function Navbar() {
   const [pwMsg, setPwMsg] = useState('');
   const [showDesktopCfg, setShowDesktopCfg] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<Array<{ username: string; fullName: string; roleCode: string; department: string }>>([]);
   const [onlineOpen, setOnlineOpen] = useState(false);
   const onlineRef = useRef<HTMLDivElement>(null);
@@ -92,10 +95,18 @@ export default function Navbar() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setCmdOpen((prev) => !prev);
+      } else if (e.altKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        setCopilotOpen((prev) => !prev);
       }
     };
+    const onOpenCopilot = () => setCopilotOpen(true);
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('smartapps_open_copilot', onOpenCopilot);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('smartapps_open_copilot', onOpenCopilot);
+    };
   }, []);
   const [srvWebUrl, setSrvWebUrl] = useState('http://localhost:4100');
   const [srvApiUrl, setSrvApiUrl] = useState('http://localhost:5200');
@@ -584,6 +595,31 @@ export default function Navbar() {
           <SearchRoundedIcon sx={{ fontSize: 15 }} />
           <span>{language === 'en' ? 'Quick search...' : 'Tìm nhanh...'}</span>
           <kbd style={{ fontSize: 10.5, padding: '1px 5px', borderRadius: 4, border: '1px solid var(--border-light)' }}>Ctrl+K</kbd>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setCopilotOpen(true)}
+          aria-label="Mở Trợ lý AI Copilot"
+          title="Mở Trợ lý AI Doanh nghiệp (Alt+A)"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '5px 12px',
+            borderRadius: 999,
+            backgroundColor: 'var(--accent-bg)',
+            border: '1px solid var(--border-subtle)',
+            fontSize: 12,
+            fontWeight: 600,
+            color: 'var(--accent-primary)',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
+          }}
+        >
+          <AutoAwesomeRoundedIcon sx={{ fontSize: 15 }} />
+          <span>Trợ lý AI</span>
         </button>
 
         {offlineCount > 0 && (
@@ -1397,6 +1433,7 @@ export default function Navbar() {
       />
 
       <CommandPaletteModal open={cmdOpen} onClose={() => setCmdOpen(false)} />
+      <GlobalAiCopilotDrawer open={copilotOpen} onClose={() => setCopilotOpen(false)} />
     </div>
   );
 }

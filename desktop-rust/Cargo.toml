@@ -1,6 +1,6 @@
 [package]
 name = "smartapps-desktop"
-version = "1.1.0"
+version = "3.0.0"
 description = "SmartApps Enterprise Multi-App Desktop Shell built with Rust & Tauri 2"
 authors = ["SmartApps Platform"]
 edition = "2021"

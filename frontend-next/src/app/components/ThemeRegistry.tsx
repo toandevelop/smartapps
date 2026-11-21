@@ -1,15 +1,30 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import createCache from '@emotion/cache';
 import { CacheProvider } from '@emotion/react';
 import { useServerInsertedHTML } from 'next/navigation';
 import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import smartAppsTheme from '@/lib/theme';
+import { createSmartAppsTheme } from '@/lib/theme';
 import { PlatformProvider } from '@/lib/app-context';
 import { AuthProvider } from '@/lib/auth-context';
-import { SettingsProvider } from '@/lib/settings-context';
+import { SettingsProvider, useSettings } from '@/lib/settings-context';
+
+function DynamicMuiThemeBridge({ children }: { children: React.ReactNode }) {
+  const { resolvedThemeMode, effectiveBrandColor } = useSettings();
+  const muiTheme = useMemo(
+    () => createSmartAppsTheme(resolvedThemeMode, effectiveBrandColor),
+    [resolvedThemeMode, effectiveBrandColor],
+  );
+
+  return (
+    <ThemeProvider theme={muiTheme}>
+      <CssBaseline />
+      {children}
+    </ThemeProvider>
+  );
+}
 
 export default function ThemeRegistry({ children }: { children: React.ReactNode }) {
   const [{ cache, flush }] = useState(() => {
@@ -50,14 +65,13 @@ export default function ThemeRegistry({ children }: { children: React.ReactNode 
 
   return (
     <CacheProvider value={cache}>
-      <ThemeProvider theme={smartAppsTheme}>
-        <CssBaseline />
-        <AuthProvider>
-          <SettingsProvider>
+      <AuthProvider>
+        <SettingsProvider>
+          <DynamicMuiThemeBridge>
             <PlatformProvider>{children}</PlatformProvider>
-          </SettingsProvider>
-        </AuthProvider>
-      </ThemeProvider>
+          </DynamicMuiThemeBridge>
+        </SettingsProvider>
+      </AuthProvider>
     </CacheProvider>
   );
 }

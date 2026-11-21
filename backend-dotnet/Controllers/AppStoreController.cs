@@ -31,6 +31,42 @@ public class AppStoreController(AppStoreService store, AuthService auth) : Contr
         return Ok(new { success = true, data = apps });
     }
 
+    [HttpGet("suites")]
+    public async Task<IActionResult> ListSolutionSuites()
+    {
+        var user = await auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false, message = "Vui lòng đăng nhập." });
+
+        var suites = await store.ListSolutionSuitesAsync();
+        return Ok(new { success = true, data = suites });
+    }
+
+    [HttpPost("suites/{suiteCode}/install")]
+    public async Task<IActionResult> InstallSolutionSuite(string suiteCode, [FromBody] InstallStoreAppRequest? req = null)
+    {
+        var user = await auth.ResolveRequestUserAsync(Request);
+        if (user == null) return Unauthorized(new { success = false, message = "Vui lòng đăng nhập." });
+        if (!AuthService.HasPermission(user, "studio.manage"))
+            return StatusCode(403, new { success = false, message = "Chỉ Quản trị/Studio mới được cài đặt Bộ giải pháp." });
+
+        try
+        {
+            var result = await store.InstallSolutionSuiteAsync(
+                suiteCode,
+                req?.IncludeSampleData ?? true,
+                user.Username);
+            return Ok(new { success = true, data = result });
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { success = false, message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { success = false, message = ex.Message });
+        }
+    }
+
     [HttpGet("apps/{code}")]
     public async Task<IActionResult> GetAppDetail(string code, [FromQuery] string? registryId = null)
     {

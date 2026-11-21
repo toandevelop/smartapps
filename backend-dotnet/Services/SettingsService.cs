@@ -35,7 +35,9 @@ public class SettingsService
                    notify_task_assigned, notify_approval, notify_mentions,
                    email_digest, chat_enter_to_send,
                    COALESCE(notify_email, FALSE), COALESCE(notify_telegram, FALSE), telegram_chat_id,
-                   COALESCE(notify_zalo, FALSE), zalo_user_id, updated_at
+                   COALESCE(notify_zalo, FALSE), zalo_user_id, updated_at,
+                   COALESCE(density_mode, CASE WHEN compact_mode THEN 'compact' ELSE 'comfortable' END),
+                   COALESCE(pinned_apps, '[]'::jsonb)::text
             FROM sys_user_settings
             WHERE user_id = @uid
             LIMIT 1
@@ -44,12 +46,18 @@ public class SettingsService
         await using var r = await cmd.ExecuteReaderAsync();
         if (await r.ReadAsync())
         {
+            var compact = r.GetBoolean(3);
+            var density = NormalizeDensityMode(r.IsDBNull(20) ? null : r.GetString(20), compact);
+            var pinnedJson = r.IsDBNull(21) ? "[]" : r.GetString(21);
+            var pinned = ParsePinnedApps(pinnedJson);
             return new UserSettingsDto
             {
                 UserId = r.GetString(0),
                 ThemeMode = r.GetString(1),
                 AccentColor = r.GetString(2),
-                CompactMode = r.GetBoolean(3),
+                CompactMode = density == "compact",
+                DensityMode = density,
+                PinnedApps = pinned,
                 Language = r.GetString(4),
                 NotifyInApp = r.GetBoolean(5),
                 NotifySound = r.GetBoolean(6),
@@ -81,25 +89,86 @@ public class SettingsService
         return def;
     }
 
+    private static string NormalizeDensityMode(string? densityMode, bool compactMode)
+    {
+        var raw = densityMode?.Trim().ToLowerInvariant();
+        return raw switch
+        {
+            "compact" => "compact",
+            "spacious" => "spacious",
+            "comfortable" => "comfortable",
+            _ => compactMode ? "compact" : "comfortable"
+        };
+    }
+
+    private static string SanitizeHexColor(string? raw, string fallback = "#1a73e8", bool allowBrandKeyword = false)
+    {
+        var val = raw?.Trim() ?? string.Empty;
+        if (allowBrandKeyword && val.Equals("brand", StringComparison.OrdinalIgnoreCase))
+            return "brand";
+        if (val.Length == 7 && val[0] == '#' && val.Skip(1).All(Uri.IsHexDigit))
+            return val.ToLowerInvariant();
+        return fallback;
+    }
+
+    private static List<string> NormalizePinnedApps(IEnumerable<string>? apps)
+    {
+        if (apps == null) return new List<string>();
+        return apps
+            .Select(a => a?.Trim().ToUpperInvariant() ?? string.Empty)
+            .Where(a => a.Length > 0 && a.Length <= 64)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(12)
+            .ToList();
+    }
+
+    private static List<string> ParsePinnedApps(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new List<string>();
+        try
+        {
+            var list = JsonSerializer.Deserialize<List<string>>(json, JsonOpts);
+            return NormalizePinnedApps(list);
+        }
+        catch
+        {
+            return new List<string>();
+        }
+    }
+
     public async Task<UserSettingsDto> UpdateUserSettingsAsync(string userId, UpdateUserSettingsRequest req)
     {
         var theme = req.ThemeMode is "dark" or "auto" ? req.ThemeMode : "light";
-        var accent = string.IsNullOrWhiteSpace(req.AccentColor) ? "#1a73e8" : req.AccentColor.Trim();
+        var accent = SanitizeHexColor(req.AccentColor, "#1a73e8", allowBrandKeyword: true);
+        var density = NormalizeDensityMode(req.DensityMode, req.CompactMode);
+        var isCompact = density == "compact";
         var lang = req.Language == "en" ? "en" : "vi";
         var digest = req.EmailDigest is "DAILY" or "OFF" ? req.EmailDigest : "INSTANT";
+
+        List<string> pinnedApps;
+        if (req.PinnedApps != null)
+        {
+            pinnedApps = NormalizePinnedApps(req.PinnedApps);
+        }
+        else
+        {
+            var existing = await GetUserSettingsAsync(userId);
+            pinnedApps = existing.PinnedApps;
+        }
+        var pinnedJson = JsonSerializer.Serialize(pinnedApps, JsonOpts);
 
         await using var conn = new NpgsqlConnection(_connStr);
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand("""
             INSERT INTO sys_user_settings (
-                user_id, theme_mode, accent_color, compact_mode, language,
+                user_id, theme_mode, accent_color, compact_mode, density_mode, pinned_apps, language,
                 notify_in_app, notify_sound, notify_desktop, notify_chat,
                 notify_task_assigned, notify_approval, notify_mentions,
                 email_digest, chat_enter_to_send,
                 notify_email, notify_telegram, telegram_chat_id, notify_zalo, zalo_user_id, updated_at
             )
             VALUES (
-                @uid, @tm, @ac, @cm, @lang,
+                @uid, @tm, @ac, @cm, @dm, @pa::jsonb, @lang,
                 @nia, @ns, @nd, @nc,
                 @nt, @na, @nm,
                 @ed, @ce,
@@ -109,6 +178,8 @@ public class SettingsService
                 theme_mode = EXCLUDED.theme_mode,
                 accent_color = EXCLUDED.accent_color,
                 compact_mode = EXCLUDED.compact_mode,
+                density_mode = EXCLUDED.density_mode,
+                pinned_apps = EXCLUDED.pinned_apps,
                 language = EXCLUDED.language,
                 notify_in_app = EXCLUDED.notify_in_app,
                 notify_sound = EXCLUDED.notify_sound,
@@ -129,7 +200,9 @@ public class SettingsService
         cmd.Parameters.AddWithValue("uid", userId);
         cmd.Parameters.AddWithValue("tm", theme);
         cmd.Parameters.AddWithValue("ac", accent);
-        cmd.Parameters.AddWithValue("cm", req.CompactMode);
+        cmd.Parameters.AddWithValue("cm", isCompact);
+        cmd.Parameters.AddWithValue("dm", density);
+        cmd.Parameters.AddWithValue("pa", pinnedJson);
         cmd.Parameters.AddWithValue("lang", lang);
         cmd.Parameters.AddWithValue("nia", req.NotifyInApp);
         cmd.Parameters.AddWithValue("ns", req.NotifySound);
@@ -201,6 +274,7 @@ public class SettingsService
         {
             CompanyName = string.IsNullOrWhiteSpace(req.CompanyName) ? "SmartApps Enterprise" : req.CompanyName.Trim(),
             WorkspaceTitle = string.IsNullOrWhiteSpace(req.WorkspaceTitle) ? "SmartApps Enterprise — Không gian làm việc Đa ứng dụng" : req.WorkspaceTitle.Trim(),
+            BrandColor = SanitizeHexColor(req.BrandColor, "#1a73e8"),
             LogoUrl = SanitizeMediaUrl(req.LogoUrl),
             BrandIcon = req.BrandIcon?.Trim() ?? string.Empty,
             FaviconUrl = SanitizeMediaUrl(req.FaviconUrl),

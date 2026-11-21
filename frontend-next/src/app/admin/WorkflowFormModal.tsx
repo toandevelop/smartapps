@@ -183,7 +183,11 @@ function WorkflowFormModalBody({
               <div style={{ padding: '4px 10px', borderRadius: 8, backgroundColor: 'var(--bg-surface)', border: '1px solid var(--info-border)', fontSize: 12 }}>
                 <strong style={{ color: '#1a73e8' }}>B{idx + 1}:</strong> {st.name || `Bước ${idx + 1}`}
                 <span style={{ color: 'var(--text-muted)', marginLeft: 6, fontSize: 11 }}>
-                  ({[...st.approverRoles, ...st.approverUsers].join(', ') || '?'}{st.approvalMode && st.approvalMode !== 'ANY' ? ` • ${st.approvalMode === 'ALL' ? 'Tất cả' : `${st.quorumCount || 1} phiếu`}` : ''})
+                  ({[
+                    ...st.approverRoles,
+                    ...st.approverUsers,
+                    ...(st.useOrgManager ? ['Trưởng đơn vị'] : []),
+                  ].join(', ') || '?'}{st.approvalMode && st.approvalMode !== 'ANY' ? ` • ${st.approvalMode === 'ALL' ? 'Tất cả' : `${st.quorumCount || 1} phiếu`}` : ''}{st.conditionField ? ` • Nếu ${st.conditionField} ${st.conditionOperator || '='} ${st.conditionValue || ''}` : ''})
                 </span>
               </div>
             </React.Fragment>
@@ -346,6 +350,58 @@ function WorkflowFormModalBody({
                       />
                       Cho phép trả lại bước trước / về Nháp
                     </label>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: 'var(--accent-primary)', fontWeight: 600 }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(step.useOrgManager)}
+                        onChange={(e) => updateStep(idx, { useOrgManager: e.target.checked })}
+                      />
+                      Tự định tuyến Trưởng đơn vị (OrgUnit)
+                    </label>
+                  </div>
+
+                  {/* Step-level Branching Condition */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1.2fr 0.9fr 1fr',
+                      gap: 8,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      backgroundColor: 'var(--bg-primary)',
+                      border: '1px solid var(--border-light)',
+                      marginBottom: 8,
+                    }}
+                  >
+                    <input
+                      className="form-input"
+                      style={{ height: 28, fontSize: 11.5 }}
+                      aria-label={`Điều kiện rẽ nhánh trường bước ${idx + 1}`}
+                      value={step.conditionField || ''}
+                      onChange={(e) => updateStep(idx, { conditionField: e.target.value })}
+                      placeholder="Rẽ nhánh bước: Mã trường (để trống = luôn chạy)"
+                    />
+                    <select
+                      className="form-select"
+                      style={{ height: 28, fontSize: 11.5, padding: '0 6px' }}
+                      aria-label={`Toán tử rẽ nhánh bước ${idx + 1}`}
+                      value={step.conditionOperator || 'GREATER_THAN'}
+                      onChange={(e) => updateStep(idx, { conditionOperator: e.target.value })}
+                    >
+                      <option value="EQUALS">Bằng (=)</option>
+                      <option value="NOT_EQUALS">Khác (≠)</option>
+                      <option value="GREATER_THAN">Lớn hơn (&gt;)</option>
+                      <option value="LESS_THAN">Nhỏ hơn (&lt;)</option>
+                      <option value="CONTAINS">Chứa</option>
+                    </select>
+                    <input
+                      className="form-input"
+                      style={{ height: 28, fontSize: 11.5 }}
+                      aria-label={`Giá trị rẽ nhánh bước ${idx + 1}`}
+                      value={step.conditionValue || ''}
+                      onChange={(e) => updateStep(idx, { conditionValue: e.target.value })}
+                      placeholder="Giá trị ngưỡng (VD: 20000000)"
+                    />
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

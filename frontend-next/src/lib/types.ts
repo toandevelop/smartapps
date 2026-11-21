@@ -49,10 +49,32 @@ export interface SysTable {
   publicFormExpiresAt?: string | null;
   publicFormMaxSubmissions?: number | null;
   formRules?: FormRule[];
+  formLayout?: FormLayoutConfig | null;
   orderIndex: number;
   isActive: boolean;
   columnCount: number;
   recordCount: number;
+}
+
+export interface FormLayoutFieldItem {
+  columnCode: string;
+  colSpan: 1 | 2 | 3 | number;
+}
+
+export interface FormLayoutSection {
+  id: string;
+  title: string;
+  description?: string | null;
+  columns: 1 | 2 | 3 | number;
+  collapsible?: boolean;
+  calloutText?: string | null;
+  calloutTone?: 'info' | 'warning' | 'success' | string | null;
+  fields: FormLayoutFieldItem[];
+}
+
+export interface FormLayoutConfig {
+  mode: 'sections' | 'tabs' | 'wizard' | string;
+  sections: FormLayoutSection[];
 }
 
 export interface FormCondition {
@@ -108,6 +130,7 @@ export interface SysColumn {
   refDisplayField?: string | null;
   lookupFilterField?: string | null;
   lookupSourceField?: string | null;
+  isIndexed?: boolean;
   formula?: string | null;
   defaultValue?: string | null;
   hiddenForRoles?: string[];
@@ -228,6 +251,24 @@ export interface ChildRelationMutation {
   deleteIds: string[];
 }
 
+export interface AutomationStep {
+  id: string;
+  actionType: string;
+  targetAppId?: string | null;
+  targetModuleId?: string | null;
+  targetTableId?: string | null;
+  matchSourceField?: string | null;
+  matchTargetField?: string | null;
+  webhookUrl?: string | null;
+  webhookSecret?: string | null;
+  notifyRecipient?: string | null;
+  notifyTemplate?: string | null;
+  fieldMappings: Record<string, string>;
+  conditionField?: string | null;
+  conditionOperator?: string | null;
+  conditionValue?: string | null;
+}
+
 export interface AppAutomation {
   id: string;
   name: string;
@@ -249,6 +290,7 @@ export interface AppAutomation {
   notifyRecipient?: string | null;
   notifyTemplate?: string | null;
   fieldMappings: Record<string, string>;
+  chainSteps?: AutomationStep[];
   isActive: boolean;
   runCount: number;
   lastRunAt?: string | null;
@@ -419,11 +461,26 @@ export interface SysNotification {
   createdAt: string;
 }
 
+export interface BatchOperationItemError {
+  recordId: string;
+  message: string;
+}
+
+export interface BatchOperationResult {
+  requested: number;
+  succeeded: number;
+  failed: number;
+  succeededIds: string[];
+  errors: BatchOperationItemError[];
+}
+
 export interface UserSettings {
   userId: string;
   themeMode: 'light' | 'dark' | 'auto' | string;
   accentColor: string;
   compactMode: boolean;
+  densityMode?: 'compact' | 'comfortable' | 'spacious' | string;
+  pinnedApps?: string[];
   language: string;
   notifyInApp: boolean;
   notifySound: boolean;
@@ -469,6 +526,7 @@ export interface NotificationDeliveryLog {
 export interface SystemSettings {
   companyName: string;
   workspaceTitle: string;
+  brandColor?: string;
   logoUrl?: string;
   brandIcon?: string;
   faviconUrl?: string;
@@ -778,6 +836,10 @@ export interface WorkflowStep {
   approvalMode?: 'ANY' | 'ALL' | 'QUORUM' | string;
   quorumCount?: number;
   allowReturnToPrevious?: boolean;
+  useOrgManager?: boolean;
+  conditionField?: string | null;
+  conditionOperator?: string | null;
+  conditionValue?: string | null;
 }
 
 export interface WorkflowStepApprovalVote {
@@ -1069,4 +1131,118 @@ export interface StoreInstallHistoryItem {
   actionType: string;
   actor: string;
   createdAt: string;
+}
+
+export interface StoreSolutionSuiteAppItem {
+  packageCode: string;
+  name: string;
+  icon: string;
+  color: string;
+  isInstalled: boolean;
+  installedAppCode?: string | null;
+}
+
+export interface StoreSolutionSuite {
+  suiteCode: string;
+  name: string;
+  tagline: string;
+  description: string;
+  targetAudience: string;
+  icon: string;
+  color: string;
+  bgColor: string;
+  highlights: string[];
+  apps: StoreSolutionSuiteAppItem[];
+  installedCount: number;
+  totalCount: number;
+}
+
+export interface InstallSuiteAppOutcome {
+  packageCode: string;
+  name: string;
+  status: 'INSTALLED' | 'ALREADY_INSTALLED' | 'FAILED' | string;
+  appId?: string | null;
+  appCode?: string | null;
+  message?: string | null;
+}
+
+export interface InstallSuiteResult {
+  suiteCode: string;
+  suiteName: string;
+  installedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  outcomes: InstallSuiteAppOutcome[];
+}
+
+export interface AiCopilotCitation {
+  kind: 'RECORD' | 'APP' | 'TASK' | 'APPROVAL' | string;
+  id: string;
+  title: string;
+  subtitle: string;
+  url: string;
+  badge?: string | null;
+}
+
+export interface AiCopilotToolTrace {
+  tool: string;
+  summary: string;
+  resultCount: number;
+  durationMs: number;
+}
+
+export interface AiCopilotProposedAction {
+  actionType: 'CREATE_RECORD' | string;
+  label: string;
+  appId: string;
+  appCode: string;
+  moduleId: string;
+  tableId: string;
+  tableDisplayName: string;
+  draftData: Record<string, unknown>;
+  note: string;
+}
+
+export interface AiCopilotAskResponse {
+  answer: string;
+  engine: string;
+  citations: AiCopilotCitation[];
+  toolTraces: AiCopilotToolTrace[];
+  proposedAction?: AiCopilotProposedAction | null;
+}
+
+export interface ClusterNodeStatus {
+  instanceId: string;
+  hostName: string;
+  processId: number;
+  appVersion: string;
+  activeSse: number;
+  listenerConnected: boolean;
+  onlineUsers: string[];
+  startedAt: string;
+  lastHeartbeatAt: string;
+  isCurrent: boolean;
+}
+
+export interface ClusterMetricsSnapshot {
+  httpRequestsTotal: number;
+  httpErrors4xx: number;
+  httpErrors5xx: number;
+  httpAvgLatencyMs: number;
+  activeSseSubscribers: number;
+  activeClusterNodes: number;
+  realtimeListenerConnected: boolean;
+  outboxPending: number;
+  outboxDeadLetter: number;
+  aiTokensUsedMonth: number;
+  activeRecordsTotal: number;
+  dbProbeLatencyMs: number;
+}
+
+export interface ClusterStatusResponse {
+  currentInstanceId: string;
+  listenerConnected: boolean;
+  lastListenerConnectedAt?: string | null;
+  nodes: ClusterNodeStatus[];
+  metrics: ClusterMetricsSnapshot;
 }
