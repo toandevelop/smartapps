@@ -22,7 +22,7 @@ public static class ImportValueNormalizer
         if (text.Length == 0) return null;
         switch (dataType.ToUpperInvariant())
         {
-            case "NUMBER": case "CURRENCY":
+            case "NUMBER": case "CURRENCY": case "RATING": case "PROGRESS":
                 if (value is decimal or int or long or double or float) return Convert.ToDecimal(value, CultureInfo.InvariantCulture);
                 var pattern = numberFormat == "vi-VN"
                     ? @"^[+-]?(?:\d+|\d{1,3}(?:\.\d{3})+)(?:,\d+)?$"

@@ -29,6 +29,7 @@ import {
 import StudioPlatformResourcesPanel, { PlatformSubTab } from './StudioPlatformResourcesPanel';
 import { usePlatform } from '@/lib/app-context';
 import { useAuth } from '@/lib/auth-context';
+import { getColumnTypeMeta } from '@/lib/monday-fields';
 import {
   SysApp,
   SysModule,
@@ -1483,7 +1484,29 @@ function AppBuilderStudioContent() {
                                 <td style={{ fontWeight: 600 }}>
                                   {col.columnName} {col.isRequired && <span style={{ color: '#d93025' }}>*</span>}
                                 </td>
-                                <td><span className="badge badge-info">{col.dataType}</span></td>
+                                <td>
+                                  {(() => {
+                                    const meta = getColumnTypeMeta(col.dataType);
+                                    return (
+                                      <span
+                                        className="badge"
+                                        title={meta.description || meta.label}
+                                        style={{
+                                          backgroundColor: `color-mix(in srgb, ${meta.accent} 14%, var(--bg-surface))`,
+                                          color: meta.accent,
+                                          border: `1px solid color-mix(in srgb, ${meta.accent} 32%, transparent)`,
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: 5,
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        <span>{meta.shortBadge}</span>
+                                        <span>{col.dataType}</span>
+                                      </span>
+                                    );
+                                  })()}
+                                </td>
                                 <td>
                                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                                     {col.isIdentityKey && <span className="badge badge-warning">Key</span>}

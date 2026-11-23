@@ -293,9 +293,18 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
     ]).then(() => setRefFilterVersion((v) => v + 1));
   }, [activeColumns]);
 
-  const kanbanColumn = useMemo(() => activeColumns.find((c) => Boolean(c.refCategoryCode)), [activeColumns]);
+  const kanbanColumn = useMemo(
+    () =>
+      activeColumns.find(
+        (c) => Boolean(c.refCategoryCode) || ['STATUS', 'PRIORITY', 'SELECT'].includes(c.dataType.toUpperCase())
+      ),
+    [activeColumns]
+  );
   const kanbanGroupableColumns = useMemo(
-    () => activeColumns.filter((c) => Boolean(c.refCategoryCode) || c.dataType.toUpperCase() === 'SELECT'),
+    () =>
+      activeColumns.filter(
+        (c) => Boolean(c.refCategoryCode) || ['STATUS', 'PRIORITY', 'SELECT'].includes(c.dataType.toUpperCase())
+      ),
     [activeColumns],
   );
   const canKanban = kanbanGroupableColumns.length > 0 || Boolean(activeTable?.approvalEnabled);
@@ -304,7 +313,7 @@ function GenericDynamicAppView({ appCode }: { appCode: string }) {
     [columnFilters, structuredFilter],
   );
   const calendarColumn = useMemo(
-    () => activeColumns.find((c) => c.dataType.toUpperCase() === 'DATE'),
+    () => activeColumns.find((c) => ['DATE', 'DATETIME'].includes(c.dataType.toUpperCase())),
     [activeColumns]
   );
 

@@ -255,4 +255,102 @@ public sealed class Phase3EnterprisePostgresTests : IClassFixture<PriorityPostgr
         Assert.Equal(4, data2.GetProperty("skippedCount").GetInt32());
         Assert.Equal(0, data2.GetProperty("failedCount").GetInt32());
     }
+
+    [PostgresFact]
+    public async Task MondayWorkOsDataTypes_ValidateNormalizeAndSupportFormRulesEndToEnd()
+    {
+        await AuthenticateAsync("admin");
+        var metadata = _fx.Services.GetRequiredService<MetadataService>();
+
+        var app = await metadata.UpsertAppAsync(new UpsertAppRequest
+        {
+            Code = $"MND{Guid.NewGuid().ToString("N")[..4].ToUpperInvariant()}",
+            Name = "Monday Work OS Board Test",
+            Department = "PMO"
+        });
+        var mod = await metadata.UpsertModuleAsync(new UpsertModuleRequest
+        {
+            AppId = app.Id,
+            Code = "BOARD",
+            Name = "Work OS Board"
+        });
+        var tbl = await metadata.UpsertTableAsync(new UpsertTableRequest
+        {
+            AppId = app.Id,
+            ModuleId = mod.Id,
+            TableName = $"monday_board_{Guid.NewGuid().ToString("N")[..5]}",
+            DisplayName = "Bảng Công việc Monday"
+        });
+
+        await metadata.UpsertColumnAsync(new UpsertColumnRequest { TableId = tbl.Id, ColumnCode = "task_code", ColumnName = "Mã việc", DataType = "STRING", IsRequired = true, IsIdentityKey = true, OrderIndex = 1 });
+        await metadata.UpsertColumnAsync(new UpsertColumnRequest { TableId = tbl.Id, ColumnCode = "work_status", ColumnName = "Trạng thái màu", DataType = "STATUS", DefaultValue = "WORKING", OrderIndex = 2 });
+        await metadata.UpsertColumnAsync(new UpsertColumnRequest { TableId = tbl.Id, ColumnCode = "priority", ColumnName = "Ưu tiên", DataType = "PRIORITY", DefaultValue = "HIGH", OrderIndex = 3 });
+        await metadata.UpsertColumnAsync(new UpsertColumnRequest { TableId = tbl.Id, ColumnCode = "progress_pct", ColumnName = "Tiến độ %", DataType = "PROGRESS", IsIndexed = true, DefaultValue = "50", OrderIndex = 4 });
+        await metadata.UpsertColumnAsync(new UpsertColumnRequest { TableId = tbl.Id, ColumnCode = "rating_stars", ColumnName = "Đánh giá sao", DataType = "RATING", IsIndexed = true, DefaultValue = "4", OrderIndex = 5 });
+        await metadata.UpsertColumnAsync(new UpsertColumnRequest { TableId = tbl.Id, ColumnCode = "tags", ColumnName = "Hashtags", DataType = "TAGS", OrderIndex = 6 });
+        await metadata.UpsertColumnAsync(new UpsertColumnRequest { TableId = tbl.Id, ColumnCode = "color_hex", ColumnName = "Mã màu", DataType = "COLOR", DefaultValue = "#00c875", OrderIndex = 7 });
+        await metadata.UpsertColumnAsync(new UpsertColumnRequest { TableId = tbl.Id, ColumnCode = "doc_link", ColumnName = "Liên kết tài liệu", DataType = "LINK", OrderIndex = 8 });
+        await metadata.UpsertColumnAsync(new UpsertColumnRequest { TableId = tbl.Id, ColumnCode = "bonus_note", ColumnName = "Ghi chú thưởng xuất sắc", DataType = "STRING", OrderIndex = 9 });
+
+        // Configure a FormRule using numeric GREATER_OR_EQUAL on RATING
+        await metadata.UpsertTableAsync(new UpsertTableRequest
+        {
+            Id = tbl.Id,
+            AppId = app.Id,
+            ModuleId = mod.Id,
+            TableName = tbl.TableName,
+            DisplayName = tbl.DisplayName,
+            FormRules =
+            [
+                new FormRuleDto
+                {
+                    Id = "rule_high_rating_note",
+                    TargetField = "bonus_note",
+                    Property = "required",
+                    Value = true,
+                    ElseValue = false,
+                    Match = "ALL",
+                    Conditions =
+                    [
+                        new FormConditionDto { Field = "rating_stars", Operator = "GREATER_OR_EQUAL", Value = "5" }
+                    ]
+                }
+            ]
+        });
+
+        // 1. Valid Monday.com record with rating = 4 saves cleanly
+        using var okRes = await _fx.Client.PostAsJsonAsync("/api/records", new
+        {
+            appId = app.Id,
+            moduleId = mod.Id,
+            tableId = tbl.Id,
+            data = new Dictionary<string, object?>
+            {
+                ["task_code"] = "MND-001",
+                ["work_status"] = "DONE",
+                ["priority"] = "CRITICAL",
+                ["progress_pct"] = 100,
+                ["rating_stars"] = 4,
+                ["tags"] = new[] { "workos", "monday" },
+                ["color_hex"] = "#00c875",
+                ["doc_link"] = "https://monday.com"
+            }
+        });
+        okRes.EnsureSuccessStatusCode();
+
+        // 2. When rating_stars == 5, FormRule requires bonus_note
+        using var ruleFailRes = await _fx.Client.PostAsJsonAsync("/api/records", new
+        {
+            appId = app.Id,
+            moduleId = mod.Id,
+            tableId = tbl.Id,
+            data = new Dictionary<string, object?>
+            {
+                ["task_code"] = "MND-002",
+                ["rating_stars"] = 5,
+                ["progress_pct"] = 80
+            }
+        });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, ruleFailRes.StatusCode);
+    }
 }

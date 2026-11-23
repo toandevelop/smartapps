@@ -22,6 +22,18 @@ import BlockRoundedIcon from '@mui/icons-material/BlockRounded';
 import { AppAuditLog, AppRecord, RelatedTableGroup, SysColumn, RecordComment } from '@/lib/types';
 import { batchFetchLookups, resolveLookupLabel } from '@/lib/lookup-service';
 import { computeAuditFieldDiffs, formatAuditValue, getAuditActionMeta } from '@/lib/audit-utils';
+import {
+  clampProgressValue,
+  clampRatingValue,
+  formatDateTimeDisplay,
+  getAvatarInitialsAndColor,
+  getMondayProgressColor,
+  getTagColor,
+  normalizeSafeLinkUrl,
+  parseTagsValue,
+  resolveMondayPriorityStyle,
+  resolveMondayStatusStyle,
+} from '@/lib/monday-fields';
 import { requestLocalTokenSign } from '@/lib/tauri-bridge';
 import { useAuth } from '@/lib/auth-context';
 import StatusBadge from './StatusBadge';
@@ -50,6 +62,94 @@ function formatFieldDisplay(col: SysColumn, rawVal: unknown): React.ReactNode {
         {b ? 'Có / Đang áp dụng' : 'Không'}
       </span>
     );
+  }
+  if (dt === 'STATUS') {
+    const st = resolveMondayStatusStyle(rawVal);
+    return (
+      <span className="monday-status-pill" style={{ backgroundColor: st.bg, color: st.color }}>
+        {st.label}
+      </span>
+    );
+  }
+  if (dt === 'PRIORITY') {
+    const pr = resolveMondayPriorityStyle(rawVal);
+    return (
+      <span className="monday-status-pill" style={{ backgroundColor: pr.bg, color: pr.color }}>
+        {pr.label}
+      </span>
+    );
+  }
+  if (dt === 'RATING') {
+    const stars = clampRatingValue(rawVal);
+    return (
+      <span style={{ color: '#ffcb00', fontSize: 15, letterSpacing: 1 }}>
+        {'★'.repeat(stars)}
+        <span style={{ color: '#cbd5e1' }}>{'★'.repeat(Math.max(0, 5 - stars))}</span>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 6 }}>{stars}/5</span>
+      </span>
+    );
+  }
+  if (dt === 'PROGRESS') {
+    const pct = clampProgressValue(rawVal);
+    const barColor = getMondayProgressColor(pct);
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ flex: 1, height: 8, borderRadius: 999, backgroundColor: 'var(--bg-primary)', overflow: 'hidden', border: '1px solid var(--border-subtle)' }}>
+          <div style={{ width: `${pct}%`, height: '100%', backgroundColor: barColor }} />
+        </div>
+        <span style={{ fontSize: 12, fontWeight: 700, color: barColor }}>{pct}%</span>
+      </div>
+    );
+  }
+  if (dt === 'TAGS') {
+    const tags = parseTagsValue(rawVal);
+    if (tags.length === 0) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+    return (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+        {tags.map((t) => {
+          const tc = getTagColor(t);
+          return (
+            <span key={t} style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11.5, fontWeight: 600, backgroundColor: tc.bg, color: tc.color }}>
+              #{t}
+            </span>
+          );
+        })}
+      </div>
+    );
+  }
+  if (dt === 'COLOR') {
+    const hex = String(rawVal).trim();
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ width: 18, height: 18, borderRadius: 4, backgroundColor: hex, border: '1px solid rgba(0,0,0,0.2)', display: 'inline-block' }} />
+        <code>{hex.toUpperCase()}</code>
+      </span>
+    );
+  }
+  if (dt === 'LINK') {
+    const safeLink = normalizeSafeLinkUrl(rawVal);
+    return safeLink ? (
+      <a href={safeLink.href} target="_blank" rel="noreferrer" style={{ color: '#0086c0', textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span>{safeLink.label}</span>
+        <OpenInNewRoundedIcon sx={{ fontSize: 13 }} />
+      </a>
+    ) : (
+      String(rawVal)
+    );
+  }
+  if (dt === 'USER') {
+    const av = getAvatarInitialsAndColor(rawVal);
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ width: 22, height: 22, borderRadius: '50%', backgroundColor: av.bg, color: '#fff', fontSize: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+          {av.initials}
+        </span>
+        <span>{av.label}</span>
+      </span>
+    );
+  }
+  if (dt === 'DATETIME' || dt === 'TIME') {
+    return formatDateTimeDisplay(rawVal, dt);
   }
   if (dt === 'CURRENCY') {
     const num = Number(rawVal);

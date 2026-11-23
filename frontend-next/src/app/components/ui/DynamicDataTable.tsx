@@ -7,6 +7,22 @@ import StatusBadge from './StatusBadge';
 import { batchFetchCategories, getCategoryItemName, getCategoryItems } from '@/lib/category-service';
 import { batchFetchLookups, getLookupOptions, resolveLookupLabel } from '@/lib/lookup-service';
 import { cleanColumnDisplayName, formatCurrencyVnd } from '@/lib/column-utils';
+import {
+  MONDAY_PRIORITY_PRESETS,
+  MONDAY_STATUS_PRESETS,
+  clampProgressValue,
+  clampRatingValue,
+  computeMondayColumnSummary,
+  formatDateTimeDisplay,
+  getAvatarInitialsAndColor,
+  getColumnTypeMeta,
+  getMondayProgressColor,
+  getTagColor,
+  normalizeSafeLinkUrl,
+  parseTagsValue,
+  resolveMondayPriorityStyle,
+  resolveMondayStatusStyle,
+} from '@/lib/monday-fields';
 import { AppRecord, SysColumn } from '@/lib/types';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
@@ -15,6 +31,9 @@ import FunctionsRoundedIcon from '@mui/icons-material/FunctionsRounded';
 import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
 import LinkRoundedIcon from '@mui/icons-material/LinkRounded';
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded';
+import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
+import StarRoundedIcon from '@mui/icons-material/StarRounded';
+import StarBorderRoundedIcon from '@mui/icons-material/StarBorderRounded';
 
 export interface DynamicDataTableProps {
   title?: React.ReactNode;
@@ -147,6 +166,7 @@ export default function DynamicDataTable({
     for (const col of visibleDynamicColumns) {
       const cleanLabel = cleanColumnDisplayName(col.columnName);
       const dt = (col.dataType || 'STRING').toUpperCase();
+      const colMeta = getColumnTypeMeta(dt);
 
       const selectOptions = col.refTableId
         ? getLookupOptions(col).map((o) => ({ value: o.value, label: o.label, subLabel: o.subLabel, searchText: o.searchText }))
@@ -156,12 +176,16 @@ export default function DynamicDataTable({
             label: `${it.itemCode} - ${it.itemName}`,
             subLabel: it.itemName,
           }))
+        : dt === 'STATUS'
+        ? MONDAY_STATUS_PRESETS.map((p) => ({ value: p.code, label: p.label, subLabel: p.label }))
+        : dt === 'PRIORITY'
+        ? MONDAY_PRIORITY_PRESETS.map((p) => ({ value: p.code, label: p.label, subLabel: p.label }))
         : [];
 
       const filterType: 'text' | 'select' | 'date' =
         selectOptions.length > 0 || dt === 'BOOLEAN'
           ? 'select'
-          : dt === 'DATE'
+          : dt === 'DATE' || dt === 'DATETIME'
           ? 'date'
           : 'text';
 
@@ -179,13 +203,28 @@ export default function DynamicDataTable({
         key: col.columnCode,
         label: cleanLabel,
         width: col.width || 160,
-        align: dt === 'NUMBER' || dt === 'CURRENCY' ? 'right' : 'left',
+        align:
+          dt === 'NUMBER' || dt === 'CURRENCY'
+            ? 'right'
+            : dt === 'STATUS' || dt === 'PRIORITY' || dt === 'RATING' || dt === 'BOOLEAN'
+            ? 'center'
+            : 'left',
         filterable: true,
         filterType,
         filterOptions,
         refCategoryCode: col.refCategoryCode,
         header: (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span
+              aria-hidden="true"
+              className="monday-col-type-badge"
+              style={{
+                backgroundColor: `color-mix(in srgb, ${colMeta.accent} 14%, var(--bg-surface))`,
+                color: colMeta.accent,
+              }}
+            >
+              {colMeta.shortBadge}
+            </span>
             <span>{cleanLabel}</span>
             {col.isRequired && <span style={{ color: '#d93025' }}>*</span>}
             {col.refTableId && (
@@ -212,7 +251,7 @@ export default function DynamicDataTable({
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 5,
-                  padding: '2px 9px',
+                  padding: '3px 10px',
                   borderRadius: 999,
                   fontSize: 12,
                   fontWeight: 600,
@@ -225,34 +264,197 @@ export default function DynamicDataTable({
                 {linkedLabel || String(rawVal)}
               </span>
             );
+          } else if (dt === 'STATUS' && rawVal) {
+            const cat = col.refCategoryCode ? getCategoryItemName(col.refCategoryCode, rawVal) : null;
+            const stStyle = resolveMondayStatusStyle(rawVal, cat?.color, cat?.name);
+            displayNode = (
+              <span
+                className="monday-status-pill"
+                style={{ backgroundColor: stStyle.bg, color: stStyle.color }}
+              >
+                {stStyle.label}
+              </span>
+            );
+          } else if (dt === 'PRIORITY' && rawVal) {
+            const cat = col.refCategoryCode ? getCategoryItemName(col.refCategoryCode, rawVal) : null;
+            const prStyle = resolveMondayPriorityStyle(rawVal, cat?.name);
+            displayNode = (
+              <span
+                className="monday-status-pill"
+                style={{ backgroundColor: prStyle.bg, color: prStyle.color }}
+              >
+                {prStyle.label}
+              </span>
+            );
           } else if (col.refCategoryCode && rawVal) {
             const cat = getCategoryItemName(col.refCategoryCode, rawVal);
+            const stStyle = resolveMondayStatusStyle(rawVal, cat?.color, cat?.name);
             displayNode = cat ? (
               <span
+                className="monday-status-pill"
                 style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '2px 8px',
-                  borderRadius: 999,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  backgroundColor: 'var(--bg-secondary)',
-                  color: 'var(--text-primary)',
+                  backgroundColor: stStyle.bg,
+                  color: stStyle.color,
                 }}
               >
-                <span
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: '50%',
-                    backgroundColor: cat.color || '#1a73e8',
-                  }}
-                />
                 {cat.name}
               </span>
             ) : (
               <code>{String(rawVal)}</code>
+            );
+          } else if (dt === 'RATING') {
+            const stars = clampRatingValue(rawVal);
+            displayNode = (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 1 }}>
+                {[1, 2, 3, 4, 5].map((s) =>
+                  s <= stars ? (
+                    <StarRoundedIcon key={s} sx={{ fontSize: 17, color: '#ffcb00' }} />
+                  ) : (
+                    <StarBorderRoundedIcon key={s} sx={{ fontSize: 17, color: '#cbd5e1' }} />
+                  )
+                )}
+              </span>
+            );
+          } else if (
+            dt === 'PROGRESS' ||
+            (dt === 'NUMBER' &&
+              rawVal !== null &&
+              rawVal !== undefined &&
+              rawVal !== '' &&
+              /(tien_do|phan_tram|percent|progress|%)/i.test(`${col.columnCode} ${col.columnName}`))
+          ) {
+            const pct = clampProgressValue(rawVal);
+            const barColor = getMondayProgressColor(pct);
+            displayNode = (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 110 }}>
+                <div
+                  style={{
+                    flex: 1,
+                    height: 8,
+                    borderRadius: 999,
+                    backgroundColor: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-subtle)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${pct}%`,
+                      height: '100%',
+                      backgroundColor: barColor,
+                      transition: 'width 0.25s ease',
+                    }}
+                  />
+                </div>
+                <span style={{ fontSize: 11.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: barColor }}>
+                  {pct}%
+                </span>
+              </div>
+            );
+          } else if (dt === 'TAGS' && rawVal) {
+            const tags = parseTagsValue(rawVal);
+            displayNode =
+              tags.length > 0 ? (
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {tags.slice(0, 3).map((t) => {
+                    const tc = getTagColor(t);
+                    return (
+                      <span
+                        key={t}
+                        style={{
+                          padding: '2px 7px',
+                          borderRadius: 999,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          backgroundColor: tc.bg,
+                          color: tc.color,
+                        }}
+                      >
+                        #{t}
+                      </span>
+                    );
+                  })}
+                  {tags.length > 3 && (
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>+{tags.length - 3}</span>
+                  )}
+                </div>
+              ) : (
+                <span style={{ color: '#9aa0a6' }}>—</span>
+              );
+          } else if (dt === 'COLOR' && rawVal) {
+            const colorHex = String(rawVal).trim();
+            displayNode = (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span
+                  style={{
+                    width: 18,
+                    height: 18,
+                    borderRadius: 5,
+                    backgroundColor: colorHex,
+                    border: '1px solid rgba(0,0,0,0.18)',
+                    display: 'inline-block',
+                  }}
+                />
+                <code style={{ fontSize: 11.5 }}>{colorHex.toUpperCase()}</code>
+              </span>
+            );
+          } else if (dt === 'LINK' && rawVal) {
+            const safeLink = normalizeSafeLinkUrl(rawVal);
+            displayNode = safeLink ? (
+              <a
+                href={safeLink.href}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  color: '#0086c0',
+                  fontWeight: 600,
+                  fontSize: 12.5,
+                  textDecoration: 'underline',
+                  maxWidth: 190,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span>{safeLink.label}</span>
+                <OpenInNewRoundedIcon sx={{ fontSize: 13, flexShrink: 0 }} />
+              </a>
+            ) : (
+              <span>{String(rawVal)}</span>
+            );
+          } else if (dt === 'USER' && rawVal) {
+            const av = getAvatarInitialsAndColor(rawVal);
+            displayNode = (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                <span
+                  style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: '50%',
+                    backgroundColor: av.bg,
+                    color: '#ffffff',
+                    fontSize: 10.5,
+                    fontWeight: 700,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  {av.initials}
+                </span>
+                <span style={{ fontWeight: 600, fontSize: 12.5 }}>{av.label}</span>
+              </span>
+            );
+          } else if ((dt === 'DATETIME' || dt === 'TIME') && rawVal) {
+            displayNode = (
+              <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>
+                {formatDateTimeDisplay(rawVal, dt)}
+              </span>
             );
           } else if (dt === 'IMAGE' && rawVal) {
             const urlStr = typeof rawVal === 'string'
@@ -571,6 +773,87 @@ export default function DynamicDataTable({
     return result;
   }, [refVersion, visibleDynamicColumns, pagination, inlineEditEnabled, approvalEnabled, canApprove, currentUserRoles, onSubmitApproval, onApproveRecord, onRecallApproval, onCancelApproval, onDirectSave, onEditRecord, onDeleteRecord, onInspectRelations, onPrintRecord]);
 
+  const summaryItems = useMemo(() => {
+    if (!records || records.length === 0) return [];
+    const items: Array<{ col: SysColumn; summary: ReturnType<typeof computeMondayColumnSummary> }> = [];
+    for (const col of visibleDynamicColumns) {
+      const summary = computeMondayColumnSummary(records, col);
+      if (summary.kind !== 'EMPTY') {
+        items.push({ col, summary });
+      }
+    }
+    return items.slice(0, 6);
+  }, [records, visibleDynamicColumns]);
+
+  const footerNode =
+    summaryItems.length > 0 ? (
+      <div
+        className="monday-board-summary-bar"
+        role="region"
+        aria-label="Tổng hợp nhanh chân bảng monday.com"
+      >
+        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+          Tổng hợp ({records.length} dòng)
+        </span>
+        {summaryItems.map(({ col, summary }) => {
+          const cleanLabel = cleanColumnDisplayName(col.columnName);
+          if (summary.kind === 'STATUS_BAR' && summary.segments) {
+            return (
+              <div
+                key={col.columnCode}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
+                title={summary.segments.map((s) => `${s.label}: ${s.count} (${s.pct}%)`).join(' • ')}
+              >
+                <span style={{ fontSize: 11.5, color: 'var(--text-secondary)', fontWeight: 600 }}>{cleanLabel}:</span>
+                <div
+                  style={{
+                    width: 96,
+                    height: 12,
+                    borderRadius: 4,
+                    overflow: 'hidden',
+                    display: 'flex',
+                    border: '1px solid rgba(0,0,0,0.08)',
+                  }}
+                >
+                  {summary.segments.map((seg, i) => (
+                    <div
+                      key={`${seg.label}_${i}`}
+                      style={{
+                        width: `${Math.max(8, seg.pct)}%`,
+                        backgroundColor: seg.color,
+                        height: '100%',
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div
+              key={col.columnCode}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '2px 10px',
+                borderRadius: 999,
+                backgroundColor: 'var(--bg-surface)',
+                border: '1px solid var(--border-subtle)',
+                fontSize: 11.5,
+              }}
+            >
+              <span style={{ color: 'var(--text-muted)' }}>{cleanLabel}:</span>
+              <strong style={{ color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
+                {summary.text}
+              </strong>
+            </div>
+          );
+        })}
+      </div>
+    ) : undefined;
+
   return (
     <DataTable<AppRecord>
       title={title}
@@ -597,6 +880,7 @@ export default function DynamicDataTable({
       emptyText={emptyText}
       emptyAction={emptyAction}
       toolbarExtra={toolbarExtra}
+      footerContent={footerNode}
     />
   );
 }

@@ -852,24 +852,41 @@ function ColumnModalBody({
                 value={form.dataType}
                 onChange={(e) => setForm({ ...form, dataType: e.target.value })}
               >
-                <option value="STRING">Văn bản (STRING)</option>
-                <option value="NUMBER">Số (NUMBER)</option>
-                <option value="CURRENCY">Tiền tệ VNĐ (CURRENCY)</option>
-                <option value="DATE">Ngày tháng (DATE)</option>
-                <option value="BOOLEAN">Đúng / Sai (BOOLEAN)</option>
-                <option value="SELECT">Danh mục (SELECT)</option>
-                <option value="LOOKUP">Liên kết Đa App (LOOKUP)</option>
-                <option value="EMAIL">Email (EMAIL)</option>
-                <option value="TEL">Điện thoại (TEL)</option>
-                <option value="TEXTAREA">Đoạn văn dài (TEXTAREA)</option>
-                <option value="FILE">Tệp đính kèm (FILE)</option>
-                <option value="MULTI_FILE">Nhiều tệp đính kèm (MULTI_FILE)</option>
-                <option value="IMAGE">Hình ảnh (IMAGE)</option>
-                <option value="MULTI_SELECT">Chọn nhiều danh mục (MULTI_SELECT)</option>
-                <option value="USER">Người dùng hệ thống (USER)</option>
-                <option value="SIGNATURE">Chữ ký tay (SIGNATURE)</option>
-                <option value="SUB_TABLE">Bảng con Master–Detail (SUB_TABLE)</option>
-                <option value="AUTO_NUMBER">Sinh mã tự động (AUTO_NUMBER)</option>
+                <optgroup label="★ Work OS (monday.com Style)">
+                  <option value="STATUS">Trạng thái màu (STATUS)</option>
+                  <option value="PRIORITY">Mức độ ưu tiên (PRIORITY)</option>
+                  <option value="PROGRESS">Thanh tiến độ % (PROGRESS)</option>
+                  <option value="RATING">Đánh giá sao 1-5 (RATING)</option>
+                  <option value="TAGS">Thẻ Hashtag (TAGS)</option>
+                  <option value="COLOR">Bảng chọn màu (COLOR)</option>
+                  <option value="LINK">Liên kết Web / URL (LINK)</option>
+                </optgroup>
+                <optgroup label="Cơ bản">
+                  <option value="STRING">Văn bản (STRING)</option>
+                  <option value="TEXTAREA">Đoạn văn dài (TEXTAREA)</option>
+                  <option value="NUMBER">Số (NUMBER)</option>
+                  <option value="CURRENCY">Tiền tệ VNĐ (CURRENCY)</option>
+                  <option value="DATE">Ngày tháng (DATE)</option>
+                  <option value="DATETIME">Ngày &amp; Giờ (DATETIME)</option>
+                  <option value="TIME">Giờ phút (TIME)</option>
+                  <option value="BOOLEAN">Đúng / Sai (BOOLEAN)</option>
+                  <option value="EMAIL">Email (EMAIL)</option>
+                  <option value="TEL">Điện thoại (TEL)</option>
+                </optgroup>
+                <optgroup label="Liên kết &amp; Nhân sự">
+                  <option value="USER">Người dùng hệ thống (USER)</option>
+                  <option value="SELECT">Danh mục (SELECT)</option>
+                  <option value="MULTI_SELECT">Chọn nhiều danh mục (MULTI_SELECT)</option>
+                  <option value="LOOKUP">Liên kết Đa App (LOOKUP)</option>
+                  <option value="SUB_TABLE">Bảng con Master–Detail (SUB_TABLE)</option>
+                </optgroup>
+                <optgroup label="Tệp &amp; Nâng cao">
+                  <option value="AUTO_NUMBER">Sinh mã tự động (AUTO_NUMBER)</option>
+                  <option value="IMAGE">Hình ảnh (IMAGE)</option>
+                  <option value="FILE">Tệp đính kèm (FILE)</option>
+                  <option value="MULTI_FILE">Nhiều tệp đính kèm (MULTI_FILE)</option>
+                  <option value="SIGNATURE">Chữ ký tay (SIGNATURE)</option>
+                </optgroup>
               </select>
             </div>
             <div className="form-group">
@@ -921,6 +938,57 @@ function ColumnModalBody({
                 onChange={(e) => setForm({ ...form, orderIndex: Number(e.target.value) || 1 })}
               />
             </div>
+          </div>
+
+          {/* monday.com Work OS Quick Column Type Chips */}
+          <div
+            style={{
+              padding: '8px 10px',
+              borderRadius: 10,
+              backgroundColor: 'var(--bg-primary)',
+              border: '1px solid var(--border-subtle)',
+              marginBottom: 12,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              flexWrap: 'wrap',
+            }}
+          >
+            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', marginRight: 2 }}>
+              Chọn nhanh Work OS:
+            </span>
+            {[
+              { code: 'STATUS', label: '◉ Trạng thái màu', color: '#00c875' },
+              { code: 'PRIORITY', label: '⚑ Ưu tiên', color: '#e2445c' },
+              { code: 'PROGRESS', label: '▰ Tiến độ %', color: '#579bfc' },
+              { code: 'RATING', label: '★ Đánh giá sao', color: '#f59e0b' },
+              { code: 'TAGS', label: '# Hashtag', color: '#a25ddc' },
+              { code: 'USER', label: '👤 Nhân sự', color: '#7c3aed' },
+              { code: 'LINK', label: '🔗 Liên kết URL', color: '#0086c0' },
+              { code: 'COLOR', label: '🎨 Mã màu', color: '#ff158a' },
+            ].map((chip) => {
+              const active = form.dataType === chip.code;
+              return (
+                <button
+                  key={chip.code}
+                  type="button"
+                  onClick={() => setForm({ ...form, dataType: chip.code })}
+                  style={{
+                    padding: '3px 9px',
+                    borderRadius: 999,
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    border: `1px solid ${active ? chip.color : 'var(--border-subtle)'}`,
+                    backgroundColor: active ? chip.color : 'var(--bg-surface)',
+                    color: active ? '#ffffff' : 'var(--text-primary)',
+                    transition: 'all 0.12s ease',
+                  }}
+                >
+                  {chip.label}
+                </button>
+              );
+            })}
           </div>
 
           {form.dataType === 'LOOKUP' && (

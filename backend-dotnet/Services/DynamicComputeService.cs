@@ -315,14 +315,32 @@ public class DynamicComputeService
                     }
                     continue;
                 }
-                if ((dt == "NUMBER" || dt == "CURRENCY") &&
-                    !decimal.TryParse(str, NumberStyles.Any, CultureInfo.InvariantCulture, out _))
+                if ((dt is "NUMBER" or "CURRENCY" or "RATING" or "PROGRESS") &&
+                    !decimal.TryParse(str, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsedNum))
                 {
                     errors.Add(new ValidationErrorItem
                     {
                         Severity = "ERROR",
                         Field = col.ColumnCode,
                         Message = $"Trường '{col.ColumnName}' phải là số hợp lệ."
+                    });
+                }
+                else if (dt == "RATING" && decimal.TryParse(str, NumberStyles.Any, CultureInfo.InvariantCulture, out var rVal) && (rVal < 0 || rVal > 5))
+                {
+                    errors.Add(new ValidationErrorItem
+                    {
+                        Severity = "ERROR",
+                        Field = col.ColumnCode,
+                        Message = $"Đánh giá '{col.ColumnName}' phải nằm trong khoảng 0 đến 5 sao."
+                    });
+                }
+                else if (dt == "PROGRESS" && decimal.TryParse(str, NumberStyles.Any, CultureInfo.InvariantCulture, out var pVal) && (pVal < 0 || pVal > 100))
+                {
+                    errors.Add(new ValidationErrorItem
+                    {
+                        Severity = "ERROR",
+                        Field = col.ColumnCode,
+                        Message = $"Tiến độ '{col.ColumnName}' phải nằm trong khoảng 0 đến 100%."
                     });
                 }
 

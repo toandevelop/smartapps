@@ -83,6 +83,7 @@ export interface DataTableProps<T extends { id: string }> {
     onPageSizeChange: (pageSize: number) => void;
   };
   toolbarExtra?: React.ReactNode;
+  footerContent?: React.ReactNode;
   hideToolbar?: boolean;
 }
 
@@ -123,6 +124,7 @@ export default function DataTable<T extends { id: string }>({
   onRowClick,
   pagination,
   toolbarExtra,
+  footerContent,
 }: DataTableProps<T>) {
   const checkAllRef = useRef<HTMLInputElement>(null);
   const colPickerRef = useRef<HTMLDivElement>(null);
@@ -1728,6 +1730,9 @@ export default function DataTable<T extends { id: string }>({
       ) : (
         <div
           className="table-responsive"
+          tabIndex={0}
+          role="region"
+          aria-label={typeof title === 'string' ? `Vùng bảng ${title}` : 'Vùng cuộn bảng dữ liệu'}
           style={{
           border: 'none',
           borderTop: '1px solid var(--border-subtle)',
@@ -2086,10 +2091,22 @@ export default function DataTable<T extends { id: string }>({
                 const isSelected = selectedIds.includes(row.id);
                 const selectedSolidBg = 'color-mix(in srgb, var(--accent-primary) 12%, var(--bg-surface))';
                 const rowBg = isSelected ? selectedSolidBg : (index % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-primary)');
+                const rowAny = row as Record<string, unknown>;
+                const appSt = String(rowAny.approvalStatus || '').toUpperCase();
+                const recSt = String(rowAny.status || '').toUpperCase();
+                const leftAccentColor =
+                  recSt === 'ERROR' || appSt === 'REJECTED'
+                    ? '#e2445c'
+                    : appSt === 'APPROVED'
+                    ? '#00c875'
+                    : appSt === 'PENDING'
+                    ? '#fdab3d'
+                    : 'var(--accent-primary)';
 
                 return (
                   <tr
                     key={row.id}
+                    className="monday-board-row"
                     style={{
                       backgroundColor: rowBg,
                       transition: 'background-color 0.12s ease',
@@ -2108,6 +2125,7 @@ export default function DataTable<T extends { id: string }>({
                           left: 0,
                           zIndex: 5,
                           backgroundColor: rowBg,
+                          borderLeft: `4px solid ${leftAccentColor}`,
                           borderRight: '1px solid var(--border-subtle)',
                           borderBottom: '1px solid var(--border-light)',
                         }}
@@ -2178,6 +2196,7 @@ export default function DataTable<T extends { id: string }>({
             )}
           </tbody>
         </table>
+        {footerContent}
       </div>
       )}
 

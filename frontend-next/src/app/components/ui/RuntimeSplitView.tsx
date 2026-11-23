@@ -7,6 +7,14 @@ import KeyboardArrowDownRoundedIcon from '@mui/icons-material/KeyboardArrowDownR
 import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
 import { AppRecord, SysColumn } from '@/lib/types';
 import { formatCurrencyVnd } from '@/lib/column-utils';
+import {
+  clampProgressValue,
+  clampRatingValue,
+  formatDateTimeDisplay,
+  parseTagsValue,
+  resolveMondayPriorityStyle,
+  resolveMondayStatusStyle,
+} from '@/lib/monday-fields';
 import StatusBadge from './StatusBadge';
 import Record360Content from './Record360Content';
 import EmptyState from './EmptyState';
@@ -27,6 +35,15 @@ interface RuntimeSplitViewProps {
 function renderQuickVal(col: SysColumn, val: unknown): string {
   if (val === undefined || val === null || val === '') return '—';
   const dt = (col.dataType || 'STRING').toUpperCase();
+  if (dt === 'STATUS') return resolveMondayStatusStyle(val).label;
+  if (dt === 'PRIORITY') return resolveMondayPriorityStyle(val).label;
+  if (dt === 'PROGRESS') return `${clampProgressValue(val)}%`;
+  if (dt === 'RATING') return `★ ${clampRatingValue(val)}/5`;
+  if (dt === 'TAGS') {
+    const tags = parseTagsValue(val);
+    return tags.length > 0 ? tags.map((t) => `#${t}`).join(' ') : '—';
+  }
+  if (dt === 'DATETIME' || dt === 'TIME') return formatDateTimeDisplay(val, dt);
   if (dt === 'CURRENCY') return formatCurrencyVnd(val);
   if (dt === 'BOOLEAN') return val === true || String(val).toLowerCase() === 'true' ? 'Có' : 'Không';
   if (Array.isArray(val)) return `${val.length} dòng`;

@@ -671,7 +671,7 @@ public class MetadataService
         if (exists) return;
 
         var safeTableLiteral = tableId.Replace("'", "''");
-        var exprSql = dataType is "NUMBER" or "CURRENCY"
+        var exprSql = dataType is "NUMBER" or "CURRENCY" or "RATING" or "PROGRESS"
             ? $"((CASE WHEN (data ->> '{columnCode}') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (data ->> '{columnCode}')::numeric END))"
             : $"(smartapps_vn_norm(data ->> '{columnCode}'))";
 

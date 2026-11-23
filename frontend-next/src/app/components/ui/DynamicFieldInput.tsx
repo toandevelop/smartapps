@@ -2,12 +2,28 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import QrCodeScannerRoundedIcon from '@mui/icons-material/QrCodeScannerRounded';
+import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
+import StarRoundedIcon from '@mui/icons-material/StarRounded';
+import StarBorderRoundedIcon from '@mui/icons-material/StarBorderRounded';
 import SearchableSelect, { SearchableSelectOption } from './SearchableSelect';
 import QrScannerModal from './QrScannerModal';
 import BooleanSwitch, { normalizeBoolVal, resolveDefaultBoolVal } from './BooleanSwitch';
 import { createCategoryItemQuick, fetchCategoryItems } from '@/lib/category-service';
 import { fetchLookupOptions, searchLookupOptions } from '@/lib/lookup-service';
 import { cleanColumnDisplayName } from '@/lib/column-utils';
+import {
+  MONDAY_COLOR_SWATCHES,
+  MONDAY_PRIORITY_PRESETS,
+  MONDAY_STATUS_PRESETS,
+  clampProgressValue,
+  clampRatingValue,
+  getMondayProgressColor,
+  getTagColor,
+  normalizeSafeLinkUrl,
+  parseTagsValue,
+  resolveMondayPriorityStyle,
+  resolveMondayStatusStyle,
+} from '@/lib/monday-fields';
 import {
   evaluateSubTableRowFormulas,
   parseSubTableSchema,
@@ -52,6 +68,7 @@ export default function DynamicFieldInput({
   const [uploadError, setUploadError] = useState('');
   const [localImagePreview, setLocalImagePreview] = useState<string>('');
   const [qrOpen, setQrOpen] = useState(false);
+  const [tagDraft, setTagDraft] = useState('');
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const lookupFilterVal =
@@ -290,6 +307,359 @@ export default function DynamicFieldInput({
     const parsed = normalizeBoolVal(value);
     const checked = parsed !== null ? parsed : resolveDefaultBoolVal(column.defaultValue);
     return <BooleanSwitch id={inputId} checked={checked} onChange={(b) => onChange(b)} disabled={disabled} size={size} />;
+  }
+
+  if (dt === 'STATUS' || dt === 'PRIORITY') {
+    const currentStr = value !== null && value !== undefined ? String(value) : '';
+    const presets =
+      options.length > 0
+        ? options.map((o) =>
+            dt === 'PRIORITY'
+              ? resolveMondayPriorityStyle(o.value, o.subLabel || o.label)
+              : resolveMondayStatusStyle(o.value, undefined, o.subLabel || o.label)
+          )
+        : dt === 'PRIORITY'
+        ? MONDAY_PRIORITY_PRESETS
+        : MONDAY_STATUS_PRESETS;
+
+    return (
+      <div
+        role="radiogroup"
+        aria-label={cleanName}
+        style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}
+      >
+        {presets.map((p) => {
+          const active = currentStr.toUpperCase() === p.code.toUpperCase();
+          return (
+            <button
+              key={p.code}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              disabled={disabled}
+              onClick={() => onChange(active && !required ? '' : p.code)}
+              className="monday-status-pill"
+              style={{
+                backgroundColor: p.bg,
+                color: p.color,
+                opacity: currentStr && !active ? 0.55 : 1,
+                transform: active ? 'scale(1.03)' : 'none',
+                boxShadow: active ? `0 0 0 2px var(--bg-surface), 0 0 0 4px ${p.bg}` : 'none',
+                minWidth: size === 'sm' ? 88 : 108,
+                height: size === 'sm' ? 28 : 34,
+                cursor: disabled ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {p.label}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  if (dt === 'RATING') {
+    const currentRating = clampRatingValue(value);
+    return (
+      <div
+        role="group"
+        aria-label={`Đánh giá sao cho ${cleanName}`}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+      >
+        {[1, 2, 3, 4, 5].map((star) => {
+          const filled = star <= currentRating;
+          return (
+            <button
+              key={star}
+              type="button"
+              disabled={disabled}
+              aria-label={`${star} sao`}
+              aria-pressed={currentRating === star}
+              onClick={() => onChange(currentRating === star && !required ? 0 : star)}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                padding: 2,
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                color: filled ? '#ffcb00' : '#cbd5e1',
+                display: 'inline-flex',
+                alignItems: 'center',
+                transition: 'transform 0.12s ease',
+              }}
+            >
+              {filled ? (
+                <StarRoundedIcon sx={{ fontSize: size === 'sm' ? 22 : 26, filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.12))' }} />
+              ) : (
+                <StarBorderRoundedIcon sx={{ fontSize: size === 'sm' ? 22 : 26 }} />
+              )}
+            </button>
+          );
+        })}
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginLeft: 4 }}>
+          {currentRating}/5
+        </span>
+      </div>
+    );
+  }
+
+  if (dt === 'PROGRESS') {
+    const pct = clampProgressValue(value);
+    const barColor = getMondayProgressColor(pct);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <input
+            id={inputId}
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={pct}
+            disabled={disabled}
+            aria-label={cleanName}
+            onChange={(e) => onChange(Number(e.target.value))}
+            style={{
+              flex: 1,
+              accentColor: barColor,
+              cursor: disabled ? 'not-allowed' : 'pointer',
+            }}
+          />
+          <span
+            style={{
+              minWidth: 52,
+              textAlign: 'center',
+              padding: '3px 8px',
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: 700,
+              backgroundColor: barColor,
+              color: '#ffffff',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {pct}%
+          </span>
+        </div>
+        {size !== 'sm' && !disabled && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {[0, 25, 50, 75, 100].map((presetPct) => (
+              <button
+                key={presetPct}
+                type="button"
+                className={`btn btn-xs ${pct === presetPct ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => onChange(presetPct)}
+                style={{ fontSize: 11, padding: '1px 8px', height: 22 }}
+              >
+                {presetPct}%
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (dt === 'TAGS') {
+    const tags = parseTagsValue(value);
+    const commitTagDraft = (raw: string) => {
+      const nextTags = parseTagsValue([...tags, ...raw.split(/[,;]+/)]);
+      onChange(nextTags);
+      setTagDraft('');
+    };
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 6,
+          padding: '6px 10px',
+          borderRadius: 8,
+          border: '1px solid var(--border-subtle)',
+          backgroundColor: 'var(--bg-surface)',
+          minHeight: size === 'sm' ? 32 : 38,
+        }}
+      >
+        {tags.map((t) => {
+          const style = getTagColor(t);
+          return (
+            <span
+              key={t}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '2px 8px',
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 600,
+                backgroundColor: style.bg,
+                color: style.color,
+              }}
+            >
+              #{t}
+              {!disabled && (
+                <button
+                  type="button"
+                  aria-label={`Xóa thẻ ${t}`}
+                  onClick={() => onChange(tags.filter((x) => x !== t))}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: style.color,
+                    cursor: 'pointer',
+                    fontWeight: 700,
+                    padding: '0 2px',
+                    lineHeight: 1,
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          );
+        })}
+        {!disabled && (
+          <input
+            id={inputId}
+            type="text"
+            value={tagDraft}
+            placeholder={tags.length === 0 ? placeholder || 'Nhập #tag rồi nhấn Enter...' : '+ Thêm #tag...'}
+            onChange={(e) => setTagDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if ((e.key === 'Enter' || e.key === ',') && tagDraft.trim()) {
+                e.preventDefault();
+                commitTagDraft(tagDraft);
+              } else if (e.key === 'Backspace' && !tagDraft && tags.length > 0) {
+                onChange(tags.slice(0, -1));
+              }
+            }}
+            onBlur={() => {
+              if (tagDraft.trim()) commitTagDraft(tagDraft);
+            }}
+            style={{
+              border: 'none',
+              outline: 'none',
+              background: 'transparent',
+              color: 'var(--text-primary)',
+              fontSize: 12.5,
+              flex: '1 1 120px',
+              minWidth: 90,
+            }}
+          />
+        )}
+      </div>
+    );
+  }
+
+  if (dt === 'COLOR') {
+    const curColor =
+      typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value.trim())
+        ? value.trim()
+        : MONDAY_COLOR_SWATCHES[0];
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          {MONDAY_COLOR_SWATCHES.map((sw) => {
+            const selected = curColor.toLowerCase() === sw.toLowerCase();
+            return (
+              <button
+                key={sw}
+                type="button"
+                disabled={disabled}
+                aria-label={`Chọn màu ${sw}`}
+                onClick={() => onChange(sw)}
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 6,
+                  backgroundColor: sw,
+                  border: selected ? '2px solid var(--text-primary)' : '2px solid transparent',
+                  boxShadow: selected ? `0 0 0 2px ${sw}` : 'none',
+                  cursor: disabled ? 'not-allowed' : 'pointer',
+                }}
+              />
+            );
+          })}
+          <input
+            id={inputId}
+            type="color"
+            value={curColor}
+            disabled={disabled}
+            aria-label={`Bảng màu tùy chỉnh ${cleanName}`}
+            onChange={(e) => onChange(e.target.value)}
+            style={{ width: 28, height: 26, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
+          />
+          <code style={{ fontSize: 12 }}>{curColor.toUpperCase()}</code>
+        </div>
+      </div>
+    );
+  }
+
+  if (dt === 'LINK') {
+    const strVal = value !== null && value !== undefined ? String(value) : '';
+    const safeLink = normalizeSafeLinkUrl(strVal);
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+        <input
+          id={inputId}
+          type="url"
+          className="form-input"
+          style={{ flex: 1, minWidth: 0 }}
+          value={strVal}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder || 'https://...'}
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          disabled={disabled}
+          required={required}
+        />
+        {safeLink && (
+          <a
+            href={safeLink.href}
+            target="_blank"
+            rel="noreferrer"
+            className="btn btn-outline btn-xs"
+            title={`Mở liên kết: ${safeLink.href}`}
+            style={{ height: size === 'sm' ? 30 : 36, flexShrink: 0, textDecoration: 'none' }}
+          >
+            <OpenInNewRoundedIcon sx={{ fontSize: 15 }} />
+          </a>
+        )}
+      </div>
+    );
+  }
+
+  if (dt === 'DATETIME') {
+    const str = value ? String(value).replace(' ', 'T').substring(0, 16) : '';
+    return (
+      <input
+        id={inputId}
+        type="datetime-local"
+        className="form-input"
+        value={str}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        required={required}
+      />
+    );
+  }
+
+  if (dt === 'TIME') {
+    const str = value ? String(value).substring(0, 5) : '';
+    return (
+      <input
+        id={inputId}
+        type="time"
+        className="form-input"
+        value={str}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        required={required}
+      />
+    );
   }
 
   if (dt === 'DATE') {
@@ -800,6 +1170,7 @@ export default function DynamicFieldInput({
   }
 
   const inputType = dt === 'EMAIL' ? 'email' : dt === 'TEL' ? 'tel' : 'text';
+  const isIdentifierOrEmail = Boolean(column.isIdentityKey) || dt === 'EMAIL';
   const showQrBtn = !disabled && inputType === 'text' && !column.formula;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
@@ -811,6 +1182,9 @@ export default function DynamicFieldInput({
         value={value !== null && value !== undefined ? String(value) : ''}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder || `Nhập ${cleanName.toLowerCase()}...`}
+        autoCorrect={isIdentifierOrEmail ? 'off' : undefined}
+        autoCapitalize={isIdentifierOrEmail ? 'none' : undefined}
+        spellCheck={isIdentifierOrEmail ? false : undefined}
         disabled={disabled}
         required={required}
       />

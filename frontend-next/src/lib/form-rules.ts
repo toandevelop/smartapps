@@ -34,7 +34,7 @@ export function matchesFormCondition(condition: FormCondition, dataType: string,
   if (condition.operator === 'NOT_EMPTY') return !empty(value);
   let comparison: number;
   const type = dataType.toUpperCase();
-  if (type === 'NUMBER' || type === 'CURRENCY') {
+  if (type === 'NUMBER' || type === 'CURRENCY' || type === 'RATING' || type === 'PROGRESS') {
     const a = decimal(value), b = decimal(condition.value);
     if (!a || !b) return false;
     const scale = Math.max(a.scale, b.scale);
@@ -125,7 +125,7 @@ export function formDefaultValues(columns: SysColumn[]): Record<string, unknown>
         const normalized = raw.toLowerCase();
         if (['true', '1', 'yes', 'có', 'co'].includes(normalized)) value = true;
         else if (['false', '0', 'no', 'không', 'khong'].includes(normalized)) value = false;
-      } else if (['NUMBER', 'CURRENCY'].includes(type) && /^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(raw)) {
+      } else if (['NUMBER', 'CURRENCY', 'RATING', 'PROGRESS'].includes(type) && /^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(raw)) {
         const canonical = raw.replace(/,/g, '');
         const parsed = Number(canonical);
         value = Math.abs(parsed) <= Number.MAX_SAFE_INTEGER ? parsed : canonical;

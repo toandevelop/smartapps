@@ -8,6 +8,14 @@ import { AppRecord, SysColumn } from '@/lib/types';
 import { formatCurrencyVnd } from '@/lib/column-utils';
 import { getCategoryItemName } from '@/lib/category-service';
 import { resolveLookupLabel } from '@/lib/lookup-service';
+import {
+  clampProgressValue,
+  clampRatingValue,
+  formatDateTimeDisplay,
+  parseTagsValue,
+  resolveMondayPriorityStyle,
+  resolveMondayStatusStyle,
+} from '@/lib/monday-fields';
 import StatusBadge from './StatusBadge';
 import EmptyState from './EmptyState';
 
@@ -23,6 +31,24 @@ interface GalleryViewProps {
 function formatCellText(col: SysColumn, raw: unknown): string {
   if (raw === undefined || raw === null || raw === '') return '—';
   const dt = (col.dataType || 'STRING').toUpperCase();
+  if (dt === 'STATUS') {
+    const cat = col.refCategoryCode ? getCategoryItemName(col.refCategoryCode, String(raw)) : null;
+    return resolveMondayStatusStyle(raw, cat?.color, cat?.name).label;
+  }
+  if (dt === 'PRIORITY') {
+    const cat = col.refCategoryCode ? getCategoryItemName(col.refCategoryCode, String(raw)) : null;
+    return resolveMondayPriorityStyle(raw, cat?.name).label;
+  }
+  if (dt === 'PROGRESS') return `${clampProgressValue(raw)}%`;
+  if (dt === 'RATING') {
+    const stars = clampRatingValue(raw);
+    return `${'★'.repeat(stars)}${'☆'.repeat(Math.max(0, 5 - stars))} (${stars}/5)`;
+  }
+  if (dt === 'TAGS') {
+    const tags = parseTagsValue(raw);
+    return tags.length > 0 ? tags.map((t) => `#${t}`).join(' ') : '—';
+  }
+  if (dt === 'DATETIME' || dt === 'TIME') return formatDateTimeDisplay(raw, dt);
   if (dt === 'CURRENCY') return formatCurrencyVnd(raw);
   if (dt === 'NUMBER') {
     const n = Number(raw);

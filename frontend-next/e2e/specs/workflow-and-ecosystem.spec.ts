@@ -515,3 +515,73 @@ test('Phase 3: Global AI Copilot Drawer, Solution Suites 1-Click & DMS_VAN_BAN, 
   await expect(page.getByText(/API Node hoạt động/)).toBeVisible();
 });
 
+test('Monday.com Work OS UI: STATUS pill, PRIORITY, RATING 1-click stars, PROGRESS bar, TAGS, LINK, and Board Summary Bar', async ({ page, adminApi, qa }) => {
+  await qa.signIn(page);
+
+  await post(adminApi, '/api/columns', {
+    tableId: qa.table.id,
+    columnCode: 'work_status',
+    columnName: 'Trạng thái CV',
+    dataType: 'STATUS',
+    defaultValue: 'WORKING',
+    orderIndex: 7,
+  });
+  await post(adminApi, '/api/columns', {
+    tableId: qa.table.id,
+    columnCode: 'priority_flag',
+    columnName: 'Mức ưu tiên',
+    dataType: 'PRIORITY',
+    defaultValue: 'CRITICAL',
+    orderIndex: 8,
+  });
+  await post(adminApi, '/api/columns', {
+    tableId: qa.table.id,
+    columnCode: 'progress_pct',
+    columnName: 'Tiến độ hoàn thành',
+    dataType: 'PROGRESS',
+    defaultValue: '75',
+    orderIndex: 9,
+  });
+  await post(adminApi, '/api/columns', {
+    tableId: qa.table.id,
+    columnCode: 'star_rating',
+    columnName: 'Điểm chất lượng',
+    dataType: 'RATING',
+    defaultValue: '3',
+    orderIndex: 10,
+  });
+  await post(adminApi, '/api/columns', {
+    tableId: qa.table.id,
+    columnCode: 'hash_tags',
+    columnName: 'Nhãn công việc',
+    dataType: 'TAGS',
+    orderIndex: 11,
+  });
+
+  await qa.save({
+    code: 'MND-WORKOS-01',
+    mode: 'normal',
+    amount: 450,
+    work_status: 'DONE',
+    priority_flag: 'CRITICAL',
+    progress_pct: 80,
+    star_rating: 3,
+    hash_tags: ['monday', 'ux'],
+  });
+
+  await qa.openRuntime(page);
+
+  // 1. Verify monday.com Status Pill, Priority Pill, Progress Bar, Hashtags, and Board Summary Bar
+  await expect(page.locator('.monday-status-pill').filter({ hasText: 'Hoàn thành' })).toBeVisible();
+  await expect(page.locator('.monday-status-pill').filter({ hasText: /Khẩn cấp/ })).toBeVisible();
+  await expect(page.getByText('#monday')).toBeVisible();
+  const summaryBar = page.getByRole('region', { name: 'Tổng hợp nhanh chân bảng monday.com' });
+  await expect(summaryBar).toBeVisible();
+  await expect(summaryBar).toContainText('TB 80%');
+
+  // 2. Click 5th star directly inside the table cell (1-click inline star rating) and verify footer updates to ★ 5/5
+  await page.getByRole('button', { name: 'Chấm 5 sao cho Điểm chất lượng' }).click();
+  await expect(summaryBar).toContainText('★ 5/5');
+});
+
+

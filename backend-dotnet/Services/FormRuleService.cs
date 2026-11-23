@@ -49,10 +49,10 @@ public class FormRuleService(MetadataService metadata, DynamicComputeService com
                 if (condition.Operator is "IS_EMPTY" or "NOT_EMPTY") continue;
                 if (condition.Value == null || condition.Value.Length > 500) Fail("Giá trị so sánh bị thiếu hoặc quá dài.");
                 var type = source.DataType.ToUpperInvariant();
-                if (condition.Operator == "CONTAINS" && type is "NUMBER" or "CURRENCY" or "BOOLEAN" or "DATE") Fail("CONTAINS chỉ áp dụng cho trường văn bản.");
+                if (condition.Operator == "CONTAINS" && type is "NUMBER" or "CURRENCY" or "RATING" or "PROGRESS" or "BOOLEAN" or "DATE") Fail("CONTAINS chỉ áp dụng cho trường văn bản.");
                 if (condition.Operator is "GREATER_THAN" or "GREATER_OR_EQUAL" or "LESS_THAN" or "LESS_OR_EQUAL"
-                    && type is not ("NUMBER" or "CURRENCY" or "DATE")) Fail("So sánh lớn/nhỏ cần trường số hoặc ngày.");
-                if (type is "NUMBER" or "CURRENCY" && !TryNumber(condition.Value, out _)) Fail("Giá trị so sánh phải là số dùng dấu chấm thập phân.");
+                    && type is not ("NUMBER" or "CURRENCY" or "RATING" or "PROGRESS" or "DATE" or "DATETIME" or "TIME")) Fail("So sánh lớn/nhỏ cần trường số hoặc ngày.");
+                if (type is "NUMBER" or "CURRENCY" or "RATING" or "PROGRESS" && !TryNumber(condition.Value, out _)) Fail("Giá trị so sánh phải là số dùng dấu chấm thập phân.");
                 if (type == "BOOLEAN" && condition.Value is not ("true" or "false")) Fail("Giá trị so sánh boolean phải là true hoặc false.");
                 if (type == "DATE" && !DateOnly.TryParseExact(condition.Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _)) Fail("Giá trị ngày phải có định dạng yyyy-MM-dd.");
             }
@@ -91,7 +91,7 @@ public class FormRuleService(MetadataService metadata, DynamicComputeService com
         if (condition.Operator == "NOT_EMPTY") return !empty;
         int comparison;
         var type = dataType.ToUpperInvariant();
-        if (type is "NUMBER" or "CURRENCY")
+        if (type is "NUMBER" or "CURRENCY" or "RATING" or "PROGRESS")
         {
             if (!TryNumber(value, out var number) || !TryNumber(condition.Value, out var expected)) return false;
             comparison = number.CompareTo(expected);
@@ -146,7 +146,7 @@ public class FormRuleService(MetadataService metadata, DynamicComputeService com
             var type = column.DataType.ToUpperInvariant();
             var invalid = value is JsonElement element && element.ValueKind is JsonValueKind.Object or JsonValueKind.Array
                 || value is System.Collections.IDictionary || (value is System.Collections.IEnumerable && value is not string);
-            if (type is "NUMBER" or "CURRENCY") invalid |= !TryNumber(value, out _);
+            if (type is "NUMBER" or "CURRENCY" or "RATING" or "PROGRESS") invalid |= !TryNumber(value, out _);
             if (type == "BOOLEAN") invalid |= raw.ToLowerInvariant() is not ("true" or "false" or "1" or "0");
             if (type == "DATE") invalid |= !DateOnly.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
             if (!string.IsNullOrWhiteSpace(column.RefCategoryCode) && categories != null)
@@ -192,7 +192,7 @@ public class FormRuleService(MetadataService metadata, DynamicComputeService com
     private static bool TryNumber(object? value, out decimal result) => decimal.TryParse(Text(value), NumberStyles.Float, CultureInfo.InvariantCulture, out result);
     private static bool SameValue(SysColumnDto column, object? left, object? right)
     {
-        if (column.DataType is "NUMBER" or "CURRENCY" && TryNumber(left, out var a) && TryNumber(right, out var b)) return a == b;
+        if (column.DataType is "NUMBER" or "CURRENCY" or "RATING" or "PROGRESS" && TryNumber(left, out var a) && TryNumber(right, out var b)) return a == b;
         if (column.DataType == "BOOLEAN")
         {
             string? Normalize(object? value) => Text(value)?.ToLowerInvariant() switch { "true" or "1" => "true", "false" or "0" => "false", _ => null };

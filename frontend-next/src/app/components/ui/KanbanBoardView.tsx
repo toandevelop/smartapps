@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AppRecord, SysCategoryItem, SysColumn } from '@/lib/types';
 import { fetchCategoryItems } from '@/lib/category-service';
+import { MONDAY_PRIORITY_PRESETS, MONDAY_STATUS_PRESETS } from '@/lib/monday-fields';
 import StatusBadge from './StatusBadge';
 import EmptyState from './EmptyState';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
@@ -57,7 +58,7 @@ export default function KanbanBoardView({
     const seen = new Set<string>();
     for (const c of [groupColumn, ...groupableColumns]) {
       if (!c || seen.has(c.columnCode)) continue;
-      if (c.refCategoryCode || c.dataType.toUpperCase() === 'SELECT') {
+      if (c.refCategoryCode || ['SELECT', 'STATUS', 'PRIORITY'].includes(c.dataType.toUpperCase())) {
         seen.add(c.columnCode);
         merged.push(c);
       }
@@ -112,6 +113,13 @@ export default function KanbanBoardView({
       }));
     }
     if (activeGroupCol) {
+      const dt = activeGroupCol.dataType.toUpperCase();
+      if (dt === 'STATUS') {
+        return MONDAY_STATUS_PRESETS.map((p) => ({ code: p.code, label: p.label, color: p.bg }));
+      }
+      if (dt === 'PRIORITY') {
+        return MONDAY_PRIORITY_PRESETS.map((p) => ({ code: p.code, label: p.label, color: p.bg }));
+      }
       // Build lanes dynamically from SELECT default options and observed record values.
       const values = new Map<string, string>();
       if (activeGroupCol.defaultValue?.trim()) {
